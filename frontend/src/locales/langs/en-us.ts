@@ -26,6 +26,7 @@ const local: App.I18n.Schema = {
     warning: 'Warning',
     error: 'Error',
     index: 'Index',
+    detail: 'Detail',
     keywordSearch: 'Please enter keyword',
     logout: 'Logout',
     logoutConfirm: 'Are you sure you want to log out?',
@@ -162,6 +163,8 @@ const local: App.I18n.Schema = {
     500: 'Server Error',
     'iframe-page': 'Iframe',
     home: 'Home',
+    audit: 'Audit Center',
+    audit_event: 'Audit Log',
     document: 'Document',
     document_project: 'Project Document',
     'document_project-link': 'Project Document(External Link)',
@@ -481,6 +484,31 @@ const local: App.I18n.Schema = {
           configGroup: 'Please enter config group',
           remark: 'Please enter remark',
           configStatus: 'Please select config status'
+        }
+      }
+    },
+    audit: {
+      event: {
+        title: 'Audit Event List',
+        time: 'Time',
+        domain: 'Domain',
+        actor: 'Operator',
+        action: 'Action',
+        resourceType: 'Resource Type',
+        resourceId: 'Resource ID',
+        ipAddress: 'IP Address',
+        keywords: 'Keywords',
+        detail: 'Event Detail',
+        changes: 'Data Changes',
+        noChanges: 'No snapshot data for this event',
+        field: 'Field',
+        before: 'Before',
+        after: 'After',
+        form: {
+          domain: 'Please select domain',
+          action: 'Please enter action',
+          resourceType: 'Please enter resource type',
+          keywords: 'Action/Resource/Operator/IP'
         }
       }
     }

@@ -44,7 +44,7 @@ urlpatterns = [
     # path("api/", include("apps.cmdb.urls")),
     # path("api/", include("apps.automation.urls")),
     # path("api/", include("apps.jobs.urls")),
-    # path("api/", include("apps.audit_center.urls")),
+    path("api/", include("apps.audit_center.urls")),
 ]
 
 if not settings.DEBUG:

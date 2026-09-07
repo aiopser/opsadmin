@@ -6,9 +6,18 @@ defineOptions({ name: 'TableHeaderOperation' });
 interface Props {
   disabledDelete?: boolean;
   loading?: boolean;
+  /** 是否显示新增按钮（只读页面可关闭） */
+  showAdd?: boolean;
+  /** 是否显示批量删除按钮（只读页面可关闭） */
+  showBatchDelete?: boolean;
 }
 
-defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), {
+  disabledDelete: false,
+  loading: false,
+  showAdd: true,
+  showBatchDelete: true
+});
 
 interface Emits {
   (e: 'add'): void;
@@ -39,13 +48,13 @@ function refresh() {
   <ElSpace direction="horizontal" wrap justify="end" class="lt-sm:w-200px">
     <slot name="prefix"></slot>
     <slot name="default">
-      <ElButton plain type="primary" @click="add">
+      <ElButton v-if="props.showAdd" plain type="primary" @click="add">
         <template #icon>
           <icon-ic-round-plus class="text-icon" />
         </template>
         {{ $t('common.add') }}
       </ElButton>
-      <ElPopconfirm :title="$t('common.confirmDelete')" @confirm="batchDelete">
+      <ElPopconfirm v-if="props.showBatchDelete" :title="$t('common.confirmDelete')" @confirm="batchDelete">
         <template #reference>
           <ElButton type="danger" plain :disabled="disabledDelete">
             <template #icon>

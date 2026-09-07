@@ -51,11 +51,11 @@ INSTALLED_APPS = [
     # 内置 app
     "apps.user.apps.UserConfig",
     "apps.permission.apps.PermissionConfig",
+    "apps.audit_center.apps.AuditCenterConfig",
     # "apps.cmdb.apps.CMDBConfig",
     # "apps.automation.apps.AutomationConfig",
     # "apps.jobs.apps.JobsConfig",
     # "apps.ops.apps.OpsConfig",
-    # "apps.audit_center.apps.AuditCenterConfig",
     # Third-party apps
     "rest_framework",
     "drf_spectacular",

@@ -319,6 +319,7 @@ declare namespace App {
         warning: string;
         error: string;
         index: string;
+        detail: string;
         keywordSearch: string;
         logout: string;
         logoutConfirm: string;
@@ -682,6 +683,31 @@ declare namespace App {
               configGroup: string;
               remark: string;
               configStatus: string;
+            };
+          };
+        };
+        audit: {
+          event: {
+            title: string;
+            time: string;
+            domain: string;
+            actor: string;
+            action: string;
+            resourceType: string;
+            resourceId: string;
+            ipAddress: string;
+            keywords: string;
+            detail: string;
+            changes: string;
+            noChanges: string;
+            field: string;
+            before: string;
+            after: string;
+            form: {
+              domain: string;
+              action: string;
+              resourceType: string;
+              keywords: string;
             };
           };
         };

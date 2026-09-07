@@ -26,6 +26,7 @@ const local: App.I18n.Schema = {
     warning: '警告',
     error: '错误',
     index: '序号',
+    detail: '详情',
     keywordSearch: '请输入关键词搜索',
     logout: '退出登录',
     logoutConfirm: '确认退出登录吗？',
@@ -162,6 +163,8 @@ const local: App.I18n.Schema = {
     500: '服务器错误',
     'iframe-page': '外链页面',
     home: '首页',
+    audit: '审计中心',
+    audit_event: '审计日志',
     document: '文档',
     document_project: '项目文档',
     'document_project-link': '项目文档(外链)',
@@ -479,6 +482,31 @@ const local: App.I18n.Schema = {
           configGroup: '请输入配置分组',
           remark: '请输入备注',
           configStatus: '请选择配置状态'
+        }
+      }
+    },
+    audit: {
+      event: {
+        title: '审计事件列表',
+        time: '操作时间',
+        domain: '领域',
+        actor: '操作人',
+        action: '动作',
+        resourceType: '资源类型',
+        resourceId: '资源ID',
+        ipAddress: 'IP地址',
+        keywords: '关键词',
+        detail: '事件详情',
+        changes: '数据变更',
+        noChanges: '该事件无快照数据',
+        field: '字段',
+        before: '变更前',
+        after: '变更后',
+        form: {
+          domain: '请选择领域',
+          action: '请输入动作',
+          resourceType: '请输入资源类型',
+          keywords: '动作/资源/操作人/IP'
         }
       }
     }

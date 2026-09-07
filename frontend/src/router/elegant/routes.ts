@@ -40,6 +40,26 @@ export const generatedRoutes: GeneratedRoute[] = [
     }
   },
   {
+    name: 'audit',
+    path: '/audit',
+    component: 'layout.base',
+    meta: {
+      title: 'audit',
+      i18nKey: 'route.audit'
+    },
+    children: [
+      {
+        name: 'audit_event',
+        path: '/audit/event',
+        component: 'view.audit_event',
+        meta: {
+          title: 'audit_event',
+          i18nKey: 'route.audit_event'
+        }
+      }
+    ]
+  },
+  {
     name: 'home',
     path: '/home',
     component: 'layout.base$view.home',

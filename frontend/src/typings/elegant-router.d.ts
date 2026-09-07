@@ -34,6 +34,8 @@ declare module "@elegant-router/types" {
     "403": "/403";
     "404": "/404";
     "500": "/500";
+    "audit": "/audit";
+    "audit_event": "/audit/event";
     "home": "/home";
     "iframe-page": "/iframe-page/:url";
     "login": "/login/:module(pwd-login|reset-pwd)?";
@@ -119,6 +121,7 @@ declare module "@elegant-router/types" {
     | "403"
     | "404"
     | "500"
+    | "audit"
     | "home"
     | "iframe-page"
     | "login"
@@ -148,6 +151,7 @@ declare module "@elegant-router/types" {
     | "500"
     | "iframe-page"
     | "login"
+    | "audit_event"
     | "home"
     | "manage_config"
     | "manage_dept"

@@ -1,5 +1,3 @@
-from apps.jobs.models import WorkflowRun
-
 from .models import DomainAuditEvent
 
 
@@ -41,6 +39,20 @@ def create_domain_audit_event(
     )
 
 
+def _resolve_workflow_run_domain(resource_id):
+    """jobs app 未安装时优雅降级（避免 audit_center 反向依赖业务 app）。"""
+    try:
+        from apps.jobs.models import WorkflowRun
+    except Exception:
+        return None
+
+    return (
+        WorkflowRun.objects.filter(id=resource_id)
+        .values_list("run_domain", flat=True)
+        .first()
+    )
+
+
 def _resolve_domain(action, resource_type, resource_id):
     action = str(action or "")
     if action.startswith("cmdb."):
@@ -50,13 +62,13 @@ def _resolve_domain(action, resource_type, resource_id):
     if action.startswith(("quick_command_run.", "playbook_run.", "module_run.")):
         return DomainAuditEvent.Domain.OPS
     if resource_type == "workflow_run" and resource_id:
-        run_domain = (
-            WorkflowRun.objects.filter(id=resource_id)
-            .values_list("run_domain", flat=True)
-            .first()
-        )
-        if run_domain in {WorkflowRun.RunDomain.OPS, WorkflowRun.RunDomain.TASK}:
-            return run_domain
+        run_domain = _resolve_workflow_run_domain(resource_id)
+        if run_domain:
+            # 能解析出 run_domain 说明 jobs app 已安装
+            from apps.jobs.models import WorkflowRun
+
+            if run_domain in {WorkflowRun.RunDomain.OPS, WorkflowRun.RunDomain.TASK}:
+                return run_domain
     if action.startswith(("security.", "command_intercept.")):
         return DomainAuditEvent.Domain.SECURITY
     return DomainAuditEvent.Domain.SYSTEM
