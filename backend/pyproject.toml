@@ -46,8 +46,8 @@ pytest = "^9.1.1"
 pytest-django = "^4.12.0"
 
 [tool.pytest.ini_options]
-DJANGO_SETTINGS_MODULE = "devops.test_settings"
-python_files = ["test_*.py"]
+DJANGO_SETTINGS_MODULE = "devops.test_full_settings"
+python_files = ["test_*.py", "tests.py", "*_tests.py"]
 testpaths = ["apps"]
 
 [[tool.poetry.source]]

@@ -5,6 +5,10 @@ instances configured in ``config/devops.ini``.  Runtime commands continue to
 use :mod:`devops.settings`; pytest selects this module explicitly.
 """
 
+import tempfile
+from pathlib import Path
+from uuid import uuid4
+
 from .settings import *  # noqa: F403
 
 
@@ -24,6 +28,18 @@ CACHES = {
 
 CELERY_TASK_ALWAYS_EAGER = True
 CELERY_TASK_EAGER_PROPAGATES = True
+CELERY_BROKER_URL = "memory://"
+CELERY_RESULT_BACKEND = "cache+memory://"
+CELERY_TASK_DEFAULT_QUEUE = f"devops-test-{uuid4().hex}"
+CELERY_TASK_ROUTES = {}
+CELERY_BEAT_SCHEDULE = {}
+TEST_RUNTIME_ROOT = Path(tempfile.mkdtemp(prefix="devops-test-"))
+MEDIA_ROOT = str(TEST_RUNTIME_ROOT / "media")
+CELERY_LOG_DIR = str(TEST_RUNTIME_ROOT / "celery")
+SHARE_DIR = str(TEST_RUNTIME_ROOT / "share")
+EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
+SECRET_KEY = "devops-isolated-tests-only-never-use-in-deployment"
+SIMPLE_JWT = {**SIMPLE_JWT, "SIGNING_KEY": SECRET_KEY}  # noqa: F405
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels.layers.InMemoryChannelLayer",
