@@ -10,6 +10,7 @@ from rest_framework.exceptions import (
     ValidationError,
 )
 from rest_framework.views import exception_handler
+from common.redaction import redact_value
 
 from common.api.responses import (
     BAD_REQUEST,
@@ -35,8 +36,9 @@ def custom_exception_handler(exc, context):
                 else response.data
             )
     else:
-        message = f"Exception: {exc}"
-    logger.error(message)
+        message = "Internal server error"
+    message = redact_value(message)
+    logger.error("API error: %s", type(exc).__name__)
 
     if isinstance(exc, (AuthenticationFailed, NotAuthenticated)):
         return api_error_response(

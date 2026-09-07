@@ -1,6 +1,14 @@
 import type { FlatResponseData } from '@sa/axios';
 import { request } from '../request';
 
+export function fetchLogout(refreshToken: string) {
+  return request<string>({
+    url: '/api/v1/auth/logout',
+    method: 'post',
+    data: { refreshToken }
+  });
+}
+
 /** 后端登录响应（LoginApiView / MyTokenSerializer） */
 interface BackendLoginToken {
   access: string;

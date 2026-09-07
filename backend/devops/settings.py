@@ -21,7 +21,6 @@ from common.config_dispose import ConfigDispose
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 # BASE_DIR = Path(__file__).resolve().parent.parent
-os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/3.2/howto/deployment/checklist/
@@ -31,6 +30,7 @@ SECRET_KEY = os.environ.get(
     "DEVOPS_SECRET_KEY",
     "django-insecure-kt)1(r2inw-0t=n2d%0xrg3fx4&1*8^@!46fei2cdl)l)(+g(r",
 )
+CREDENTIAL_ENCRYPTION_KEY = os.environ.get("DEVOPS_CREDENTIAL_ENCRYPTION_KEY", "")
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = ConfigDispose.get_bool_val("devops", "debug")
@@ -60,6 +60,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "drf_spectacular",
     "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
     "django_filters",
     "corsheaders",
 ]
@@ -139,7 +140,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # CORS 跨域配置
 # 默认不允许非白名单来源
-CORS_ORIGIN_ALLOW_ALL = True
+CORS_ORIGIN_ALLOW_ALL = False
 # 授权进行跨站 HTTP 请求的来源列表，默认为 []
 CORS_ORIGIN_WHITELIST = (
     "http://127.0.0.1:8080",

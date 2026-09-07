@@ -49,7 +49,7 @@ function logout() {
       type: 'warning'
     })
     .then(() => {
-      authStore.resetStore();
+      return authStore.logout();
     });
 }
 

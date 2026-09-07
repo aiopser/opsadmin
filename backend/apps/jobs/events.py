@@ -3,6 +3,8 @@ import json
 import logging
 import re
 
+from common.redaction import REDACTED_VALUE, SENSITIVE_KEY_PATTERN, redact_text
+
 from django.db import transaction
 from django.utils import timezone
 
@@ -14,42 +16,10 @@ from .models import HostRunResult, JobEventLog
 
 logger = logging.getLogger(__name__)
 
-REDACTED_VALUE = "[REDACTED]"
-SENSITIVE_KEY_PARTS = (
-    "api_key",
-    "ansible_become_pass",
-    "ansible_ssh_pass",
-    "authorization",
-    "credential",
-    "passphrase",
-    "passwd",
-    "password",
-    "private_key",
-    "secret",
-    "secret_ref",
-    "ssh_key",
-    "token",
-    "vault",
-)
 SAFE_EVENT_METADATA_FIELDS = ("task", "task_action", "play", "playbook", "uuid")
 SAFE_RESULT_TEXT_FIELDS = ("stdout", "stderr", "msg")
 SAFE_RESULT_VALUE_FIELDS = ("changed", "rc", "skipped", "unreachable")
-SENSITIVE_KEY_PATTERN = "|".join(
-    re.escape(part).replace("_", "[_-]") for part in SENSITIVE_KEY_PARTS
-)
 UNSAFE_NATIVE_KEYS = {"extra_vars", "invocation", "module_args", "_raw_params"}
-KEY_VALUE_CREDENTIAL_PATTERN = re.compile(
-    rf"(?<![A-Za-z0-9])({SENSITIVE_KEY_PATTERN})(?![A-Za-z0-9])"
-    rf"(\s*[=:]\s*)(?:(?:Bearer\s+)?(?:\"[^\"]*\"|'[^']*'|[^\s,;]+))",
-    re.IGNORECASE,
-)
-AUTHORIZATION_HEADER_PATTERN = re.compile(r"(?im)(\bauthorization\s*:\s*)[^\r\n]*")
-JSON_QUOTED_CREDENTIAL_PATTERN = re.compile(
-    rf'(?P<prefix>"[^"\r\n]*(?:{SENSITIVE_KEY_PATTERN})[^"\r\n]*"\s*:\s*)'
-    r'"(?:\\.|[^"\\])*"',
-    re.IGNORECASE,
-)
-URI_CREDENTIAL_PATTERN = re.compile(r"([a-z][a-z0-9+.-]*://)[^/\s@]+@", re.IGNORECASE)
 HOST_EVENT_STATUSES = {
     "runner_on_start": HostRunResult.Status.RUNNING,
     "runner_on_ok": HostRunResult.Status.OK,
@@ -69,23 +39,6 @@ TERMINAL_HOST_STATUSES = {
 }
 
 
-def _redact_text(value):
-    text = str(value or "")
-    text = AUTHORIZATION_HEADER_PATTERN.sub(
-        lambda match: f"{match.group(1)}{REDACTED_VALUE}",
-        text,
-    )
-    text = JSON_QUOTED_CREDENTIAL_PATTERN.sub(
-        rf'\g<prefix>"{REDACTED_VALUE}"',
-        text,
-    )
-    text = KEY_VALUE_CREDENTIAL_PATTERN.sub(
-        lambda match: f"{match.group(1)}{match.group(2)}{REDACTED_VALUE}",
-        text,
-    )
-    return URI_CREDENTIAL_PATTERN.sub(rf"\1{REDACTED_VALUE}@", text)
-
-
 def _safe_metadata(event_data, hostname, host_id, ip):
     metadata = {"host": hostname}
     if host_id is not None:
@@ -95,7 +48,7 @@ def _safe_metadata(event_data, hostname, host_id, ip):
     for field in SAFE_EVENT_METADATA_FIELDS:
         value = event_data.get(field)
         if isinstance(value, (str, int, float, bool)):
-            metadata[field] = _redact_text(value) if isinstance(value, str) else value
+            metadata[field] = redact_text(value) if isinstance(value, str) else value
     return metadata
 
 
@@ -103,7 +56,7 @@ def _safe_result(result):
     safe_result = {}
     for field in SAFE_RESULT_TEXT_FIELDS:
         if field in result:
-            safe_result[field] = _redact_text(result[field])
+            safe_result[field] = redact_text(result[field])
     for field in SAFE_RESULT_VALUE_FIELDS:
         if field in result and isinstance(result[field], (bool, int)):
             safe_result[field] = result[field]
@@ -123,10 +76,10 @@ def _redact_native_value(value, key=""):
     if isinstance(value, (list, tuple)):
         return [_redact_native_value(item) for item in value]
     if isinstance(value, str):
-        return _redact_text(value)
+        return redact_text(value)
     if value is None or isinstance(value, (bool, int, float)):
         return value
-    return _redact_text(value)
+    return redact_text(value)
 
 
 def _event_host_id(event_data):

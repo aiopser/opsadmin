@@ -64,7 +64,7 @@ class OperationLogMiddleware:
                 content="",
                 operator=user if is_authenticated else None,
                 operator_name=getattr(user, "username", "") if is_authenticated else "",
-                request_uri=request.get_full_path()[:255],
+                request_uri=request.path[:255],
                 request_method=request.method.upper(),
                 ip=self._get_client_ip(request),
                 region="",
@@ -165,13 +165,10 @@ class OperationLogMiddleware:
 
     def _get_error_message(self, response, error):
         if error:
-            return str(error)[:1000]
+            return "Internal server error"
         if not response or getattr(response, "status_code", 200) < 400:
             return ""
         try:
-            content = getattr(response, "content", b"")
-            if isinstance(content, bytes):
-                content = content.decode("utf-8", errors="ignore")
-            return str(content)[:1000]
+            return f"HTTP {getattr(response, 'status_code', 500)}"
         except Exception:
             return f"HTTP {getattr(response, 'status_code', 500)}"

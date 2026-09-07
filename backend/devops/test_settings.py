@@ -8,6 +8,7 @@ use :mod:`devops.settings`; pytest selects this module explicitly.
 import tempfile
 from pathlib import Path
 from uuid import uuid4
+from cryptography.fernet import Fernet
 
 from .settings import *  # noqa: F403
 
@@ -39,6 +40,7 @@ CELERY_LOG_DIR = str(TEST_RUNTIME_ROOT / "celery")
 SHARE_DIR = str(TEST_RUNTIME_ROOT / "share")
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 SECRET_KEY = "devops-isolated-tests-only-never-use-in-deployment"
+CREDENTIAL_ENCRYPTION_KEY = Fernet.generate_key().decode()
 SIMPLE_JWT = {**SIMPLE_JWT, "SIGNING_KEY": SECRET_KEY}  # noqa: F405
 CHANNEL_LAYERS = {
     "default": {

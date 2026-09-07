@@ -18,6 +18,7 @@ from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.settings import api_settings
 
 from common.api.responses import (
     BAD_REQUEST,
@@ -66,7 +67,7 @@ def _format_login_error(error):
         return "用户已被禁用，请联系管理员"
     if "username" in message.lower() or "password" in message.lower():
         return "用户名或密码错误"
-    return message or "登录失败"
+    return "登录失败"
 
 
 class LoginApiView(StandardOpenApiView):
@@ -150,9 +151,7 @@ class RefreshTokenApiView(StandardOpenApiView):
         ),
     )
     def post(self, request, *args, **kwargs):
-        raw_refresh = request.data.get("refreshToken") or request.query_params.get(
-            "refreshToken"
-        )
+        raw_refresh = request.data.get("refreshToken")
         if not raw_refresh:
             return api_error_response(
                 "refreshToken is required",
@@ -161,8 +160,12 @@ class RefreshTokenApiView(StandardOpenApiView):
             )
         try:
             refresh = RefreshToken(raw_refresh)
+            if not UserProfile.objects.filter(
+                pk=refresh[api_settings.USER_ID_CLAIM], is_active=True, job_status=True
+            ).exists():
+                raise TokenError("User unavailable")
             access = refresh.access_token
-        except TokenError:
+        except (TokenError, KeyError, TypeError, ValueError):
             return api_error_response(
                 "Refresh token is invalid or expired",
                 code=REFRESH_TOKEN_INVALID,
@@ -206,8 +209,24 @@ class LogoutApiView(StandardApiView):
     @extend_schema(
         summary="退出登录",
         tags=["认证中心"],
-        request=None,
+        request=inline_serializer(
+            name="AuthLogoutRequest",
+            fields={"refreshToken": serializers.CharField()},
+        ),
         responses=api_message_response("AuthLogoutResponse"),
     )
     def post(self, request, *args, **kwargs):
+        raw_refresh = request.data.get("refreshToken")
+        try:
+            if not isinstance(raw_refresh, str) or not raw_refresh:
+                raise TokenError("Missing refresh token")
+            refresh = RefreshToken(raw_refresh)
+            if str(refresh[api_settings.USER_ID_CLAIM]) != str(request.user.pk):
+                raise TokenError("Token owner mismatch")
+            refresh.blacklist()
+        except (TokenError, KeyError, TypeError, ValueError):
+            return api_error_response(
+                "Invalid refresh token", code=BAD_REQUEST,
+                http_status=status.HTTP_400_BAD_REQUEST,
+            )
         return api_ok_response(data="ok")
