@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed, shallowRef, watch } from 'vue';
-import { fetchGetAllPages, fetchGetMenuTree } from '@/service/api';
+import { computed, nextTick, ref, shallowRef, watch } from 'vue';
+import type { TreeInstance } from 'element-plus';
+import { fetchGetRoleMenuIds, updateRoleMenus } from '@/service/api';
+import { useMenuStore } from '@/store/modules/menu';
 import { $t } from '@/locales';
 
 defineOptions({ name: 'MenuAuthModal' });
@@ -24,25 +26,10 @@ const title = computed(() => $t('common.edit') + $t('page.manage.role.menuAuth')
 
 const home = shallowRef('');
 
-async function getHome() {
-  // eslint-disable-next-line no-console
-  console.log(props.roleId);
-
-  home.value = 'home';
-}
-
-const pages = shallowRef<string[]>([]);
-
-async function getPages() {
-  const { error, data } = await fetchGetAllPages();
-
-  if (!error) {
-    pages.value = data;
-  }
-}
+const menuStore = useMenuStore();
 
 const pageSelectOptions = computed(() => {
-  const opts: CommonType.Option[] = pages.value.map(page => ({
+  const opts: CommonType.Option[] = menuStore.allPages.map(page => ({
     label: page,
     value: page
   }));
@@ -50,49 +37,68 @@ const pageSelectOptions = computed(() => {
   return opts;
 });
 
-const tree = shallowRef<Api.SystemManage.MenuTree[]>([]);
+const treeRef = shallowRef<TreeInstance>();
 
-async function getTree() {
-  const { error, data } = await fetchGetMenuTree();
+/** 弹窗初始化中（树缓存命中时几乎瞬时，首次打开时展示 loading 避免短暂空白） */
+const initLoading = ref(false);
+
+/** 角色已分配的按钮权限（当前弹窗无按钮勾选 UI，提交时原样回传避免被清空） */
+const buttonIds = shallowRef<string[]>([]);
+
+/** 收集树中所有叶子节点 ID（回显时只勾选叶子，父节点勾选态由级联自动计算） */
+function collectLeafIds(nodes: Api.SystemManage.MenuTree[], acc: Set<number> = new Set()): Set<number> {
+  nodes.forEach(node => {
+    if (node.children?.length) {
+      collectLeafIds(node.children, acc);
+    } else {
+      acc.add(node.id);
+    }
+  });
+
+  return acc;
+}
+
+/** 获取角色已分配的菜单/按钮权限并回显 */
+async function getRoleAuth() {
+  const { error, data } = await fetchGetRoleMenuIds(props.roleId);
+
+  if (!error && data) {
+    home.value = data.homePath ?? '';
+    buttonIds.value = data.buttonIds ?? [];
+
+    const leafIds = collectLeafIds(menuStore.menuTree);
+    const checkedLeafIds = (data.menuIds ?? []).map(Number).filter(id => leafIds.has(id));
+
+    await nextTick();
+    treeRef.value?.setCheckedKeys(checkedLeafIds);
+  }
+}
+
+async function handleSubmit() {
+  const checkedKeys = (treeRef.value?.getCheckedKeys(false) ?? []).map(Number);
+  const halfCheckedKeys = (treeRef.value?.getHalfCheckedKeys() ?? []).map(Number);
+  const menuIds = [...halfCheckedKeys, ...checkedKeys];
+
+  const { error } = await updateRoleMenus(props.roleId, {
+    menuIds,
+    buttonIds: buttonIds.value,
+    homePath: home.value
+  });
 
   if (!error) {
-    tree.value = data;
+    window.$message?.success?.($t('common.modifySuccess'));
+
+    closeModal();
   }
 }
 
-const checks = shallowRef<number[]>([]);
+async function init() {
+  initLoading.value = true;
 
-async function getChecks() {
-  // eslint-disable-next-line no-console
-  console.log(props.roleId);
-  // request
-  checks.value = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21];
-}
+  await Promise.all([menuStore.getAllPages(), menuStore.getMenuTree()]);
+  await getRoleAuth();
 
-function checkChange(val: number) {
-  const idx = checks.value.indexOf(val);
-  if (idx === -1) {
-    checks.value.push(val);
-  } else {
-    checks.value.splice(idx, 1);
-  }
-}
-
-function handleSubmit() {
-  // eslint-disable-next-line no-console
-  console.log(checks.value, props.roleId);
-  // request
-
-  window.$message?.success?.($t('common.modifySuccess'));
-
-  closeModal();
-}
-
-function init() {
-  getHome();
-  getPages();
-  getTree();
-  getChecks();
+  initLoading.value = false;
 }
 
 watch(visible, val => {
@@ -111,13 +117,12 @@ watch(visible, val => {
       </ElSelect>
     </div>
     <ElTree
-      v-model:checked-keys="checks"
-      :data="tree"
+      ref="treeRef"
+      v-loading="initLoading"
+      :data="menuStore.menuTree"
       node-key="id"
       show-checkbox
       class="h-280px overflow-y-auto"
-      :default-checked-keys="checks"
-      @check-change="checkChange"
     />
     <template #footer>
       <ElSpace class="w-full justify-end">

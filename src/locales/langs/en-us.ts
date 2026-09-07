@@ -173,32 +173,15 @@ const local: App.I18n.Schema = {
     'document_element-plus': 'Element Plus Document',
     document_alova: 'Alova Document',
     'user-center': 'User Center',
-    about: 'About',
-    function: 'System Function',
-    alova: 'Alova Example',
-    alova_request: 'Alova Request',
-    alova_user: 'User List',
-    alova_scenes: 'Scenario Request',
-    function_tab: 'Tab',
-    'function_multi-tab': 'Multi Tab',
-    'function_hide-child': 'Hide Child',
-    'function_hide-child_one': 'Hide Child',
-    'function_hide-child_two': 'Two',
-    'function_hide-child_three': 'Three',
-    function_request: 'Request',
-    'function_toggle-auth': 'Toggle Auth',
-    'function_super-page': 'Super Admin Visible',
     manage: 'System Manage',
     manage_user: 'User Manage',
     'manage_user-detail': 'User Detail',
     manage_role: 'Role Manage',
     manage_menu: 'Menu Manage',
-    'multi-menu': 'Multi Menu',
-    'multi-menu_first': 'Menu One',
-    'multi-menu_first_child': 'Menu One Child',
-    'multi-menu_second': 'Menu Two',
-    'multi-menu_second_child': 'Menu Two Child',
-    'multi-menu_second_child_home': 'Menu Two Child Home',
+    manage_dept: 'Department Manage',
+    manage_dict: 'Dict Manage',
+    manage_log: 'System Log',
+    manage_config: 'System Config',
     exception: 'Exception',
     exception_403: '403',
     exception_404: '404',
@@ -237,7 +220,6 @@ const local: App.I18n.Schema = {
         codePlaceholder: 'Please enter verification code',
         passwordPlaceholder: 'Please enter password',
         confirmPasswordPlaceholder: 'Please enter password again',
-        codeLogin: 'Verification code login',
         confirm: 'Confirm',
         back: 'Back',
         validateSuccess: 'Verification passed',
@@ -247,46 +229,11 @@ const local: App.I18n.Schema = {
       pwdLogin: {
         title: 'Password Login',
         rememberMe: 'Remember me',
-        forgetPassword: 'Forget password?',
-        register: 'Register',
-        otherAccountLogin: 'Other Account Login',
-        otherLoginMode: 'Other Login Mode',
-        superAdmin: 'Super Admin',
-        admin: 'Admin',
-        user: 'User'
-      },
-      codeLogin: {
-        title: 'Verification Code Login',
-        getCode: 'Get verification code',
-        reGetCode: 'Reacquire after {time}s',
-        sendCodeSuccess: 'Verification code sent successfully',
-        imageCodePlaceholder: 'Please enter image verification code'
-      },
-      register: {
-        title: 'Register',
-        agreement: 'I have read and agree to',
-        protocol: '《User Agreement》',
-        policy: '《Privacy Policy》'
+        forgetPassword: 'Forget password?'
       },
       resetPwd: {
         title: 'Reset Password'
-      },
-      bindWeChat: {
-        title: 'Bind WeChat'
       }
-    },
-    about: {
-      title: 'About',
-      introduction: `SoybeanAdmin is an elegant and powerful admin template, based on the latest front-end technology stack, including Vue3, Vite5, TypeScript, Pinia and UnoCSS. It has built-in rich theme configuration and components, strict code specifications, and an automated file routing system. In addition, it also uses the online mock data solution based on ApiFox. SoybeanAdmin provides you with a one-stop admin solution, no additional configuration, and out of the box. It is also a best practice for learning cutting-edge technologies quickly.`,
-      projectInfo: {
-        title: 'Project Info',
-        version: 'Version',
-        latestBuildTime: 'Latest Build Time',
-        githubLink: 'Github Link',
-        previewLink: 'Preview Link'
-      },
-      prdDep: 'Production Dependency',
-      devDep: 'Development Dependency'
     },
     home: {
       branchDesc:
@@ -317,65 +264,35 @@ const local: App.I18n.Schema = {
       },
       creativity: 'Creativity'
     },
-    function: {
-      tab: {
-        tabOperate: {
-          title: 'Tab Operation',
-          addTab: 'Add Tab',
-          addTabDesc: 'To about page',
-          closeTab: 'Close Tab',
-          closeCurrentTab: 'Close Current Tab',
-          closeAboutTab: 'Close "About" Tab',
-          addMultiTab: 'Add Multi Tab',
-          addMultiTabDesc1: 'To MultiTab page',
-          addMultiTabDesc2: 'To MultiTab page(with query params)'
-        },
-        tabTitle: {
-          title: 'Tab Title',
-          changeTitle: 'Change Title',
-          change: 'Change',
-          resetTitle: 'Reset Title',
-          reset: 'Reset'
-        }
-      },
-      multiTab: {
-        routeParam: 'Route Param',
-        backTab: 'Back function_tab'
-      },
-      toggleAuth: {
-        toggleAccount: 'Toggle Account',
-        authHook: 'Auth Hook Function `hasAuth`',
-        superAdminVisible: 'Super Admin Visible',
-        adminVisible: 'Admin Visible',
-        adminOrUserVisible: 'Admin and User Visible'
-      },
-      request: {
-        repeatedErrorOccurOnce: 'Repeated Request Error Occurs Once',
-        repeatedError: 'Repeated Request Error',
-        repeatedErrorMsg1: 'Custom Request Error 1',
-        repeatedErrorMsg2: 'Custom Request Error 2'
-      }
-    },
-    alova: {
-      scenes: {
-        captchaSend: 'Captcha Send',
-        autoRequest: 'Auto Request',
-        visibilityRequestTips: 'Automatically request when switching browser window',
-        pollingRequestTips: 'It will request every 3 seconds',
-        networkRequestTips: 'Automatically request after network reconnecting',
-        refreshTime: 'Refresh Time',
-        startRequest: 'Start Request',
-        stopRequest: 'Stop Request',
-        requestCrossComponent: 'Request Cross Component',
-        triggerAllRequest: 'Manually Trigger All Automated Requests'
-      }
-    },
     manage: {
       common: {
         status: {
           enable: 'Enable',
           disable: 'Disable'
-        }
+        },
+        profileTitle: 'Personal Info',
+        username: 'Username',
+        userNickname: 'Nickname',
+        userRole: 'Role',
+        userDept: 'Department',
+        userEmail: 'Email',
+        userPhone: 'Phone',
+        userCreateTime: 'Joined At',
+        securityTitle: 'Security Info',
+        saveProfile: 'Save Info',
+        savePassword: 'Save Password',
+        language: 'Language',
+        passwordRuleTip:
+          'The password must be 6 to 18 characters long and can only contain letters, numbers and underscores.',
+        passwordResetNote:
+          'After the password is updated, you will be redirected to the login page and can log in again with the new password.',
+        oldPassword: 'Old Password',
+        newPassword: 'New Password',
+        confirmPassword: 'Confirm Password',
+        oldPasswordRequired: 'Please enter old password',
+        newPasswordRequired: 'Please enter new password',
+        passwordUpdated: 'Password changed, please log in again',
+        profileUpdated: 'Profile updated'
       },
       role: {
         title: 'Role List',
@@ -385,6 +302,7 @@ const local: App.I18n.Schema = {
         roleDesc: 'Role Description',
         menuAuth: 'Menu Auth',
         buttonAuth: 'Button Auth',
+        systemRoleProtected: 'Built-in role is protected and cannot be deleted',
         form: {
           roleName: 'Please enter role name',
           roleCode: 'Please enter role code',
@@ -403,6 +321,7 @@ const local: App.I18n.Schema = {
         userEmail: 'Email',
         userStatus: 'User Status',
         userRole: 'User Role',
+        superuserProtected: 'Built-in super admin is protected and cannot be deleted',
         form: {
           userName: 'Please enter user name',
           userGender: 'Please select gender',
@@ -485,6 +404,83 @@ const local: App.I18n.Schema = {
         iconType: {
           iconify: 'Iconify Icon',
           local: 'Local Icon'
+        }
+      },
+      dept: {
+        title: 'Department List',
+        deptName: 'Department Name',
+        deptCode: 'Department Code',
+        parentDept: 'Parent Department',
+        sort: 'Sort',
+        deptStatus: 'Department Status',
+        form: {
+          deptName: 'Please enter department name',
+          deptCode: 'Please enter department code',
+          parentDept: 'Please select parent department (empty for root)',
+          sort: 'Please enter sort order',
+          deptStatus: 'Please select department status'
+        },
+        addDept: 'Add Department',
+        editDept: 'Edit Department'
+      },
+      dict: {
+        title: 'Dict Type List',
+        dictName: 'Dict Name',
+        dictCode: 'Dict Code',
+        remark: 'Remark',
+        dictStatus: 'Dict Status',
+        dictItems: 'Dict Items',
+        addDictType: 'Add Dict',
+        editDictType: 'Edit Dict',
+        addItem: 'Add Item',
+        editItem: 'Edit Item',
+        itemValue: 'Value',
+        itemLabel: 'Label',
+        itemSort: 'Sort',
+        itemTagType: 'Tag Color',
+        form: {
+          dictName: 'Please enter dict name',
+          dictCode: 'Please enter dict code',
+          remark: 'Please enter remark',
+          dictStatus: 'Please select dict status',
+          itemLabel: 'Please enter label',
+          itemValue: 'Please enter value',
+          itemSort: 'Please enter sort order',
+          itemTagType: 'Please select tag color'
+        }
+      },
+      log: {
+        title: 'Operation Log List',
+        logTitle: 'Operation Title',
+        module: 'Module',
+        actionType: 'Action Type',
+        operator: 'Operator',
+        requestUri: 'Request URI',
+        requestMethod: 'Method',
+        ip: 'IP',
+        logStatus: 'Status',
+        executionTime: 'Cost(ms)',
+        errorMsg: 'Error Message',
+        keywords: 'Keywords',
+        createTime: 'Operation Time'
+      },
+      config: {
+        title: 'System Config List',
+        configName: 'Config Name',
+        configKey: 'Config Key',
+        configValue: 'Config Value',
+        configGroup: 'Config Group',
+        remark: 'Remark',
+        configStatus: 'Config Status',
+        addConfig: 'Add Config',
+        editConfig: 'Edit Config',
+        form: {
+          configName: 'Please enter config name',
+          configKey: 'Please enter config key',
+          configValue: 'Please enter config value',
+          configGroup: 'Please enter config group',
+          remark: 'Please enter remark',
+          configStatus: 'Please select config status'
         }
       }
     }

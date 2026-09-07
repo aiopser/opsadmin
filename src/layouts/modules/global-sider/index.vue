@@ -22,6 +22,7 @@ const menuWrapperClass = computed(() => (showLogo.value ? 'flex-1-hidden' : 'h-f
     <GlobalLogo
       v-if="showLogo"
       :show-title="!appStore.siderCollapse"
+      :show-icon="false"
       :style="{ height: themeStore.header.height + 'px' }"
     />
     <div :id="GLOBAL_SIDER_MENU_ID" :class="menuWrapperClass"></div>

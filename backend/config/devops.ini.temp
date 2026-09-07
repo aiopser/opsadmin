@@ -1,0 +1,23 @@
+[devops]
+debug = true
+allowed_hosts = ['*']
+static_url = static/
+jwt_expiration_delta = 36000
+media_root = upload/
+
+[db.mysql]
+host = 127.0.0.1
+port = 3306
+name = DevOps1
+user = root
+password = 123456
+options = {"charset": "utf8mb4"}
+
+[db.redis]
+host = 127.0.0.1
+port = 6379
+password =
+
+[runner]
+; 本地开发默认使用 fake，线上部署专用配置可设为 ansible。
+mode = fake

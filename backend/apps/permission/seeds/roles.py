@@ -1,0 +1,6 @@
+"""系统内置角色常量。"""
+
+SYSTEM_ROLE_ADMIN = "system_admin"
+SYSTEM_ROLE_AUDITOR = "system_auditor"
+SYSTEM_ROLE_ADMIN_CODE = "R_ADMIN"
+SYSTEM_ROLE_AUDITOR_CODE = "R_AUDITOR"

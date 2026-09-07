@@ -8,6 +8,7 @@ import { SetupStoreId } from '@/enum';
 import { $t, setLocale } from '@/locales';
 import { setDayjsLocale } from '@/locales/dayjs';
 import { useRouteStore } from '../route';
+import { useSiteConfigStore } from '../site-config';
 import { useTabStore } from '../tab';
 import { useThemeStore } from '../theme';
 
@@ -65,7 +66,8 @@ export const useAppStore = defineStore(SetupStoreId.App, () => {
   function updateDocumentTitleByLocale() {
     const { i18nKey, title } = router.currentRoute.value.meta;
 
-    const documentTitle = i18nKey ? $t(i18nKey) : title;
+    const routeTitle = i18nKey ? $t(i18nKey) : title;
+    const documentTitle = useSiteConfigStore().composeDocumentTitle(routeTitle);
 
     useTitle(documentTitle);
   }
@@ -143,6 +145,7 @@ export const useAppStore = defineStore(SetupStoreId.App, () => {
     locale,
     localeOptions,
     changeLocale,
+    updateDocumentTitleByLocale,
     themeDrawerVisible,
     openThemeDrawer,
     closeThemeDrawer,

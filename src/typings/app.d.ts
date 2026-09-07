@@ -424,7 +424,6 @@ declare namespace App {
             codePlaceholder: string;
             passwordPlaceholder: string;
             confirmPasswordPlaceholder: string;
-            codeLogin: string;
             confirm: string;
             back: string;
             validateSuccess: string;
@@ -435,45 +434,10 @@ declare namespace App {
             title: string;
             rememberMe: string;
             forgetPassword: string;
-            register: string;
-            otherAccountLogin: string;
-            otherLoginMode: string;
-            superAdmin: string;
-            admin: string;
-            user: string;
-          };
-          codeLogin: {
-            title: string;
-            getCode: string;
-            reGetCode: string;
-            sendCodeSuccess: string;
-            imageCodePlaceholder: string;
-          };
-          register: {
-            title: string;
-            agreement: string;
-            protocol: string;
-            policy: string;
           };
           resetPwd: {
             title: string;
           };
-          bindWeChat: {
-            title: string;
-          };
-        };
-        about: {
-          title: string;
-          introduction: string;
-          projectInfo: {
-            title: string;
-            version: string;
-            latestBuildTime: string;
-            githubLink: string;
-            previewLink: string;
-          };
-          prdDep: string;
-          devDep: string;
         };
         home: {
           branchDesc: string;
@@ -503,65 +467,33 @@ declare namespace App {
           };
           creativity: string;
         };
-        function: {
-          tab: {
-            tabOperate: {
-              title: string;
-              addTab: string;
-              addTabDesc: string;
-              closeTab: string;
-              closeCurrentTab: string;
-              closeAboutTab: string;
-              addMultiTab: string;
-              addMultiTabDesc1: string;
-              addMultiTabDesc2: string;
-            };
-            tabTitle: {
-              title: string;
-              changeTitle: string;
-              change: string;
-              resetTitle: string;
-              reset: string;
-            };
-          };
-          multiTab: {
-            routeParam: string;
-            backTab: string;
-          };
-          toggleAuth: {
-            toggleAccount: string;
-            authHook: string;
-            superAdminVisible: string;
-            adminVisible: string;
-            adminOrUserVisible: string;
-          };
-          request: {
-            repeatedErrorOccurOnce: string;
-            repeatedError: string;
-            repeatedErrorMsg1: string;
-            repeatedErrorMsg2: string;
-          };
-        };
-        alova: {
-          scenes: {
-            captchaSend: string;
-            autoRequest: string;
-            visibilityRequestTips: string;
-            pollingRequestTips: string;
-            networkRequestTips: string;
-            refreshTime: string;
-            startRequest: string;
-            stopRequest: string;
-            requestCrossComponent: string;
-            triggerAllRequest: string;
-          };
-        };
         manage: {
           common: {
             status: {
               enable: string;
               disable: string;
             };
+            profileTitle: string;
+            username: string;
+            userNickname: string;
+            userRole: string;
+            userDept: string;
+            userEmail: string;
+            userPhone: string;
+            userCreateTime: string;
+            securityTitle: string;
+            saveProfile: string;
+            savePassword: string;
+            language: string;
+            passwordRuleTip: string;
+            passwordResetNote: string;
+            oldPassword: string;
+            newPassword: string;
+            confirmPassword: string;
+            oldPasswordRequired: string;
+            newPasswordRequired: string;
+            passwordUpdated: string;
+            profileUpdated: string;
           };
           role: {
             title: string;
@@ -579,6 +511,7 @@ declare namespace App {
             editRole: string;
             menuAuth: string;
             buttonAuth: string;
+            systemRoleProtected: string;
           };
           user: {
             title: string;
@@ -589,6 +522,7 @@ declare namespace App {
             userEmail: string;
             userStatus: string;
             userRole: string;
+            superuserProtected: string;
             form: {
               userName: string;
               userGender: string;
@@ -671,6 +605,83 @@ declare namespace App {
             iconType: {
               iconify: string;
               local: string;
+            };
+          };
+          dept: {
+            title: string;
+            deptName: string;
+            deptCode: string;
+            parentDept: string;
+            sort: string;
+            deptStatus: string;
+            form: {
+              deptName: string;
+              deptCode: string;
+              parentDept: string;
+              sort: string;
+              deptStatus: string;
+            };
+            addDept: string;
+            editDept: string;
+          };
+          dict: {
+            title: string;
+            dictName: string;
+            dictCode: string;
+            remark: string;
+            dictStatus: string;
+            dictItems: string;
+            addDictType: string;
+            editDictType: string;
+            addItem: string;
+            editItem: string;
+            itemValue: string;
+            itemLabel: string;
+            itemSort: string;
+            itemTagType: string;
+            form: {
+              dictName: string;
+              dictCode: string;
+              remark: string;
+              dictStatus: string;
+              itemLabel: string;
+              itemValue: string;
+              itemSort: string;
+              itemTagType: string;
+            };
+          };
+          log: {
+            title: string;
+            logTitle: string;
+            module: string;
+            actionType: string;
+            operator: string;
+            requestUri: string;
+            requestMethod: string;
+            ip: string;
+            logStatus: string;
+            executionTime: string;
+            errorMsg: string;
+            keywords: string;
+            createTime: string;
+          };
+          config: {
+            title: string;
+            configName: string;
+            configKey: string;
+            configValue: string;
+            configGroup: string;
+            remark: string;
+            configStatus: string;
+            addConfig: string;
+            editConfig: string;
+            form: {
+              configName: string;
+              configKey: string;
+              configValue: string;
+              configGroup: string;
+              remark: string;
+              configStatus: string;
             };
           };
         };

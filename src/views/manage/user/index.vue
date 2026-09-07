@@ -1,7 +1,7 @@
 <script setup lang="tsx">
 import { ref } from 'vue';
 import { enableStatusRecord, userGenderRecord } from '@/constants/business';
-import { fetchGetUserList } from '@/service/api';
+import { batchDeleteUser, deleteUser, fetchGetUserList } from '@/service/api';
 import { defaultTransform, useTableOperate, useUIPaginatedTable } from '@/hooks/common/table';
 import { $t } from '@/locales';
 import UserOperateDrawer from './modules/user-operate-drawer.vue';
@@ -38,7 +38,7 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
     searchParams.value.size = params.pageSize;
   },
   columns: () => [
-    { prop: 'selection', type: 'selection', width: 48 },
+    { prop: 'selection', type: 'selection', width: 48, selectable: (row: Api.SystemManage.User) => !row.isSuperuser },
     { prop: 'index', type: 'index', label: $t('common.index'), width: 64 },
     { prop: 'userName', label: $t('page.manage.user.userName'), minWidth: 100 },
     {
@@ -92,10 +92,13 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
           <ElButton type="primary" plain size="small" onClick={() => edit(row.id)}>
             {$t('common.edit')}
           </ElButton>
-          <ElPopconfirm title={$t('common.confirmDelete')} onConfirm={() => handleDelete(row.id)}>
+          <ElPopconfirm
+            title={row.isSuperuser ? $t('page.manage.user.superuserProtected') : $t('common.confirmDelete')}
+            onConfirm={() => handleDelete(row.id)}
+          >
             {{
               reference: () => (
-                <ElButton type="danger" plain size="small">
+                <ElButton type="danger" plain size="small" disabled={row.isSuperuser}>
                   {$t('common.delete')}
                 </ElButton>
               )
@@ -120,19 +123,21 @@ const {
 } = useTableOperate(data, 'id', getData);
 
 async function handleBatchDelete() {
-  // eslint-disable-next-line no-console
-  console.log(checkedRowKeys.value);
-  // request
+  const ids = checkedRowKeys.value.map(Number);
 
-  onBatchDeleted();
+  const { error } = await batchDeleteUser(ids);
+
+  if (!error) {
+    onBatchDeleted();
+  }
 }
 
-function handleDelete(id: number) {
-  // eslint-disable-next-line no-console
-  console.log(id);
-  // request
+async function handleDelete(id: number) {
+  const { error } = await deleteUser(id);
 
-  onDeleted();
+  if (!error) {
+    onDeleted();
+  }
 }
 
 function resetSearchParams() {
@@ -169,7 +174,7 @@ function edit(id: number) {
           class="sm:h-full"
           :data="data"
           row-key="id"
-          @selection-change="checkedRowKeys = $event"
+          @selection-change="checkedRowKeys = ($event as Array<{ id: number }>).map(row => String(row.id))"
         >
           <ElTableColumn v-for="col in columns" :key="col.prop" v-bind="col" />
         </ElTable>

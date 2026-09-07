@@ -33,3 +33,9 @@ package-lock.json
 yarn.lock
 
 .VSCodeCounter
+
+# backend (Django)
+backend/.test-deps/
+__pycache__/
+*.py[cod]
+backend/db.sqlite3

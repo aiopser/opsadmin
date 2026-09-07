@@ -173,32 +173,15 @@ const local: App.I18n.Schema = {
     'document_element-plus': 'Element Plus文档',
     document_alova: 'Alova文档',
     'user-center': '个人中心',
-    about: '关于',
-    function: '系统功能',
-    alova: 'alova示例',
-    alova_request: 'alova请求',
-    alova_user: '用户列表',
-    alova_scenes: '场景化请求',
-    function_tab: '标签页',
-    'function_multi-tab': '多标签页',
-    'function_hide-child': '隐藏子菜单',
-    'function_hide-child_one': '隐藏子菜单',
-    'function_hide-child_two': '菜单二',
-    'function_hide-child_three': '菜单三',
-    function_request: '请求',
-    'function_toggle-auth': '切换权限',
-    'function_super-page': '超级管理员可见',
     manage: '系统管理',
     manage_user: '用户管理',
     'manage_user-detail': '用户详情',
     manage_role: '角色管理',
     manage_menu: '菜单管理',
-    'multi-menu': '多级菜单',
-    'multi-menu_first': '菜单一',
-    'multi-menu_first_child': '菜单一子菜单',
-    'multi-menu_second': '菜单二',
-    'multi-menu_second_child': '菜单二子菜单',
-    'multi-menu_second_child_home': '菜单二子菜单首页',
+    manage_dept: '部门管理',
+    manage_dict: '字典管理',
+    manage_log: '系统日志',
+    manage_config: '系统配置',
     exception: '异常页',
     exception_403: '403',
     exception_404: '404',
@@ -237,7 +220,6 @@ const local: App.I18n.Schema = {
         codePlaceholder: '请输入验证码',
         passwordPlaceholder: '请输入密码',
         confirmPasswordPlaceholder: '请再次输入密码',
-        codeLogin: '验证码登录',
         confirm: '确定',
         back: '返回',
         validateSuccess: '验证成功',
@@ -247,46 +229,11 @@ const local: App.I18n.Schema = {
       pwdLogin: {
         title: '密码登录',
         rememberMe: '记住我',
-        forgetPassword: '忘记密码？',
-        register: '注册账号',
-        otherAccountLogin: '其他账号登录',
-        otherLoginMode: '其他登录方式',
-        superAdmin: '超级管理员',
-        admin: '管理员',
-        user: '普通用户'
-      },
-      codeLogin: {
-        title: '验证码登录',
-        getCode: '获取验证码',
-        reGetCode: '{time}秒后重新获取',
-        sendCodeSuccess: '验证码发送成功',
-        imageCodePlaceholder: '请输入图片验证码'
-      },
-      register: {
-        title: '注册账号',
-        agreement: '我已经仔细阅读并接受',
-        protocol: '《用户协议》',
-        policy: '《隐私权政策》'
+        forgetPassword: '忘记密码？'
       },
       resetPwd: {
         title: '重置密码'
-      },
-      bindWeChat: {
-        title: '绑定微信'
       }
-    },
-    about: {
-      title: '关于',
-      introduction: `SoybeanAdmin 是一个优雅且功能强大的后台管理模板，基于最新的前端技术栈，包括 Vue3, Vite5, TypeScript, Pinia 和 UnoCSS。它内置了丰富的主题配置和组件，代码规范严谨，实现了自动化的文件路由系统。此外，它还采用了基于 ApiFox 的在线Mock数据方案。SoybeanAdmin 为您提供了一站式的后台管理解决方案，无需额外配置，开箱即用。同样是一个快速学习前沿技术的最佳实践。`,
-      projectInfo: {
-        title: '项目信息',
-        version: '版本',
-        latestBuildTime: '最新构建时间',
-        githubLink: 'Github 地址',
-        previewLink: '预览地址'
-      },
-      prdDep: '生产依赖',
-      devDep: '开发依赖'
     },
     home: {
       branchDesc:
@@ -317,65 +264,33 @@ const local: App.I18n.Schema = {
       },
       creativity: '创意'
     },
-    function: {
-      tab: {
-        tabOperate: {
-          title: '标签页操作',
-          addTab: '添加标签页',
-          addTabDesc: '跳转到关于页面',
-          closeTab: '关闭标签页',
-          closeCurrentTab: '关闭当前标签页',
-          closeAboutTab: '关闭"关于"标签页',
-          addMultiTab: '添加多标签页',
-          addMultiTabDesc1: '跳转到多标签页页面',
-          addMultiTabDesc2: '跳转到多标签页页面(带有查询参数)'
-        },
-        tabTitle: {
-          title: '标签页标题',
-          changeTitle: '修改标题',
-          change: '修改',
-          resetTitle: '重置标题',
-          reset: '重置'
-        }
-      },
-      multiTab: {
-        routeParam: '路由参数',
-        backTab: '返回 function_tab'
-      },
-      toggleAuth: {
-        toggleAccount: '切换账号',
-        authHook: '权限钩子函数 `hasAuth`',
-        superAdminVisible: '超级管理员可见',
-        adminVisible: '管理员可见',
-        adminOrUserVisible: '管理员和用户可见'
-      },
-      request: {
-        repeatedErrorOccurOnce: '重复请求错误只出现一次',
-        repeatedError: '重复请求错误',
-        repeatedErrorMsg1: '自定义请求错误 1',
-        repeatedErrorMsg2: '自定义请求错误 2'
-      }
-    },
-    alova: {
-      scenes: {
-        captchaSend: '发送验证码',
-        autoRequest: '自动请求',
-        visibilityRequestTips: '浏览器窗口切换自动请求数据',
-        pollingRequestTips: '每3秒自动请求一次',
-        networkRequestTips: '网络重连后自动请求',
-        refreshTime: '更新时间',
-        startRequest: '开始请求',
-        stopRequest: '停止请求',
-        requestCrossComponent: '跨组件触发请求',
-        triggerAllRequest: '手动触发所有自动请求'
-      }
-    },
     manage: {
       common: {
         status: {
           enable: '启用',
           disable: '禁用'
-        }
+        },
+        profileTitle: '个人信息',
+        username: '用户名',
+        userNickname: '昵称',
+        userRole: '角色',
+        userDept: '部门',
+        userEmail: '邮箱',
+        userPhone: '手机号',
+        userCreateTime: '加入时间',
+        securityTitle: '安全信息',
+        saveProfile: '保存信息',
+        savePassword: '保存登录密码',
+        language: '语言',
+        passwordRuleTip: '密码长度为 6 到 18 个字符，仅可包含字母、数字和下划线。',
+        passwordResetNote: '密码更新成功后，将被重定向到登录页面，您可以使用新密码重新登录。',
+        oldPassword: '旧密码',
+        newPassword: '新密码',
+        confirmPassword: '密码确认',
+        oldPasswordRequired: '请输入旧密码',
+        newPasswordRequired: '请输入新密码',
+        passwordUpdated: '密码修改成功，请重新登录',
+        profileUpdated: '资料更新成功'
       },
       role: {
         title: '角色列表',
@@ -385,6 +300,7 @@ const local: App.I18n.Schema = {
         roleDesc: '角色描述',
         menuAuth: '菜单权限',
         buttonAuth: '按钮权限',
+        systemRoleProtected: '内置角色受保护，不可删除',
         form: {
           roleName: '请输入角色名称',
           roleCode: '请输入角色编码',
@@ -403,6 +319,7 @@ const local: App.I18n.Schema = {
         userEmail: '邮箱',
         userStatus: '用户状态',
         userRole: '用户角色',
+        superuserProtected: '内置超管用户受保护，不可删除',
         form: {
           userName: '请输入用户名',
           userGender: '请选择性别',
@@ -485,6 +402,83 @@ const local: App.I18n.Schema = {
         iconType: {
           iconify: 'iconify图标',
           local: '本地图标'
+        }
+      },
+      dept: {
+        title: '部门列表',
+        deptName: '部门名称',
+        deptCode: '部门编码',
+        parentDept: '上级部门',
+        sort: '排序',
+        deptStatus: '部门状态',
+        form: {
+          deptName: '请输入部门名称',
+          deptCode: '请输入部门编码',
+          parentDept: '请选择上级部门（不选为顶级部门）',
+          sort: '请输入排序序号',
+          deptStatus: '请选择部门状态'
+        },
+        addDept: '新增部门',
+        editDept: '编辑部门'
+      },
+      dict: {
+        title: '字典类型列表',
+        dictName: '字典名称',
+        dictCode: '字典编码',
+        remark: '备注',
+        dictStatus: '字典状态',
+        dictItems: '字典项',
+        addDictType: '新增字典',
+        editDictType: '编辑字典',
+        addItem: '新增字典项',
+        editItem: '编辑字典项',
+        itemValue: '键值',
+        itemLabel: '标签',
+        itemSort: '排序',
+        itemTagType: '标签颜色',
+        form: {
+          dictName: '请输入字典名称',
+          dictCode: '请输入字典编码',
+          remark: '请输入备注',
+          dictStatus: '请选择字典状态',
+          itemLabel: '请输入标签',
+          itemValue: '请输入键值',
+          itemSort: '请输入排序序号',
+          itemTagType: '请选择标签颜色'
+        }
+      },
+      log: {
+        title: '操作日志列表',
+        logTitle: '操作标题',
+        module: '业务模块',
+        actionType: '操作类型',
+        operator: '操作人',
+        requestUri: '请求地址',
+        requestMethod: '请求方法',
+        ip: '操作 IP',
+        logStatus: '操作状态',
+        executionTime: '耗时(ms)',
+        errorMsg: '错误信息',
+        keywords: '关键词',
+        createTime: '操作时间'
+      },
+      config: {
+        title: '系统配置列表',
+        configName: '配置名称',
+        configKey: '配置键',
+        configValue: '配置值',
+        configGroup: '配置分组',
+        remark: '备注',
+        configStatus: '配置状态',
+        addConfig: '新增配置',
+        editConfig: '编辑配置',
+        form: {
+          configName: '请输入配置名称',
+          configKey: '请输入配置键',
+          configValue: '请输入配置值',
+          configGroup: '请输入配置分组',
+          remark: '请输入备注',
+          configStatus: '请选择配置状态'
         }
       }
     }

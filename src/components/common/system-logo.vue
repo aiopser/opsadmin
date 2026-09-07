@@ -151,10 +151,11 @@
 
 <style scoped>
 .app-logo {
-  --logo-color-300: rgb(var(--primary-300-color));
-  --logo-color-400: rgb(var(--primary-400-color));
-  --logo-color-500: rgb(var(--primary-500-color));
-  --logo-color-600: rgb(var(--primary-600-color));
-  --logo-color-700: rgb(var(--primary-700-color));
+  /* 固定科技蓝色阶（基色 #1677FF），不随主题色变化 */
+  --logo-color-300: #69b1ff;
+  --logo-color-400: #4096ff;
+  --logo-color-500: #1677ff;
+  --logo-color-600: #0958d9;
+  --logo-color-700: #003eb3;
 }
 </style>

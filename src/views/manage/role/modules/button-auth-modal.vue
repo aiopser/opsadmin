@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { computed, shallowRef } from 'vue';
+import { computed, nextTick, ref, shallowRef, watch } from 'vue';
+import type { TreeInstance } from 'element-plus';
+import { fetchGetRoleMenuIds, updateRoleMenus } from '@/service/api';
+import { useMenuStore } from '@/store/modules/menu';
 import { $t } from '@/locales';
 
 defineOptions({ name: 'ButtonAuthModal' });
@@ -21,77 +24,98 @@ function closeModal() {
 
 const title = computed(() => $t('common.edit') + $t('page.manage.role.buttonAuth'));
 
-type ButtonConfig = {
-  id: number;
+/** 菜单→按钮树节点（key 加前缀避免菜单/按钮数字 id 冲突） */
+interface ButtonTreeNode {
+  id: string;
   label: string;
-  code: string;
-};
-
-const tree = shallowRef<ButtonConfig[]>([]);
-
-async function getAllButtons() {
-  // request
-  tree.value = [
-    { id: 1, label: 'button1', code: 'code1' },
-    { id: 2, label: 'button2', code: 'code2' },
-    { id: 3, label: 'button3', code: 'code3' },
-    { id: 4, label: 'button4', code: 'code4' },
-    { id: 5, label: 'button5', code: 'code5' },
-    { id: 6, label: 'button6', code: 'code6' },
-    { id: 7, label: 'button7', code: 'code7' },
-    { id: 8, label: 'button8', code: 'code8' },
-    { id: 9, label: 'button9', code: 'code9' },
-    { id: 10, label: 'button10', code: 'code10' }
-  ];
+  children?: ButtonTreeNode[];
 }
 
-const checks = shallowRef<number[]>([]);
+const menuStore = useMenuStore();
 
-async function getChecks() {
-  // eslint-disable-next-line no-console
-  console.log(props.roleId);
-  // request
-  checks.value = [1, 2, 3, 4, 5];
-}
+/** 树数据从缓存的菜单列表实时派生（缓存失效后自动重建） */
+const tree = computed<ButtonTreeNode[]>(() =>
+  menuStore.allMenus
+    .filter(menu => (menu.buttons ?? []).length > 0)
+    .map(menu => ({
+      id: `m-${menu.id}`,
+      label: menu.menuName,
+      children: (menu.buttons ?? [])
+        .filter(button => button.id !== undefined)
+        .map(button => ({
+          id: `b-${button.id}`,
+          label: button.desc || button.code
+        }))
+    }))
+);
 
-function checkChange(val: ButtonConfig) {
-  const idx = checks.value.indexOf(val.id);
-  if (idx === -1) {
-    checks.value.push(val.id);
-  } else {
-    checks.value.splice(idx, 1);
+const treeRef = shallowRef<TreeInstance>();
+
+/** 弹窗初始化中（缓存命中时几乎瞬时，首次打开时展示 loading 避免短暂空白） */
+const initLoading = ref(false);
+
+/** 角色已有的菜单权限与默认首页（提交时原样回传，避免被清空） */
+const menuIds = shallowRef<string[]>([]);
+const homePath = shallowRef<string | null>(null);
+
+async function getRoleAuth() {
+  const { error, data } = await fetchGetRoleMenuIds(props.roleId);
+
+  if (!error && data) {
+    menuIds.value = data.menuIds ?? [];
+    homePath.value = data.homePath ?? null;
+
+    const checkedButtonKeys = (data.buttonIds ?? []).map(id => `b-${id}`);
+
+    await nextTick();
+    treeRef.value?.setCheckedKeys(checkedButtonKeys);
   }
 }
 
-function handleSubmit() {
-  // eslint-disable-next-line no-console
-  console.log(checks.value, props.roleId);
-  // request
+async function handleSubmit() {
+  const buttonIds = (treeRef.value?.getCheckedKeys(false) ?? [])
+    .map(key => String(key))
+    .filter(key => key.startsWith('b-'))
+    .map(key => key.slice(2));
 
-  window.$message?.success?.($t('common.modifySuccess'));
+  const { error } = await updateRoleMenus(props.roleId, {
+    menuIds: menuIds.value,
+    buttonIds,
+    homePath: homePath.value ?? undefined
+  });
 
-  closeModal();
+  if (!error) {
+    window.$message?.success?.($t('common.modifySuccess'));
+
+    closeModal();
+  }
 }
 
-function init() {
-  getAllButtons();
-  getChecks();
+async function init() {
+  initLoading.value = true;
+
+  await menuStore.getAllMenus();
+  await getRoleAuth();
+
+  initLoading.value = false;
 }
 
-// init
-init();
+watch(visible, val => {
+  if (val) {
+    init();
+  }
+});
 </script>
 
 <template>
   <ElDialog v-model="visible" :title="title" preset="card" class="w-480px">
     <ElTree
-      v-model:checked-keys="checks"
+      ref="treeRef"
+      v-loading="initLoading"
       :data="tree"
       node-key="id"
       show-checkbox
       class="h-280px overflow-y-auto"
-      :default-checked-keys="checks"
-      @check-change="checkChange"
     />
     <template #footer>
       <ElSpace class="w-full justify-end">

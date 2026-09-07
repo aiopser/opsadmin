@@ -1,24 +1,28 @@
 // @unocss-include
-import { getColorPalette, getRgb } from '@sa/color';
+import { getRgb } from '@sa/color';
 import { DARK_CLASS } from '@/constants/app';
 import { localStg } from '@/utils/storage';
 import { toggleHtmlClass } from '@/utils/common';
 import { $t } from '@/locales';
 
+/** logo 固定科技蓝色阶（基色 #1677FF），与 system-logo.vue 保持一致 */
+const LOGO_COLOR_VARS = [
+  '--logo-color-300: #69b1ff',
+  '--logo-color-400: #4096ff',
+  '--logo-color-500: #1677ff',
+  '--logo-color-600: #0958d9',
+  '--logo-color-700: #003eb3'
+].join(';');
+
 export function setupLoading() {
   const themeColor = localStg.get('themeColor') || '#646cff';
   const darkMode = localStg.get('darkMode') || false;
-  const palette = getColorPalette(themeColor);
 
   const { r, g, b } = getRgb(themeColor);
 
   const primaryColor = `--primary-color: ${r} ${g} ${b}`;
 
-  const svgCssVars = Array.from(palette.entries())
-    .map(([key, value]) => `--logo-color-${key}: ${value}`)
-    .join(';');
-
-  const cssVars = `${primaryColor}; ${svgCssVars}`;
+  const cssVars = `${primaryColor}; ${LOGO_COLOR_VARS}`;
 
   if (darkMode) {
     toggleHtmlClass(DARK_CLASS).add();

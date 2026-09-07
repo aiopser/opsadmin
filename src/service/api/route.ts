@@ -1,20 +1,11 @@
 import { request } from '../request';
 
-/** get constant routes */
-export function fetchGetConstantRoutes() {
-  return request<Api.Route.MenuRoute[]>({ url: '/route/getConstantRoutes' });
-}
-
-/** get user routes */
-export function fetchGetUserRoutes() {
-  return request<Api.Route.UserRoute>({ url: '/route/getUserRoutes' });
-}
-
 /**
- * whether the route is exist
+ * get user routes
  *
- * @param routeName route name
+ * 对接后端动态路由接口：GET /api/v1/menus/routes，
+ * 后端直接输出 soybean 约定的 UserRoute 结构（{ routes, home }）。
  */
-export function fetchIsRouteExist(routeName: string) {
-  return request<boolean>({ url: '/route/isRouteExist', params: { routeName } });
+export function fetchGetUserRoutes() {
+  return request<Api.Route.UserRoute>({ url: '/api/v1/menus/routes' });
 }

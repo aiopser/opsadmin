@@ -1,0 +1,60 @@
+[tool.poetry]
+name = "devops"
+version = "0.1.0"
+description = "devops"
+authors = ["ywt"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+django = "^3.2.13"
+djangorestframework = "^3.13.1"
+drf-spectacular = "^0.27.2"
+django-filter = "^21.1"
+casbin = "^1.15.4"
+pymysql = "^1.0.2"
+simplejson = "^3.17.6"
+django-cors-headers = "^3.11.0"
+dictdiffer = "^0.9.0"
+pillow = "^9.1.0"
+redis = "^4.2.2"
+django-redis = "^5.2.0"
+gunicorn = "^20.1.0"
+pycryptodome = "^3.14.1"
+djangorestframework-simplejwt = "^5.2.0"
+cryptography = "^48.0.0"
+celery = "^5.3.6"
+ansible-runner = "^2.4.0"
+# ansible-runner does not install Ansible itself; JumpServer execution code
+# imports ansible.* directly, so keep the core package explicit.
+ansible-core = ">=2.15,<2.18"
+paramiko = ">=3.4"
+pyyaml = "^6.0.1"
+# Django 3.2 is the existing project baseline; Channels 4.x requires Django 4.2+.
+channels = "^3.0.5"
+daphne = "^3.0.2"
+aiofiles = "^24.1.0"
+jsonschema = "^4.22.0"
+jsonpath-ng = "^1.6.1"
+psutil = "^5.9.8"
+openpyxl = "^3.1.5"
+
+[tool.poetry.group.dev.dependencies]
+black = "^22.3.0"
+ipython = "^8.3.0"
+pytest = "^9.1.1"
+pytest-django = "^4.12.0"
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "devops.test_settings"
+python_files = ["test_*.py"]
+testpaths = ["apps"]
+
+[[tool.poetry.source]]
+name = "tsinghua"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple/"
+priority = "primary"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

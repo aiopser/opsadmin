@@ -4,7 +4,7 @@ import { defineStore } from 'pinia';
 import { useBoolean } from '@sa/hooks';
 import type { CustomRoute, ElegantConstRoute, LastLevelRouteKey, RouteKey, RouteMap } from '@elegant-router/types';
 import { router } from '@/router';
-import { fetchGetConstantRoutes, fetchGetUserRoutes, fetchIsRouteExist } from '@/service/api';
+import { fetchGetUserRoutes } from '@/service/api';
 import { SetupStoreId } from '@/enum';
 import { createStaticRoutes, getAuthVueRoutes } from '@/router/routes';
 import { ROOT_ROUTE } from '@/router/routes/builtin';
@@ -152,20 +152,15 @@ export const useRouteStore = defineStore(SetupStoreId.Route, () => {
   async function initConstantRoute() {
     if (isInitConstantRoute.value) return;
 
+    // 常量路由为 login/404/403 等框架页，始终使用前端本地定义，
+    // 动态业务路由由 initAuthRoute 按模式加载（static 本地 / dynamic 后端 menus/routes）
     const staticRoute = createStaticRoutes();
 
-    if (authRouteMode.value === 'static') {
-      addConstantRoutes(staticRoute.constantRoutes);
-    } else {
-      const { data, error } = await fetchGetConstantRoutes();
-
-      if (!error) {
-        addConstantRoutes(data);
-      } else {
-        // if fetch constant routes failed, use static constant routes
-        addConstantRoutes(staticRoute.constantRoutes);
-      }
-    }
+    // home/user-center 是框架基础页（home 为重定向目标，user-center 为头像下拉入口），
+    // dynamic 模式下后端菜单可能未配置，注册为常量路由保证始终可用
+    const basicRouteNames: RouteKey[] = [import.meta.env.VITE_ROUTE_HOME as RouteKey, 'user-center'];
+    const basicRoutes = staticRoute.authRoutes.filter(item => basicRouteNames.includes(item.name));
+    addConstantRoutes([...staticRoute.constantRoutes, ...basicRoutes]);
 
     handleConstantAndAuthRoutes();
 
@@ -298,14 +293,13 @@ export const useRouteStore = defineStore(SetupStoreId.Route, () => {
       return false;
     }
 
+    // static 模式校验本地静态路由，dynamic 模式校验已加载的后端路由
     if (authRouteMode.value === 'static') {
       const { authRoutes: staticAuthRoutes } = createStaticRoutes();
       return isRouteExistByRouteName(routeName, staticAuthRoutes);
     }
 
-    const { data } = await fetchIsRouteExist(routeName);
-
-    return data;
+    return isRouteExistByRouteName(routeName, authRoutes.value);
   }
 
   /**

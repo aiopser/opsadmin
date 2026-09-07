@@ -1,7 +1,7 @@
 import type { RouteLocationNormalizedLoaded, RouteRecordRaw, _RouteRecordBase } from 'vue-router';
 import type { ElegantConstRoute, LastLevelRouteKey, RouteKey, RouteMap } from '@elegant-router/types';
 import { useSvgIcon } from '@/hooks/common/icon';
-import { $t } from '@/locales';
+import { $t, $te } from '@/locales';
 
 /**
  * Filter auth routes by roles
@@ -102,7 +102,8 @@ export function updateLocaleOfGlobalMenus(menus: App.Global.Menu[]) {
   menus.forEach(menu => {
     const { i18nKey, label, children } = menu;
 
-    const newLabel = i18nKey ? $t(i18nKey) : label;
+    // 仅当 key 在语言文件中存在时才翻译，否则用原 label（title）兜底
+    const newLabel = i18nKey && $te(i18nKey) ? $t(i18nKey) : label;
 
     const newMenu: App.Global.Menu = {
       ...menu,
@@ -130,7 +131,8 @@ function getGlobalMenuByBaseRoute(route: RouteLocationNormalizedLoaded | Elegant
   const { name, path } = route;
   const { title, i18nKey, icon = import.meta.env.VITE_MENU_ICON, localIcon, iconFontSize } = route.meta ?? {};
 
-  const label = i18nKey ? $t(i18nKey) : title!;
+  // 仅当 key 在语言文件中存在时才翻译，否则用 title 兜底（防止无效 key 原样显示）
+  const label = i18nKey && $te(i18nKey) ? $t(i18nKey) : title!;
 
   const menu: App.Global.Menu = {
     key: name as string,

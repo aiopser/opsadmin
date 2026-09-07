@@ -4,7 +4,8 @@ import type { Ref } from 'vue';
 import { useBoolean } from '@sa/hooks';
 import { yesOrNoRecord } from '@/constants/common';
 import { enableStatusRecord, menuTypeRecord } from '@/constants/business';
-import { fetchGetAllPages, fetchGetMenuList } from '@/service/api';
+import { deleteMenu, fetchGetAllPages, fetchGetMenuTableTree } from '@/service/api';
+import { useMenuStore } from '@/store/modules/menu';
 import { defaultTransform, useTableOperate, useUIPaginatedTable } from '@/hooks/common/table';
 import { $t } from '@/locales';
 import SvgIcon from '@/components/custom/svg-icon.vue';
@@ -14,8 +15,8 @@ const { bool: visible, setTrue: openModal } = useBoolean();
 
 const wrapperRef = ref<HTMLElement | null>(null);
 
-const { columns, columnChecks, data, loading, pagination, getData, getDataByPage } = useUIPaginatedTable({
-  api: () => fetchGetMenuList(),
+const { columns, columnChecks, data, loading, getData } = useUIPaginatedTable({
+  api: () => fetchGetMenuTableTree(),
   transform: response => defaultTransform(response),
   columns: () => [
     { prop: 'selection', type: 'selection', width: 48 },
@@ -101,7 +102,6 @@ const { columns, columnChecks, data, loading, pagination, getData, getDataByPage
         return <ElTag type={tagMap[hide]}>{label}</ElTag>;
       }
     },
-    { prop: 'parentId', label: $t('page.manage.menu.parentId'), width: 90 },
     { prop: 'order', label: $t('page.manage.menu.order'), width: 60 },
     {
       prop: 'operate',
@@ -142,17 +142,21 @@ function handleAdd() {
 }
 
 async function handleBatchDelete() {
-  // request
+  const results = await Promise.all(checkedRowKeys.value.map(id => deleteMenu(Number(id))));
 
-  onBatchDeleted();
+  if (results.every(result => !result.error)) {
+    useMenuStore().invalidate();
+    onBatchDeleted();
+  }
 }
 
-function handleDelete(id: number) {
-  // eslint-disable-next-line no-console
-  console.log(id);
-  // request
+async function handleDelete(id: number) {
+  const { error } = await deleteMenu(id);
 
-  onDeleted();
+  if (!error) {
+    useMenuStore().invalidate();
+    onDeleted();
+  }
 }
 
 /** the edit menu data or the parent menu data when adding a child menu */
@@ -204,34 +208,25 @@ init();
           />
         </div>
       </template>
-      <div class="h-[calc(100%-52px)]">
+      <div class="h-full">
         <ElTable
           v-loading="loading"
           height="100%"
           border
-          class="sm:h-full"
-          :data="data"
           row-key="id"
-          @selection-change="checkedRowKeys = $event"
+          :data="data"
+          :tree-props="{ children: 'children' }"
+          @selection-change="checkedRowKeys = ($event as Array<{ id: number }>).map(row => String(row.id))"
         >
           <ElTableColumn v-for="col in columns" :key="col.prop" v-bind="col" />
         </ElTable>
-        <div class="mt-20px flex justify-end">
-          <ElPagination
-            v-if="pagination.total"
-            layout="total,prev,pager,next,sizes"
-            v-bind="pagination"
-            @current-change="pagination['current-change']"
-            @size-change="pagination['size-change']"
-          />
-        </div>
       </div>
       <MenuOperateModal
         v-model:visible="visible"
         :operate-type="operateType"
         :row-data="editingData"
         :all-pages="allPages"
-        @submitted="getDataByPage"
+        @submitted="getData"
       />
     </ElCard>
   </div>

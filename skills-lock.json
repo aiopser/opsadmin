@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "typescript-functional-style": {
+      "source": "soybeanjs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/typescript-functional-style/SKILL.md",
+      "computedHash": "c914db50c23aee4f92c31c6d901d9ef2ac61471a50f610e2fa2739332377d96c"
+    },
+    "vue-sfc-structure": {
+      "source": "soybeanjs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/vue-sfc-structure/SKILL.md",
+      "computedHash": "efe9a061241692c04d2c4485dbc5416d3befe255fe66f94279ebbee148ff0968"
+    }
+  }
+}

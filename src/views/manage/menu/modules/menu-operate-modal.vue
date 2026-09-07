@@ -1,7 +1,8 @@
 <script setup lang="tsx">
 import { computed, h, ref, watch } from 'vue';
 import { enableStatusOptions, menuIconTypeOptions, menuTypeOptions } from '@/constants/business';
-import { fetchGetAllRoles } from '@/service/api';
+import { addMenu, fetchGetAllRoles, updateMenu } from '@/service/api';
+import { useMenuStore } from '@/store/modules/menu';
 import { useForm, useFormRules } from '@/hooks/common/form';
 import { getLocalIcons } from '@/utils/icon';
 import { $t } from '@/locales';
@@ -19,11 +20,11 @@ defineOptions({ name: 'MenuOperateModal' });
 export type OperateType = UI.TableOperateType | 'addChild';
 
 interface Props {
-  /** the type of operation */
+  /** 操作类型 */
   operateType: OperateType;
-  /** the edit menu data or the parent menu data when adding a child menu */
+  /** 编辑的菜单数据，或添加子菜单时的父菜单数据 */
   rowData?: Api.SystemManage.Menu | null;
-  /** all pages */
+  /** 所有页面 */
   allPages: string[];
 }
 
@@ -156,7 +157,7 @@ const layoutOptions: CommonType.Option[] = [
   { label: 'blank', value: 'blank' }
 ];
 
-/** the enabled role options */
+/** 已启用的角色选项 */
 const roleOptions = ref<CommonType.Option<string>[]>([]);
 
 async function getRoleOptions() {
@@ -172,22 +173,22 @@ async function getRoleOptions() {
   }
 }
 
-/** - add a query input */
+/** - 添加一个查询输入项 */
 function addQuery(index: number) {
   model.value.query.splice(index + 1, 0, { key: '', value: '' });
 }
 
-/** - remove a query input */
+/** - 移除一个查询输入项 */
 function removeQuery(index: number) {
   model.value.query.splice(index, 1);
 }
 
-/** - add a button input */
+/** - 添加一个按钮表单项 */
 function addButton(index: number) {
   model.value.buttons.splice(index + 1, 0, { code: '', desc: '' });
 }
 
-/** - remove a button input */
+/** - 移除一个按钮表单项 */
 function removeButton(index: number) {
   model.value.buttons.splice(index, 1);
 }
@@ -257,13 +258,16 @@ async function handleSubmit() {
 
   const params = getSubmitParams();
 
-  // eslint-disable-next-line no-console
-  console.log('params: ', params);
+  const editId = props.operateType === 'edit' ? props.rowData?.id : undefined;
+  const { error } =
+    editId !== undefined ? await updateMenu(editId, params) : await addMenu(params as Api.SystemManage.MenuModel);
 
-  // request
-  window.$message?.success($t('common.updateSuccess'));
-  closeDrawer();
-  emit('submitted');
+  if (!error) {
+    window.$message?.success($t('common.updateSuccess'));
+    useMenuStore().invalidate();
+    closeDrawer();
+    emit('submitted');
+  }
 }
 
 watch(visible, () => {

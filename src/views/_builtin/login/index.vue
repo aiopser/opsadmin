@@ -4,13 +4,11 @@ import type { Component } from 'vue';
 import { getPaletteColorByNumber, mixColor } from '@sa/color';
 import { loginModuleRecord } from '@/constants/app';
 import { useAppStore } from '@/store/modules/app';
+import { useSiteConfigStore } from '@/store/modules/site-config';
 import { useThemeStore } from '@/store/modules/theme';
 import { $t } from '@/locales';
 import PwdLogin from './modules/pwd-login.vue';
-import CodeLogin from './modules/code-login.vue';
-import Register from './modules/register.vue';
 import ResetPwd from './modules/reset-pwd.vue';
-import BindWechat from './modules/bind-wechat.vue';
 
 defineOptions({ name: 'LoginPage' });
 
@@ -23,6 +21,11 @@ const props = defineProps<Props>();
 
 const appStore = useAppStore();
 const themeStore = useThemeStore();
+const siteConfigStore = useSiteConfigStore();
+siteConfigStore.init();
+
+/** 登录页主标题：优先取系统配置 basic.login.title，未配置回退 i18n */
+const loginTitle = computed(() => siteConfigStore.loginTitle || $t('system.title'));
 
 interface LoginModule {
   label: App.I18n.I18nKey;
@@ -31,10 +34,7 @@ interface LoginModule {
 
 const moduleMap: Record<UnionKey.LoginModule, LoginModule> = {
   'pwd-login': { label: loginModuleRecord['pwd-login'], component: PwdLogin },
-  'code-login': { label: loginModuleRecord['code-login'], component: CodeLogin },
-  register: { label: loginModuleRecord.register, component: Register },
-  'reset-pwd': { label: loginModuleRecord['reset-pwd'], component: ResetPwd },
-  'bind-wechat': { label: loginModuleRecord['bind-wechat'], component: BindWechat }
+  'reset-pwd': { label: loginModuleRecord['reset-pwd'], component: ResetPwd }
 };
 
 const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
@@ -58,8 +58,7 @@ const bgColor = computed(() => {
     <ElCard class="relative z-4 w-auto rd-12px">
       <div class="w-400px lt-sm:w-300px">
         <header class="flex-y-center justify-between">
-          <SystemLogo class="size-64px lt-sm:size-48px" />
-          <h3 class="text-28px text-primary font-500 lt-sm:text-22px">{{ $t('system.title') }}</h3>
+          <h3 class="text-28px text-primary font-500 lt-sm:text-22px">{{ loginTitle }}</h3>
           <div class="i-flex-col">
             <ThemeSchemaSwitch
               :theme-schema="themeStore.themeScheme"
