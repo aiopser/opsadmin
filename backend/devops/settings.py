@@ -280,7 +280,6 @@ CELERY_TASK_ROUTES = {
     "jobs.recover_stale_workflow_runs": {"queue": "task"},
     "jobs.dispatch_scheduled_jobs": {"queue": "task"},
 }
-CELERY_LOG_DIR = os.path.join(BASE_DIR, "data", "celery")
 CELERY_TASK_DEFAULT_QUEUE = "task"
 CELERY_BEAT_SCHEDULE = {
     "jobs.recover-stale-workflow-runs": {
@@ -344,3 +343,16 @@ CHANNEL_LAYERS = (
     if JOBS_REALTIME_REDIS_URL
     else {}
 )
+
+JOBS_LOG_ROOT = os.environ.get(
+    "DEVOPS_LOG_ROOT", os.path.join(BASE_DIR, "data", "job-logs")
+)
+JOBS_LOG_MAX_BYTES = int(os.environ.get("DEVOPS_LOG_MAX_BYTES", "16777216"))
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+    "job_logs": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+        "OPTIONS": {"location": JOBS_LOG_ROOT},
+    },
+}

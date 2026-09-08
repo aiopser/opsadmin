@@ -91,3 +91,11 @@ WorkerPool/serializer/view/admin 仅归 jobs，表 jobs_worker_pool，唯一 API
 实际专项 REST 9 passed、实时 10 passed；全量 304 passed / 11 原基线 failed / 4 明确 skipped / 15 subtests passed（62.82 秒）；Black 和 diff --check 通过。配置与协议见 realtime-events.md。
 
 未完成：真实 Redis 原子消费、真实多实例 Channel Layer、浏览器接入（T14）；T07/MySQL 环境缺口不变。未将 fake Redis 或内存 Channel Layer 宣称为真实集成通过。
+
+## P4 / T11 stdout 与归档
+
+新增 jobs/log_artifacts.py、RunLogChunk 与实际生成迁移；Runner 输出脱敏后归档，按运行总字节限制、受控路径与分块下载，提供 owner/RBAC 保护的 log 子资源。归档故障不回滚业务事件。配置和部署限制见 log-artifacts.md。
+
+删除：ops/tasklog 剩余五个文件、ops.apps.ready 信号注册、CELERY_LOG_DIR、WorkflowRun.runner_workspace 及旧 logger filter 测试；替代为路径/越权/UTF-8/ANSI/截断/no_log/失败运行下载测试。
+
+实际测试：日志与隔离专项 11 passed；完整 pytest 回归 311 passed / 11 原基线 failed / 4 明确 skipped / 15 subtests passed（61.27 秒）。未完成：共享归档真实多 Worker 验证，T07/MySQL/Redis 环境缺口不变；T12–T15 继续执行。

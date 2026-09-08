@@ -7,7 +7,6 @@ from django.test import SimpleTestCase
 from apps.cmdb.models import CredentialRef
 
 from .adapters import DatabaseCredentialProvider
-from .tasklog.logger import AnsibleTaskOutputFilter
 from .workflow.inventory import build_inventory
 
 
@@ -40,29 +39,3 @@ class WorkflowInventoryTests(SimpleTestCase):
         )
         with self.assertRaisesRegex(ValueError, "is not configured"):
             DatabaseCredentialProvider().resolve(1)
-
-
-class AnsibleTaskOutputFilterTests(SimpleTestCase):
-    def test_keeps_redirected_ansible_console_output(self):
-        record = logging.LogRecord(
-            "celery.redirected",
-            logging.WARNING,
-            "",
-            0,
-            "PLAY [all]",
-            (),
-            None,
-        )
-        self.assertTrue(AnsibleTaskOutputFilter().filter(record))
-
-    def test_discards_celery_worker_lifecycle_messages(self):
-        record = logging.LogRecord(
-            "celery.app.trace",
-            logging.INFO,
-            "",
-            0,
-            "Task jobs.run_workflow succeeded",
-            (),
-            None,
-        )
-        self.assertFalse(AnsibleTaskOutputFilter().filter(record))

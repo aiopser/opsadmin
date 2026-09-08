@@ -111,7 +111,6 @@ class WorkflowRun(StandardModelMixin):
     queue_deadline_at = models.DateTimeField(null=True, blank=True)
     workflow_deadline_at = models.DateTimeField(null=True, blank=True)
     cancel_requested_at = models.DateTimeField(null=True, blank=True)
-    runner_workspace = models.CharField(max_length=512, blank=True, default="")
 
     class Meta:
         db_table = "jobs_workflow_run"
@@ -376,6 +375,24 @@ class JobEventLog(StandardModelMixin):
             models.UniqueConstraint(
                 fields=["workflow_run", "event_key"], name="jobs_event_run_key_uniq"
             ),
+        ]
+
+
+class RunLogChunk(StandardModelMixin):
+    workflow_run = models.ForeignKey(
+        WorkflowRun, on_delete=models.CASCADE, related_name="log_chunks"
+    )
+    sequence = models.PositiveBigIntegerField()
+    storage_name = models.CharField(max_length=256)
+    byte_count = models.PositiveIntegerField()
+    truncated = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["sequence"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["workflow_run", "sequence"], name="jobs_log_run_sequence_uniq"
+            )
         ]
 
 

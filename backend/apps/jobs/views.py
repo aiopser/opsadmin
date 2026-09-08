@@ -311,6 +311,26 @@ class WorkflowRunViewSet(StandardModelViewSet):
             }
         )
 
+    @action(methods=["GET"], detail=True, url_path="log")
+    def log(self, request, pk=None):
+        from django.http import StreamingHttpResponse
+        from .log_artifacts import iter_run_stdout
+
+        run = self.get_object()
+        if request.query_params:
+            return api_error_response(
+                message="Log download does not accept paths or query parameters"
+            )
+        response = StreamingHttpResponse(
+            iter_run_stdout(run.id), content_type="text/plain; charset=utf-8"
+        )
+        response["Content-Disposition"] = f'attachment; filename="run-{run.id}.log"'
+        response["X-Content-Type-Options"] = "nosniff"
+        response["X-Log-Truncated"] = (
+            "true" if run.log_chunks.filter(truncated=True).exists() else "false"
+        )
+        return response
+
     @action(methods=["POST"], detail=True, url_path="realtime-ticket")
     def realtime_ticket(self, request, pk=None):
         from .realtime.access import can_view_run

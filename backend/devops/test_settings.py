@@ -36,7 +36,6 @@ CELERY_TASK_ROUTES = {}
 CELERY_BEAT_SCHEDULE = {}
 TEST_RUNTIME_ROOT = Path(tempfile.mkdtemp(prefix="devops-test-"))
 MEDIA_ROOT = str(TEST_RUNTIME_ROOT / "media")
-CELERY_LOG_DIR = str(TEST_RUNTIME_ROOT / "celery")
 SHARE_DIR = str(TEST_RUNTIME_ROOT / "share")
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 SECRET_KEY = "devops-isolated-tests-only-never-use-in-deployment"
@@ -50,3 +49,12 @@ CHANNEL_LAYERS = {
 
 JOBS_REALTIME_REDIS_URL = ""
 JOBS_REALTIME_ALLOWED_ORIGINS = ["http://localhost:9527"]
+
+JOBS_LOG_ROOT = str(TEST_RUNTIME_ROOT / "job-logs")
+STORAGES = {
+    **STORAGES,
+    "job_logs": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+        "OPTIONS": {"location": JOBS_LOG_ROOT},
+    },
+}  # noqa: F405

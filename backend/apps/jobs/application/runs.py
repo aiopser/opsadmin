@@ -75,7 +75,6 @@ def create_workflow_run(
         worker_pool=worker_pool,
         celery_task_id="",
         worker_name="",
-        runner_workspace="",
         timeout_seconds=timeout_seconds,
         queue_timeout_seconds=queue_timeout_seconds,
         queue_deadline_at=now + timedelta(seconds=queue_timeout_seconds),
