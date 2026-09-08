@@ -61,3 +61,13 @@ WorkerPool/serializer/view/admin 仅归 jobs，表 jobs_worker_pool，唯一 API
 ## P3 / T07 隔离 Runner 集成（未完成）
 
 新增 test_runner_integration.py 的 localhost-only 真 Runner 成功/失败/取消用例及 runner-validation.md。默认必须显式 opt-in 且使用 Linux 控制节点；实际本机执行结果 3 skipped，原因是没有隔离 Worker opt-in，未算通过。Docker 只读版本探测失败，daemon 管道不存在；没有启动容器或连接真实主机。删除清单：无。真实隔离成功/失败/取消与多主机、SSH key、网关、WinRM 均未验证。按用户连续推进授权继续 T08，保留 T07 验收缺口。
+
+## P4 / T08 提交、领取与职责拆分
+
+新增 application/{runs,dispatch,cancel,retry}.py、execution/{plan_builder,registry}.py；运行创建、计划构造、执行、取消、重试和 Broker 投递直接引用职责模块。投递失败记录 dispatch_failed，后续仅重新投递未领取工作；不把 Broker 故障当执行失败。节点投递携带 attempt，领取 CAS 校验 attempt 和取消/终态；显式重试创建新 attempt，旧投递不能领取它。事务回滚不投递；HTTP 取消保持 cancel_requested，运行节点退出前图调度器不提前取消；失联恢复记录未确认结果，不声称取消成功或重跑命令。
+
+删除：jobs/services.py 全部旧导出，无转发壳；tasks.py 内重复 enqueue 定义与缺失 Celery 时同步执行的回退；views 内非原子重试实现。request_execution_cancel 从 recovery 移到 application/cancel。旧线性 run_workflow_ansible 实际实现暂在 execution/registry（T13 收敛时删除），不是 services 兼容导出。
+
+实际验证：调度契约 9 passed。全量首轮 279 passed / 13 原基线 failed / 3 T07 明确 skipped / 13 subtests passed（58.00 秒）。随后取消/超时映射与失联语义补验：jobs/tests.py + 调度契约 86 passed / 1 原图表达式失败 / 15 subtests passed（18.80 秒）。旧 jobs.services/Celery fallback 引用清零，git diff --check 通过。
+
+未完成：真实多 Worker/Redis 故障集成、MySQL 并发锁语义；事件持久化目前仍多处写入，T09 统一并加 sequence/幂等约束。恢复调度记录查询的批量效率在后续事件索引及 T15 验证。

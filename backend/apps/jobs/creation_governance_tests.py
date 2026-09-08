@@ -2,7 +2,7 @@ import pytest
 from apps.automation.models import WorkflowTemplate, WorkflowVersion
 from apps.cmdb.models import AssetHost
 from apps.jobs.models import WorkerPool
-from apps.jobs.services import create_workflow_run
+from apps.jobs.application.runs import create_workflow_run
 
 
 @pytest.mark.django_db

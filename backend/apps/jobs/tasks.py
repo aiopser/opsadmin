@@ -1,24 +1,7 @@
 import logging
 
-try:
-    from celery import current_task, shared_task
-    from billiard.exceptions import SoftTimeLimitExceeded
-except ImportError:
-    CELERY_AVAILABLE = False
-    current_task = None
-
-    class SoftTimeLimitExceeded(Exception):
-        pass
-
-    def shared_task(*decorator_args, **decorator_kwargs):
-        def wrapper(func):
-            func.delay = func
-            return func
-
-        return wrapper
-
-else:
-    CELERY_AVAILABLE = True
+from celery import current_task, shared_task
+from billiard.exceptions import SoftTimeLimitExceeded
 
 from django.conf import settings
 from datetime import timedelta
@@ -36,12 +19,9 @@ from apps.jobs.models import (
 from apps.jobs.node_executors import execute_generic_node, record_generic_result
 from apps.jobs.recovery import recover_stale_executions
 from apps.jobs.state_machine import ExecutionLease
-from apps.jobs.services import (
-    InvalidTargetHosts,
-    create_workflow_run_from_host_ids,
-    execute_ansible_node,
-    scheduled_job_run_options,
-)
+from apps.jobs.application.dispatch import enqueue_node_run, enqueue_workflow_run, recover_pending_dispatches
+from apps.jobs.application.runs import InvalidTargetHosts, create_workflow_run_from_host_ids, scheduled_job_run_options
+from apps.jobs.execution.registry import execute_ansible_node
 from apps.jobs.workflow_engine import (
     ANSIBLE_NODE_TYPES,
     node_queue_name,
@@ -59,9 +39,9 @@ TERMINAL_WORKFLOW_STATUSES = {
 }
 
 
-def _claim_node_run(node_run_id, task_id, now):
+def _claim_node_run(node_run_id, task_id, now, attempt):
     return bool(
-        NodeRun.objects.filter(id=node_run_id, status=NodeRun.Status.QUEUED,).update(
+        NodeRun.objects.filter(id=node_run_id, attempt_count=attempt, status=NodeRun.Status.QUEUED,).exclude(workflow_run__status__in=TERMINAL_WORKFLOW_STATUSES | {WorkflowRun.Status.CANCEL_REQUESTED}).update(
             status=NodeRun.Status.RUNNING,
             celery_task_id=task_id,
             started_at=now,
@@ -152,10 +132,12 @@ def run_workflow(workflow_run_id):
 
 
 @shared_task(name="jobs.execute_node")
-def execute_node(node_run_id):
+def execute_node(node_run_id, attempt):
     node_run = NodeRun.objects.select_related("workflow_run", "workflow_node").get(
         id=node_run_id
     )
+    if node_run.attempt_count != attempt:
+        return {"nodeRunId": node_run_id, "status": node_run.status}
     if node_run.workflow_run.status in TERMINAL_WORKFLOW_STATUSES:
         if node_run.status in {NodeRun.Status.PENDING, NodeRun.Status.QUEUED}:
             now = timezone.now()
@@ -172,13 +154,13 @@ def execute_node(node_run_id):
     task_id = getattr(task_request, "id", "") or ""
     worker_name = getattr(task_request, "hostname", "") or "local"
     now = timezone.now()
-    claimed = _claim_node_run(node_run_id, task_id, now)
+    claimed = _claim_node_run(node_run_id, task_id, now, attempt)
     if not claimed:
         status = NodeRun.objects.values_list("status", flat=True).get(id=node_run_id)
         return {"nodeRunId": node_run_id, "status": status}
     NodeRunAttempt.objects.filter(
         node_run_id=node_run_id,
-        attempt=node_run.attempt_count,
+        attempt=attempt,
     ).update(
         status=NodeRunAttempt.Status.RUNNING,
         celery_task_id=task_id,
@@ -218,7 +200,7 @@ def execute_node(node_run_id):
         node_run.refresh_from_db()
         NodeRunAttempt.objects.filter(
             node_run_id=node_run_id,
-            attempt=node_run.attempt_count,
+            attempt=attempt,
         ).update(
             status=_attempt_terminal_status(node_run.status),
             finished_at=finished_at,
@@ -249,84 +231,9 @@ def execute_node(node_run_id):
     return {"nodeRunId": node_run_id, "status": result.status}
 
 
-def enqueue_node_run(node_run_id):
-    node_run = (
-        NodeRun.objects.select_related(
-            "workflow_node", "workflow_run", "workflow_run__worker_pool"
-        )
-        .only(
-            "id",
-            "node_type",
-            "attempt_count",
-            "workflow_node__timeout_seconds",
-            "workflow_run__timeout_seconds",
-            "workflow_run__run_domain",
-            "workflow_run__worker_pool__queue_name",
-        )
-        .get(id=node_run_id)
-    )
-    queue_name = node_queue_name(
-        node_run.node_type,
-        node_run.workflow_run.worker_pool,
-        node_run.workflow_run.run_domain,
-    )
-    node_timeout = (
-        getattr(node_run.workflow_node, "timeout_seconds", 0)
-        or node_run.workflow_run.timeout_seconds
-    )
-    time_limit = max(
-        min(int(node_timeout), int(node_run.workflow_run.timeout_seconds)),
-        1,
-    )
-    if CELERY_AVAILABLE:
-        task = execute_node.apply_async(
-            args=[node_run_id],
-            queue=queue_name,
-            soft_time_limit=time_limit,
-            time_limit=time_limit + 5,
-        )
-    else:
-        task = execute_node.delay(node_run_id)
-    task_id = getattr(task, "id", "") or ""
-    if task_id:
-        NodeRun.objects.filter(id=node_run_id).update(celery_task_id=task_id)
-        NodeRunAttempt.objects.filter(
-            node_run_id=node_run_id,
-            attempt=node_run.attempt_count,
-        ).update(celery_task_id=task_id)
-    return {"nodeRunId": node_run_id, "taskId": task_id, "queue": queue_name}
-
-
-def enqueue_workflow_run(workflow_run_id, record_dispatch_task=True):
-    run_domain = WorkflowRun.objects.values_list("run_domain", flat=True).get(
-        id=workflow_run_id
-    )
-    queue_name = "ops" if run_domain == WorkflowRun.RunDomain.OPS else "task"
-    if CELERY_AVAILABLE:
-        task = run_workflow.apply_async(
-            args=[workflow_run_id],
-            queue=queue_name,
-        )
-    else:
-        task = run_workflow.delay(workflow_run_id)
-    task_id = getattr(task, "id", "") or ""
-    if task_id and record_dispatch_task:
-        ExecutionLease.touch(
-            workflow_run_id,
-            task_id=task_id,
-            worker=getattr(settings, "CELERY_WORKER_HOSTNAME", "") or "local",
-        )
-    return {
-        "workflowRunId": workflow_run_id,
-        "dispatchMode": "celery" if CELERY_AVAILABLE else "inline",
-        "taskId": task_id,
-        "queue": queue_name,
-    }
-
-
 @shared_task(name="jobs.recover_stale_workflow_runs")
 def recover_stale_workflow_runs():
-    return {"recovered": recover_stale_executions()}
+    return {"dispatches": recover_pending_dispatches(), "recovered": recover_stale_executions()}
 
 
 @shared_task(name="jobs.dispatch_scheduled_jobs")

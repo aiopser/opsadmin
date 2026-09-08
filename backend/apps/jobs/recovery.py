@@ -9,26 +9,6 @@ def heartbeat_execution(run_id, task_id=None, worker=None):
     ExecutionLease.touch(run_id, task_id=task_id, worker=worker)
 
 
-@transaction.atomic
-def request_execution_cancel(run_id):
-    run = WorkflowRun.objects.select_for_update().get(id=run_id)
-    if run.status in ExecutionStateMachine.TERMINAL_STATES:
-        return run
-    if run.status in {
-        WorkflowRun.Status.PENDING,
-        WorkflowRun.Status.QUEUED,
-        WorkflowRun.Status.RUNNING,
-    }:
-        ExecutionStateMachine.transition(
-            run,
-            WorkflowRun.Status.CANCEL_REQUESTED,
-            reason="Cancellation requested by user.",
-        )
-        run.cancel_requested_at = timezone.now()
-        run.save(update_fields=["cancel_requested_at", "updated_at"])
-    return run
-
-
 def recover_stale_executions(now=None):
     now = now or timezone.now()
     active_runs = WorkflowRun.objects.filter(
@@ -71,11 +51,9 @@ def recover_stale_execution(run_id, now=None):
         return False
 
     cancel_requested = run.status == WorkflowRun.Status.CANCEL_REQUESTED
-    run.status = (
-        WorkflowRun.Status.CANCELED if cancel_requested else WorkflowRun.Status.TIMEOUT
-    )
+    run.status = WorkflowRun.Status.TIMEOUT
     run.failure_reason = (
-        "Cancellation completed after worker heartbeat expired."
+        "Cancellation could not be confirmed after worker heartbeat expired; execution outcome is unknown."
         if cancel_requested
         else "Execution worker heartbeat expired."
     )

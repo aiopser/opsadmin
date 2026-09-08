@@ -12,7 +12,7 @@ from apps.cmdb.models import AssetHost
 from apps.jobs.models import WorkerPool
 
 from .models import NodeRun, NodeRunAttempt, WorkflowRun
-from .services import create_workflow_run
+from apps.jobs.application.runs import create_workflow_run
 from .workflow_engine import node_queue_name, plan_dispatch
 
 

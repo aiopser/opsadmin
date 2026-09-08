@@ -10,7 +10,7 @@ from .targets import resolve_targets
 
 
 def execute_asset_module(*, actor, host_id, module, module_args="", timeout=60, on_event):
-    from apps.jobs.services import prepare_host_gateway_execution
+    from apps.jobs.execution.plan_builder import prepare_host_gateway_execution
 
     targets = resolve_targets(actor=actor, host_ids=[host_id], group_ids=[])
     hosts, group_vars, gateway_directory = prepare_host_gateway_execution(targets)

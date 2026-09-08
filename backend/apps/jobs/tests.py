@@ -38,11 +38,11 @@ from apps.permission.services import CasbinEnforcerService, sync_casbin_rules
 
 class VersionedAnsibleResourceTests(SimpleTestCase):
     @patch(
-        "apps.jobs.services.resolve_workflow_inputs",
+        "apps.jobs.execution.plan_builder.resolve_workflow_inputs",
         return_value={"execution_source": "quick_command"},
     )
     def test_quick_linux_command_uses_adhoc_raw(self, _resolve_inputs):
-        from apps.jobs.services import _quick_command_adhoc_spec
+        from apps.jobs.execution.plan_builder import _quick_command_adhoc_spec
 
         spec = SimpleNamespace(
             command_type=CommandVersion.CommandType.LINUX_SHELL,
@@ -60,11 +60,11 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
         )
 
     @patch(
-        "apps.jobs.services.resolve_workflow_inputs",
+        "apps.jobs.execution.plan_builder.resolve_workflow_inputs",
         return_value={"execution_source": "workflow"},
     )
     def test_regular_linux_command_keeps_playbook_execution(self, _resolve_inputs):
-        from apps.jobs.services import _quick_command_adhoc_spec
+        from apps.jobs.execution.plan_builder import _quick_command_adhoc_spec
 
         result = _quick_command_adhoc_spec(
             SimpleNamespace(),
@@ -75,7 +75,7 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
         self.assertIsNone(result)
 
     def test_host_execution_options_apply_serial_and_rolling_batches(self):
-        from apps.jobs.services import _apply_host_execution_options
+        from apps.jobs.execution.plan_builder import _apply_host_execution_options
 
         serial_playbook = _apply_host_execution_options(
             [{"hosts": "all", "tasks": []}],
@@ -100,7 +100,7 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
         self.assertNotIn("max_fail_percentage", rolling_playbook[0])
 
     def test_playbook_node_uses_published_version_content(self):
-        from apps.jobs.services import _node_playbook
+        from apps.jobs.execution.plan_builder import _node_playbook
 
         node = SimpleNamespace(
             node_type=WorkflowNode.NodeType.PLAYBOOK,
@@ -117,7 +117,7 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
         self.assertEqual(playbook[0]["hosts"], "all")
 
     def test_module_node_uses_version_module_and_default_arguments(self):
-        from apps.jobs.services import _node_playbook
+        from apps.jobs.execution.plan_builder import _node_playbook
 
         run = SimpleNamespace(input_vars={}, secret_input_vars_encrypted="")
         node = SimpleNamespace(
@@ -137,7 +137,7 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
         self.assertEqual(extra_vars["module_args"]["state"], "restarted")
 
     def test_published_playbook_ignores_stale_inline_node_content(self):
-        from apps.jobs.services import _node_playbook
+        from apps.jobs.execution.plan_builder import _node_playbook
 
         node = SimpleNamespace(
             node_type=WorkflowNode.NodeType.PLAYBOOK,
@@ -158,13 +158,13 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
 
     @patch("apps.jobs.workflow_engine.resolve_workflow_inputs", return_value={})
     @patch(
-        "apps.jobs.services.resolve_workflow_inputs",
+        "apps.jobs.execution.plan_builder.resolve_workflow_inputs",
         return_value={"command_content": "runtime override"},
     )
     def test_published_command_body_cannot_be_overridden_by_run_inputs(
         self, _resolve, _resolve_context
     ):
-        from apps.jobs.services import _merge_node_vars
+        from apps.jobs.execution.plan_builder import _merge_node_vars
 
         version = SimpleNamespace(
             content="echo published",
@@ -185,13 +185,13 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
 
     @patch("apps.jobs.workflow_engine.resolve_workflow_inputs", return_value={})
     @patch(
-        "apps.jobs.services.resolve_workflow_inputs",
+        "apps.jobs.execution.plan_builder.resolve_workflow_inputs",
         return_value={"command_content": "echo real"},
     )
     def test_quick_command_workflow_keeps_runtime_command_body(
         self, _resolve, _resolve_context
     ):
-        from apps.jobs.services import _merge_node_vars
+        from apps.jobs.execution.plan_builder import _merge_node_vars
 
         version = SimpleNamespace(content="{{ command_content }}", default_vars={})
         node = SimpleNamespace(command_version=version, input_mapping={})
@@ -211,7 +211,7 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
         self.assertEqual(values["command_content"], "echo real")
 
     def test_version_timeout_participates_in_effective_timeout(self):
-        from apps.jobs.services import _effective_ansible_timeout
+        from apps.jobs.execution.plan_builder import _effective_ansible_timeout
 
         timeout = _effective_ansible_timeout(
             SimpleNamespace(timeout_seconds=300),
@@ -222,7 +222,7 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
         self.assertEqual(timeout, 45)
 
     def test_version_argument_schema_validates_required_values_and_types(self):
-        from apps.jobs.services import _validate_version_arguments
+        from apps.jobs.execution.plan_builder import _validate_version_arguments
 
         spec = SimpleNamespace(
             argument_schema={
@@ -241,7 +241,7 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
             _validate_version_arguments(spec, {"service": "api", "replicas": "2"})
 
     def test_version_output_extractors_convert_declared_values(self):
-        from apps.jobs.services import _extract_version_outputs
+        from apps.jobs.execution.plan_builder import _extract_version_outputs
 
         spec = SimpleNamespace(
             output_extractors=[
@@ -623,7 +623,7 @@ class HostRunResultModelTests(SimpleTestCase):
 
 class WorkflowCancellationTests(SimpleTestCase):
     def test_canceled_workflow_run_must_not_continue(self):
-        from apps.jobs.services import should_stop_workflow_run
+        from apps.jobs.application.cancel import should_stop_workflow_run
 
         run = WorkflowRun(status=WorkflowRun.Status.CANCELED)
 
@@ -632,7 +632,7 @@ class WorkflowCancellationTests(SimpleTestCase):
 
 class RunnerFailureFallbackTests(SimpleTestCase):
     def test_failed_result_fallback_updates_callback_host_without_duplicate(self):
-        from apps.jobs.services import _materialize_failed_target_results
+        from apps.jobs.execution.registry import _materialize_failed_target_results
 
         results = {
             "id:1": SimpleNamespace(
@@ -663,7 +663,7 @@ class RunnerFailureFallbackTests(SimpleTestCase):
             def host_key_for(host_id, hostname):
                 return f"id:{host_id}" if host_id is not None else f"name:{hostname}"
 
-        with patch("apps.jobs.services.HostRunResult", FakeHostRunResult):
+        with patch("apps.jobs.execution.registry.HostRunResult", FakeHostRunResult):
             _materialize_failed_target_results(
                 SimpleNamespace(),
                 [
@@ -680,11 +680,9 @@ class RunnerFailureFallbackTests(SimpleTestCase):
         self.assertEqual(results["id:2"].status, HostRunResult.Status.FAILED)
 
 
-from apps.jobs.services import (
-    _mark_workflow_work_canceled,
-    create_workflow_run,
-    run_workflow_ansible,
-)
+from apps.jobs.application.cancel import _mark_workflow_work_canceled
+from apps.jobs.application.runs import create_workflow_run
+from apps.jobs.execution.registry import run_workflow_ansible
 from apps.jobs.views import WorkflowRunViewSet
 
 
@@ -877,8 +875,8 @@ class WorkflowRunServiceTests(TestCase):
         )
         now = timezone.now()
 
-        self.assertTrue(_claim_node_run(node_run.id, "task-1", now))
-        self.assertFalse(_claim_node_run(node_run.id, "task-2", now))
+        self.assertTrue(_claim_node_run(node_run.id, "task-1", now, node_run.attempt_count))
+        self.assertFalse(_claim_node_run(node_run.id, "task-2", now, node_run.attempt_count))
 
         node_run.refresh_from_db()
         self.assertEqual(node_run.status, NodeRun.Status.RUNNING)
@@ -1034,7 +1032,7 @@ class WorkflowRunServiceTests(TestCase):
         self.assertEqual(schedule.timeout_seconds, 900)
         self.assertEqual(schedule.queue_timeout_seconds, 45)
         self.assertTrue(schedule.bypass_host_gateway)
-        from apps.jobs.services import scheduled_job_run_options
+        from apps.jobs.application.runs import scheduled_job_run_options
 
         run_options = scheduled_job_run_options(schedule)
         self.assertEqual(run_options["input_vars"]["host_strategy"], "rolling")
@@ -1565,7 +1563,20 @@ class WorkflowRunServiceTests(TestCase):
         self.assertEqual(run.target_snapshot[0]["address"], self.host.primary_ip)
         self.assertEqual(run.worker_pool_id, self.worker_pool.id)
 
-    @patch("apps.jobs.services.AnsibleExecutor")
+    @patch("apps.jobs.execution.registry.AnsibleExecutor")
+    def test_node_preserves_confirmed_runner_cancel_and_timeout(self, executor):
+        from apps.jobs.execution.registry import execute_ansible_node
+        for status in ("canceled", "timeout"):
+            with self.subTest(status=status):
+                run = create_workflow_run(workflow_version=self.workflow_version, target_hosts=[self.host],
+                    input_vars={}, worker_pool=self.worker_pool, triggered_by=self.user)
+                node = NodeRun.objects.create(workflow_run=run, workflow_node=self.node,
+                    command_version=self.command_version, status="running", attempt_count=1)
+                executor.return_value.execute.return_value = RunnerResult(status, 1)
+                result = execute_ansible_node(node.id)
+                self.assertEqual(result.status, status)
+
+    @patch("apps.jobs.execution.registry.AnsibleExecutor")
     def test_asset_disabled_after_submission_is_not_executed(self, executor):
         run = create_workflow_run(
             workflow_version=self.workflow_version, target_hosts=[self.host], input_vars={},
@@ -1576,7 +1587,7 @@ class WorkflowRunServiceTests(TestCase):
         self.assertEqual(result.status, WorkflowRun.Status.FAILED)
         executor.return_value.execute.assert_not_called()
 
-    @patch("apps.jobs.services.AnsibleExecutor")
+    @patch("apps.jobs.execution.registry.AnsibleExecutor")
     def test_ansible_workflow_persists_callback_events_without_terminal_aggregation(
         self, runner_service
     ):
@@ -1634,7 +1645,7 @@ class WorkflowRunServiceTests(TestCase):
         self.assertNotIn("do-not-store", serialized)
         self.assertNotIn("runner_result", serialized)
 
-    @patch("apps.jobs.services.AnsibleExecutor")
+    @patch("apps.jobs.execution.registry.AnsibleExecutor")
     def test_ansible_unavailable_materializes_failed_result_for_every_target(
         self, runner_service
     ):
@@ -1670,7 +1681,7 @@ class WorkflowRunServiceTests(TestCase):
             {f"id:{self.host.id}", f"id:{second_host.id}"},
         )
 
-    @patch("apps.jobs.services.AnsibleExecutor")
+    @patch("apps.jobs.execution.registry.AnsibleExecutor")
     def test_ansible_exception_reuses_callback_result_without_duplicates(
         self, runner_service
     ):
@@ -1717,7 +1728,7 @@ class WorkflowRunServiceTests(TestCase):
             1,
         )
 
-    @patch("apps.jobs.services.AnsibleExecutor")
+    @patch("apps.jobs.execution.registry.AnsibleExecutor")
     def test_ansible_no_callbacks_materializes_failed_result_for_every_target(
         self, runner_service
     ):
@@ -1755,7 +1766,7 @@ class WorkflowRunServiceTests(TestCase):
             2,
         )
 
-    @patch("apps.jobs.services.AnsibleExecutor")
+    @patch("apps.jobs.execution.registry.AnsibleExecutor")
     def test_ansible_cancel_callback_marks_active_node_and_host_work_canceled(
         self, runner_service
     ):
@@ -1807,7 +1818,7 @@ class WorkflowRunServiceTests(TestCase):
             ).exists()
         )
 
-    @patch("apps.jobs.services.AnsibleExecutor")
+    @patch("apps.jobs.execution.registry.AnsibleExecutor")
     def test_ansible_preclaim_cancellation_materializes_all_node_and_host_results(
         self, runner_service
     ):
@@ -1865,7 +1876,7 @@ class WorkflowRunServiceTests(TestCase):
         )
         runner_service.return_value.execute.assert_not_called()
 
-    @patch("apps.jobs.services.AnsibleExecutor")
+    @patch("apps.jobs.execution.registry.AnsibleExecutor")
     def test_ansible_midrun_cancellation_materializes_unstarted_node_work(
         self, runner_service
     ):
@@ -1926,7 +1937,7 @@ class WorkflowRunServiceTests(TestCase):
         )
         self.assertEqual(runner_service.return_value.execute.call_count, 1)
 
-    @patch("apps.jobs.services.AnsibleExecutor")
+    @patch("apps.jobs.execution.registry.AnsibleExecutor")
     def test_ansible_cancellation_fills_missing_targets_and_preserves_terminal_results(
         self, runner_service
     ):

@@ -214,12 +214,12 @@ def plan_dispatch(workflow_run_id):
     }:
         return []
     if run.status == WorkflowRun.Status.CANCEL_REQUESTED:
-        run.status = WorkflowRun.Status.CANCELED
-        run.finished_at = timezone.now()
-        run.node_runs.filter(
-            status__in=list(ACTIVE_NODE_STATUSES | {NodeRun.Status.PENDING})
-        ).update(status=NodeRun.Status.CANCELED, finished_at=timezone.now())
-        run.save(update_fields=["status", "finished_at", "updated_at"])
+        run.node_runs.filter(status__in=[NodeRun.Status.PENDING, NodeRun.Status.QUEUED]).update(
+            status=NodeRun.Status.CANCELED, finished_at=timezone.now())
+        if not run.node_runs.filter(status=NodeRun.Status.RUNNING).exists():
+            run.status = WorkflowRun.Status.CANCELED
+            run.finished_at = timezone.now()
+            run.save(update_fields=["status", "finished_at", "updated_at"])
         return []
 
     worker_pool = WorkerPool.objects.select_for_update().get(id=run.worker_pool_id)

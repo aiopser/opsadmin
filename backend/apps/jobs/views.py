@@ -11,7 +11,7 @@ from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework.decorators import action
 from rest_framework.views import APIView
 
-from .tasks import enqueue_workflow_run
+from .application.dispatch import enqueue_workflow_run
 from .cron import next_cron_time
 from apps.jobs.models import WorkerPool
 from common.api.responses import api_error_response, api_ok_response
@@ -47,18 +47,16 @@ class WorkerPoolViewSet(StandardModelViewSet):
         return api_ok_response()
 
 from apps.audit_center.services import create_domain_audit_event
-from .recovery import recover_stale_execution, request_execution_cancel
+from .recovery import recover_stale_execution
+from .application.cancel import request_execution_cancel
+from .application.retry import retry_failed_node
 from .settings_service import (
     get_engine_settings,
     get_notify_settings,
     save_engine_settings,
     save_notify_settings,
 )
-from .services import (
-    InvalidTargetHosts,
-    create_workflow_run_from_host_ids,
-    scheduled_job_run_options,
-)
+from apps.jobs.application.runs import InvalidTargetHosts, create_workflow_run_from_host_ids, scheduled_job_run_options
 from .models import (
     CommandIntercept,
     Gateway,
@@ -572,19 +570,7 @@ class NodeRunViewSet(ReadOnlyHistoryViewSet):
     @action(methods=["POST"], detail=True, url_path="retry")
     def retry(self, request, pk=None):
         node_run = self.get_object()
-        if node_run.status not in {NodeRun.Status.FAILED, NodeRun.Status.TIMEOUT}:
-            return api_error_response("只有失败或超时节点可以重试")
-        node_run.status = NodeRun.Status.PENDING
-        node_run.failure_reason = ""
-        node_run.finished_at = None
-        node_run.save(
-            update_fields=["status", "failure_reason", "finished_at", "updated_at"]
-        )
-        transaction.on_commit(
-            lambda: enqueue_workflow_run(
-                node_run.workflow_run_id, record_dispatch_task=False
-            )
-        )
+        node_run = retry_failed_node(node_run.id)
         return api_ok_response(self.get_serializer(node_run).data)
 
     @action(methods=["POST"], detail=True, url_path="ignore")
