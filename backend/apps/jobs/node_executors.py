@@ -1,3 +1,4 @@
+from .execution.snapshots import execution_node, execution_resource
 from uuid import uuid4
 from apps.jobs.events import append_run_event
 import base64
@@ -225,8 +226,7 @@ def execute_api_endpoint(endpoint, context):
 
 
 def execute_api(node_run, context):
-    node = node_run.workflow_node
-    endpoint = ApiEndpoint.objects.get(id=node.resource_id, is_active=True)
+    endpoint = execution_resource(node_run)
     return execute_api_endpoint(endpoint, context)
 
 
@@ -273,12 +273,8 @@ def trigger_jenkins_job(server, job_name, parameters=None):
 
 
 def execute_jenkins(node_run, context):
-    node = node_run.workflow_node
-    job = JenkinsJob.objects.select_related("server").get(
-        id=node.resource_id,
-        is_active=True,
-        server__is_active=True,
-    )
+    node = execution_node(node_run)
+    job = execution_resource(node_run)
     server = job.server
     config = render_value(node.config or {}, context)
     job_name = job.name
@@ -504,12 +500,8 @@ def send_notification(template, context, *, node_run=None, overrides=None):
 
 
 def execute_notification(node_run, context):
-    node = node_run.workflow_node
-    template = NotificationTemplate.objects.select_related("channel").get(
-        id=node.resource_id,
-        is_active=True,
-        channel__is_active=True,
-    )
+    node = execution_node(node_run)
+    template = execution_resource(node_run)
     return send_notification(
         template, context, node_run=node_run, overrides=node.config or {}
     )
@@ -526,7 +518,7 @@ def execute_generic_node(node_run_id, context):
     node_run = NodeRun.objects.select_related("workflow_run", "workflow_node").get(
         id=node_run_id
     )
-    node = node_run.workflow_node
+    node = execution_node(node_run)
     executor = EXECUTORS.get(node.node_type if node else "")
     if not executor:
         raise NodeExecutionError(

@@ -13,7 +13,7 @@ from apps.automation.models import (
     WorkflowVersion,
 )
 from apps.automation.serializers import CommandVersionSerializer
-from apps.automation.workflow_graph import validate_graph
+from common.workflow.schema import validate_graph
 
 
 class WorkflowGraphValidationTests(SimpleTestCase):
@@ -48,6 +48,7 @@ class WorkflowGraphValidationTests(SimpleTestCase):
         errors = validate_graph(graph)
 
         self.assertGreaterEqual(len(errors), 1)
+
 
 class CommandVersionTests(TestCase):
     def test_published_command_version_cannot_be_modified(self):
@@ -112,6 +113,21 @@ class WorkflowVersionTests(TestCase):
             workflow=workflow,
             version=1,
             created_by=user,
+        )
+        from apps.automation.workflow_graph import replace_graph
+
+        self.assertEqual(
+            replace_graph(
+                version,
+                {
+                    "nodes": [
+                        {"id": "start", "type": "start"},
+                        {"id": "end", "type": "end"},
+                    ],
+                    "edges": [{"id": "done", "source": "start", "target": "end"}],
+                },
+            ),
+            [],
         )
         version.publish(user)
         version.global_vars = {"service": "nginx"}
@@ -179,7 +195,9 @@ class WorkflowGraphApiTests(TestCase):
         from apps.automation.views import WorkflowVersionViewSet
         from apps.automation.workflow_graph import replace_graph
 
-        workflow = WorkflowTemplate.objects.create(name="Jenkins graph", code="jenkins_graph")
+        workflow = WorkflowTemplate.objects.create(
+            name="Jenkins graph", code="jenkins_graph"
+        )
         version = WorkflowVersion.objects.create(workflow=workflow, version=1)
         server = JenkinsServer.objects.create(
             name="Production Jenkins",
@@ -259,7 +277,9 @@ class WorkflowGraphApiTests(TestCase):
             email="empty-graph-admin@example.com",
             phone="13800000005",
         )
-        workflow = WorkflowTemplate.objects.create(name="Empty graph", code="empty_graph")
+        workflow = WorkflowTemplate.objects.create(
+            name="Empty graph", code="empty_graph"
+        )
         version = WorkflowVersion.objects.create(workflow=workflow, version=1)
         replace_graph(
             version,
@@ -469,9 +489,7 @@ class NodeResourceCatalogApiTests(APITestCase):
                 "description": "Deploy nginx configuration",
                 "commandType": "playbook",
                 "content": "- hosts: all\n  tasks: []",
-                "argumentSchema": {
-                    "environment": {"type": "string", "required": True}
-                },
+                "argumentSchema": {"environment": {"type": "string", "required": True}},
                 "defaultVars": {"environment": "test"},
                 "timeoutSeconds": 600,
                 "becomeEnabled": True,
@@ -520,9 +538,7 @@ class NodeResourceCatalogApiTests(APITestCase):
             content="ansible.builtin.command",
         )
 
-        response = self.client.get(
-            "/api/v1/automation/node-resources?node_type=module"
-        )
+        response = self.client.get("/api/v1/automation/node-resources?node_type=module")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(

@@ -99,3 +99,13 @@ WorkerPool/serializer/view/admin 仅归 jobs，表 jobs_worker_pool，唯一 API
 删除：ops/tasklog 剩余五个文件、ops.apps.ready 信号注册、CELERY_LOG_DIR、WorkflowRun.runner_workspace 及旧 logger filter 测试；替代为路径/越权/UTF-8/ANSI/截断/no_log/失败运行下载测试。
 
 实际测试：日志与隔离专项 11 passed；完整 pytest 回归 311 passed / 11 原基线 failed / 4 明确 skipped / 15 subtests passed（61.27 秒）。未完成：共享归档真实多 Worker 验证，T07/MySQL/Redis 环境缺口不变；T12–T15 继续执行。
+
+## P5 / T12 图协议与发布快照
+
+新增 common/workflow/{node_types,schema,conditions}.py、automation/resource_snapshots.py、jobs/execution/snapshots.py。节点词汇及纯校验集中，拒绝环、未知类型、畸形节点/边/超时；数据条件与默认出口接入调度，未选路径跳过，汇合等待已选分支。发布锁定重读并冻结命令正文和资源配置，版本保存/批量更新拒绝修改发布内容。运行上下文和执行节点读取快照；模板/命令删除后已有运行仍有定义。凭据仍引用重验，不复制密文到资源快照。
+
+删除：automation 内重复校验/hash/控制类型、jobs 内重复节点集合、WorkflowNode.NodeType、旧线性图自动补齐、steps/bpmn 模式及 bpmn_xml；实际生成 automation/0003。旧补齐测试删除，以明确拒绝旧图和实际条件汇合测试替代。详见 workflow-snapshots.md。
+
+实际测试：automation 与图运行专项 53 passed / 2 subtests passed；最终完整回归 341 passed / 10 原基线 failed / 4 明确 skipped / 17 subtests passed（63.01 秒）。旧表达式缺失失败消除；原秘密输入测试改为创建新版本，保留加密断言，不绕过发布不可变约束。Black、迁移差异检查通过。
+
+未完成：T13 系统快捷模板仍待按完整图发布，运行创建回退和旧顺序执行路径待删除；所有入口治理完成后补充端到端快照验收。T14 前端 editorMode 和实时协议、T07/MySQL/Redis/共享存储真实验收缺口不变。

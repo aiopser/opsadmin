@@ -1,3 +1,4 @@
+from common.workflow.node_types import NodeType
 from uuid import uuid4
 import json
 from datetime import timedelta
@@ -104,7 +105,7 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
         from apps.jobs.execution.plan_builder import _node_playbook
 
         node = SimpleNamespace(
-            node_type=WorkflowNode.NodeType.PLAYBOOK,
+            node_type=NodeType.PLAYBOOK,
             config={},
         )
         command_spec = SimpleNamespace(
@@ -122,7 +123,7 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
 
         run = SimpleNamespace(input_vars={}, secret_input_vars_encrypted="")
         node = SimpleNamespace(
-            node_type=WorkflowNode.NodeType.MODULE,
+            node_type=NodeType.MODULE,
             config={},
         )
         command_spec = SimpleNamespace(
@@ -141,7 +142,7 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
         from apps.jobs.execution.plan_builder import _node_playbook
 
         node = SimpleNamespace(
-            node_type=WorkflowNode.NodeType.PLAYBOOK,
+            node_type=NodeType.PLAYBOOK,
             command_version=SimpleNamespace(id=1),
             config={"content": "- name: Stale inline play\n  hosts: all\n  tasks: []"},
         )
@@ -174,6 +175,7 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
         node = SimpleNamespace(command_version=version, input_mapping={})
         run = SimpleNamespace(
             node_runs=SimpleNamespace(all=lambda: []),
+            graph_snapshot={},
             workflow_version=None,
             id=1,
             triggered_by_id=None,
@@ -198,6 +200,7 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
         node = SimpleNamespace(command_version=version, input_mapping={})
         run = SimpleNamespace(
             node_runs=SimpleNamespace(all=lambda: []),
+            graph_snapshot={},
             workflow_version=SimpleNamespace(
                 workflow=SimpleNamespace(code="__quick_linux_shell"),
                 global_vars={},
@@ -296,24 +299,11 @@ class WorkflowInputSchemaTests(SimpleTestCase):
 
 
 class WorkflowGraphEngineContractTests(SimpleTestCase):
-    def test_legacy_linear_graph_gets_start_and_end_nodes(self):
-        from apps.jobs.workflow_engine import _ensure_executable_graph
-
-        graph = _ensure_executable_graph(
-            {"nodes": [{"id": "task", "type": "command"}], "edges": []}
-        )
-
-        self.assertEqual(
-            [node["type"] for node in graph["nodes"]],
-            ["start", "command", "end"],
-        )
-        self.assertEqual(len(graph["edges"]), 2)
-
     def test_gateway_expression_uses_sandboxed_runtime_context(self):
-        from apps.jobs.workflow_engine import _expression_is_true
+        from common.workflow.conditions import expression_is_true
 
         self.assertTrue(
-            _expression_is_true(
+            expression_is_true(
                 "inputs.environment == 'production'",
                 {"inputs": {"environment": "production"}},
             )
@@ -840,14 +830,17 @@ class WorkflowRunServiceTests(TestCase):
     def test_secret_workflow_inputs_are_encrypted_at_rest(self):
         from apps.jobs.input_secrets import REDACTED_VALUE, resolve_workflow_inputs
 
-        self.workflow_version.input_schema = [
-            {"name": "service", "type": "string"},
-            {"name": "deploy_token", "type": "secret"},
-        ]
-        self.workflow_version.save(update_fields=["input_schema", "updated_at"])
+        version = WorkflowVersion.objects.create(
+            workflow=self.workflow_version.workflow,
+            version=2,
+            input_schema=[
+                {"name": "service", "type": "string"},
+                {"name": "deploy_token", "type": "secret"},
+            ],
+        )
 
         run = create_workflow_run(
-            workflow_version=self.workflow_version,
+            workflow_version=version,
             target_hosts=[self.host],
             input_vars={"service": "api", "deploy_token": "top-secret-token"},
             worker_pool=self.worker_pool,
@@ -1629,6 +1622,7 @@ class WorkflowRunServiceTests(TestCase):
                 node = NodeRun.objects.create(
                     workflow_run=run,
                     workflow_node=self.node,
+                    node_key=self.node.node_key,
                     command_version=self.command_version,
                     status="running",
                     attempt_count=1,

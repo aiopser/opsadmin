@@ -1,3 +1,4 @@
+from common.workflow.node_types import ANSIBLE_NODE_TYPES
 from uuid import uuid4
 from apps.jobs.events import append_run_event
 import logging
@@ -33,7 +34,6 @@ from apps.jobs.application.runs import (
 )
 from apps.jobs.execution.registry import execute_ansible_node
 from apps.jobs.workflow_engine import (
-    ANSIBLE_NODE_TYPES,
     node_queue_name,
     plan_dispatch,
     runtime_context,

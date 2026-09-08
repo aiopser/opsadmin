@@ -1,3 +1,6 @@
+from common.workflow.node_types import NodeType
+from common.workflow.node_types import CONTROL_NODE_TYPES
+from common.workflow.schema import validate_graph
 from django.db import transaction
 from django.db.models.deletion import ProtectedError
 from django.db.models import Count, Max
@@ -48,11 +51,8 @@ from .serializers import (
 )
 from .node_resources import node_resource_catalog
 from .workflow_graph import (
-    CONTROL_NODE_TYPES,
-    graph_hash,
     replace_graph,
     serialize_graph,
-    validate_graph,
 )
 
 
@@ -418,10 +418,10 @@ class WorkflowVersionViewSet(AutomationAuditModelViewSet):
             ):
                 errors.append(f"节点 {node.node_key} 绑定的命令版本未发布")
             ansible_kinds = {
-                WorkflowNode.NodeType.COMMAND: CommandAtom.ResourceKind.COMMAND,
-                WorkflowNode.NodeType.SCRIPT: CommandAtom.ResourceKind.SCRIPT,
-                WorkflowNode.NodeType.PLAYBOOK: CommandAtom.ResourceKind.PLAYBOOK,
-                WorkflowNode.NodeType.MODULE: CommandAtom.ResourceKind.MODULE,
+                NodeType.COMMAND: CommandAtom.ResourceKind.COMMAND,
+                NodeType.SCRIPT: CommandAtom.ResourceKind.SCRIPT,
+                NodeType.PLAYBOOK: CommandAtom.ResourceKind.PLAYBOOK,
+                NodeType.MODULE: CommandAtom.ResourceKind.MODULE,
             }
             if node.node_type in ansible_kinds and not node.command_version_id:
                 errors.append(f"Ansible 节点 {node.node_key} 必须绑定已发布资源版本")
@@ -439,21 +439,21 @@ class WorkflowVersionViewSet(AutomationAuditModelViewSet):
             ):
                 errors.append(f"节点 {node.node_key} 绑定的资源版本不支持 Check Mode")
             if (
-                node.node_type == WorkflowNode.NodeType.API
+                node.node_type == NodeType.API
                 and not ApiEndpoint.objects.filter(
                     id=node.resource_id, is_active=True
                 ).exists()
             ):
                 errors.append(f"API 节点 {node.node_key} 未绑定有效资源")
             if (
-                node.node_type == WorkflowNode.NodeType.JENKINS
+                node.node_type == NodeType.JENKINS
                 and not JenkinsJob.objects.filter(
                     id=node.resource_id, is_active=True, server__is_active=True
                 ).exists()
             ):
                 errors.append(f"Jenkins 节点 {node.node_key} 未绑定有效 Job")
             if (
-                node.node_type == WorkflowNode.NodeType.NOTIFY
+                node.node_type == NodeType.NOTIFY
                 and not NotificationTemplate.objects.filter(
                     id=node.resource_id, is_active=True, channel__is_active=True
                 ).exists()
@@ -469,6 +469,7 @@ class WorkflowVersionViewSet(AutomationAuditModelViewSet):
         return list(dict.fromkeys(errors))
 
     @action(methods=["POST"], detail=True, url_path="publish")
+    @transaction.atomic
     def publish(self, request, pk=None):
         instance = self.get_object()
         if instance.status != instance.Status.DRAFT:
@@ -482,17 +483,6 @@ class WorkflowVersionViewSet(AutomationAuditModelViewSet):
             workflow=instance.workflow,
             status=WorkflowVersion.Status.PUBLISHED,
         ).exclude(pk=instance.pk).update(status=WorkflowVersion.Status.ARCHIVED)
-        instance.graph_snapshot = serialize_graph(instance)
-        instance.validation_report = []
-        instance.published_hash = graph_hash(instance.graph_snapshot)
-        instance.save(
-            update_fields=[
-                "graph_snapshot",
-                "validation_report",
-                "published_hash",
-                "updated_at",
-            ]
-        )
         instance.publish(request.user)
         create_domain_audit_event(
             actor=request.user,
@@ -652,7 +642,7 @@ class WorkflowResourceProtectionMixin:
 
 
 class ApiEndpointViewSet(WorkflowResourceProtectionMixin, AutomationAuditModelViewSet):
-    workflow_node_type = WorkflowNode.NodeType.API
+    workflow_node_type = NodeType.API
     workflow_resource_label = "API 资源"
     audit_action_prefix = "automation.api_endpoint"
     audit_resource_type = "api_endpoint"
@@ -695,12 +685,10 @@ class JenkinsServerViewSet(AutomationAuditModelViewSet):
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         if WorkflowNode.objects.filter(
-            node_type=WorkflowNode.NodeType.JENKINS,
+            node_type=NodeType.JENKINS,
             resource_id__in=instance.jobs.values("id"),
         ).exists():
-            return api_error_response(
-                "该 Jenkins 实例下的 Job 已被流程节点引用，不能删除，可将实例停用"
-            )
+            return api_error_response("该 Jenkins 实例下的 Job 已被流程节点引用，不能删除，可将实例停用")
         if JenkinsBuild.objects.filter(job__server=instance).exists():
             return api_error_response("该 Jenkins 实例已有 Build 记录，不能删除，可将实例停用")
         return super().destroy(request, *args, **kwargs)
@@ -824,7 +812,7 @@ class JenkinsServerViewSet(AutomationAuditModelViewSet):
 
 
 class JenkinsJobViewSet(WorkflowResourceProtectionMixin, StandardModelViewSet):
-    workflow_node_type = WorkflowNode.NodeType.JENKINS
+    workflow_node_type = NodeType.JENKINS
     workflow_resource_label = "Jenkins Job"
     http_method_names = ["get", "post", "head", "options"]
     queryset = JenkinsJob.objects.select_related("server").all()
@@ -967,7 +955,7 @@ class NotificationChannelViewSet(
 class NotificationTemplateViewSet(
     WorkflowResourceProtectionMixin, AutomationAuditModelViewSet
 ):
-    workflow_node_type = WorkflowNode.NodeType.NOTIFY
+    workflow_node_type = NodeType.NOTIFY
     workflow_resource_label = "通知模板"
     audit_action_prefix = "automation.notification_template"
     audit_resource_type = "notification_template"

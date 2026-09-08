@@ -1,8 +1,53 @@
+from common.workflow.node_types import NodeType, NODE_CHOICES
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 
 from common.models import StandardModelMixin
+
+
+class VersionQuerySet(models.QuerySet):
+    @transaction.atomic
+    def update(self, **kwargs):
+        locked = list(self.select_for_update().values_list("pk", "status"))
+        if any(status != "draft" for _, status in locked):
+            if (
+                set(kwargs) - {"status", "updated_at"}
+                or kwargs.get("status") != "archived"
+            ):
+                raise ValueError("Published and archived versions are immutable")
+        return super().update(**kwargs)
+
+
+class FrozenVersionMixin:
+    @transaction.atomic
+    def save(self, *args, **kwargs):
+        if self.pk:
+            previous = type(self).objects.select_for_update().filter(pk=self.pk).first()
+            if previous is not None and previous.status != "draft":
+                fields = kwargs.get("update_fields")
+                for field in self._meta.concrete_fields:
+                    if (
+                        fields is not None
+                        and field.name not in fields
+                        and field.attname not in fields
+                    ):
+                        continue
+                    if field.name == "updated_at":
+                        continue
+                    old, new = getattr(previous, field.attname), getattr(
+                        self, field.attname
+                    )
+                    if old == new:
+                        continue
+                    if (
+                        field.name == "status"
+                        and old == "published"
+                        and new == "archived"
+                    ):
+                        continue
+                    raise ValueError("Published and archived versions are immutable")
+        return super().save(*args, **kwargs)
 
 
 class CommandAtom(StandardModelMixin):
@@ -65,7 +110,9 @@ class CommandAtom(StandardModelMixin):
         ordering = ["name", "id"]
 
 
-class CommandVersion(StandardModelMixin):
+class CommandVersion(FrozenVersionMixin, StandardModelMixin):
+    objects = VersionQuerySet.as_manager()
+
     class Status(models.TextChoices):
         DRAFT = "draft", "Draft"
         PUBLISHED = "published", "Published"
@@ -115,7 +162,7 @@ class CommandVersion(StandardModelMixin):
     published_at = models.DateTimeField(null=True, blank=True)
 
     def assert_mutable(self):
-        if self.status == self.Status.PUBLISHED:
+        if self.status != self.Status.DRAFT:
             raise ValueError("Published command versions are immutable")
 
     def publish(self, user):
@@ -177,15 +224,16 @@ class WorkflowTemplate(StandardModelMixin):
         ordering = ["name", "id"]
 
 
-class WorkflowVersion(StandardModelMixin):
+class WorkflowVersion(FrozenVersionMixin, StandardModelMixin):
+    objects = VersionQuerySet.as_manager()
+
     class Status(models.TextChoices):
         DRAFT = "draft", "Draft"
         PUBLISHED = "published", "Published"
         ARCHIVED = "archived", "Archived"
 
     class EditorMode(models.TextChoices):
-        STEPS = "steps", "Steps"
-        BPMN = "bpmn", "BPMN"
+        GRAPH = "graph", "Graph"
 
     workflow = models.ForeignKey(
         WorkflowTemplate,
@@ -204,9 +252,8 @@ class WorkflowVersion(StandardModelMixin):
     editor_mode = models.CharField(
         max_length=16,
         choices=EditorMode.choices,
-        default=EditorMode.STEPS,
+        default=EditorMode.GRAPH,
     )
-    bpmn_xml = models.TextField(blank=True, default="")
     graph_snapshot = models.JSONField(default=dict, blank=True)
     validation_report = models.JSONField(default=list, blank=True)
     published_hash = models.CharField(max_length=64, blank=True, default="")
@@ -231,12 +278,9 @@ class WorkflowVersion(StandardModelMixin):
             raise ValueError("Only draft workflow versions can be modified")
 
     def publish(self, user):
-        self.status = self.Status.PUBLISHED
-        self.published_by = user
-        self.published_at = timezone.now()
-        self.save(
-            update_fields=["status", "published_by", "published_at", "updated_at"]
-        )
+        from .workflow_graph import publish_version
+
+        publish_version(self, user)
 
     def archive(self):
         self.status = self.Status.ARCHIVED
@@ -252,19 +296,6 @@ class WorkflowVersion(StandardModelMixin):
 
 
 class WorkflowNode(StandardModelMixin):
-    class NodeType(models.TextChoices):
-        START = "start", "Start"
-        END = "end", "End"
-        COMMAND = "command", "Command"
-        SCRIPT = "script", "Script"
-        PLAYBOOK = "playbook", "Playbook"
-        MODULE = "module", "Ansible Module"
-        API = "api", "API"
-        JENKINS = "jenkins", "Jenkins"
-        NOTIFY = "notify", "Notification"
-        PARALLEL_GATEWAY = "parallel_gateway", "Parallel Gateway"
-        PARALLEL_JOIN = "parallel_join", "Parallel Join"
-
     class FailurePolicy(models.TextChoices):
         STOP = "stop", "Stop workflow"
         IGNORE = "ignore", "Ignore and continue"
@@ -292,7 +323,7 @@ class WorkflowNode(StandardModelMixin):
     )
     node_type = models.CharField(
         max_length=32,
-        choices=NodeType.choices,
+        choices=NODE_CHOICES,
         default=NodeType.COMMAND,
     )
     resource_type = models.CharField(max_length=32, blank=True, default="")
@@ -612,5 +643,3 @@ class NotificationRecord(StandardModelMixin):
     class Meta:
         db_table = "automation_notification_record"
         ordering = ["-id"]
-
-

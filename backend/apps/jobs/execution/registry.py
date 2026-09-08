@@ -93,7 +93,9 @@ def execute_ansible_node(node_run_id):
         "command_version",
     ).get(id=node_run_id)
     run = node_run.workflow_run
-    node = node_run.workflow_node
+    from .snapshots import execution_node
+
+    node = execution_node(node_run)
     snapshot_targets(actor=run.triggered_by, targets=run.target_snapshot or [])
     if not node:
         raise ValueError("Workflow node is required")

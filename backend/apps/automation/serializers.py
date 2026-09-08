@@ -1,3 +1,4 @@
+from common.workflow.node_types import NodeType
 import re
 
 import yaml
@@ -97,17 +98,13 @@ class AnsibleNodeResourceCreateSerializer(serializers.Serializer):
                 CommandVersion.CommandType.WINDOWS_POWERSHELL,
                 CommandVersion.CommandType.PYTHON,
             },
-            CommandAtom.ResourceKind.PLAYBOOK: {
-                CommandVersion.CommandType.PLAYBOOK
-            },
+            CommandAtom.ResourceKind.PLAYBOOK: {CommandVersion.CommandType.PLAYBOOK},
             CommandAtom.ResourceKind.MODULE: {
                 CommandVersion.CommandType.ANSIBLE_MODULE
             },
         }
         if attrs["commandType"] not in allowed_types[attrs["resourceKind"]]:
-            raise serializers.ValidationError(
-                {"commandType": "执行类型与节点资源类型不匹配"}
-            )
+            raise serializers.ValidationError({"commandType": "执行类型与节点资源类型不匹配"})
         if CommandAtom.objects.filter(code=attrs["code"]).exists():
             raise serializers.ValidationError({"code": "资源编码已经存在"})
         return attrs
@@ -326,9 +323,28 @@ class WorkflowTemplateSerializer(StandardModelSerializer):
 
 
 class WorkflowVersionSerializer(StandardModelSerializer):
+    editorMode = serializers.ChoiceField(
+        source="editor_mode", choices=WorkflowVersion.EditorMode.choices, required=False
+    )
+
+    def validate(self, attrs):
+        if any(key in self.initial_data for key in ("bpmnXml", "bpmn_xml")):
+            raise serializers.ValidationError(
+                "BPMN XML is not supported; submit the graph protocol"
+            )
+        return super().validate(attrs)
+
     class Meta:
         model = WorkflowVersion
-        fields = "__all__"
+        exclude = ("editor_mode",)
+        read_only_fields = (
+            "status",
+            "graph_snapshot",
+            "published_hash",
+            "validation_report",
+            "published_by",
+            "published_at",
+        )
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
@@ -351,10 +367,10 @@ class WorkflowNodeSerializer(StandardModelSerializer):
         node_type = attrs.get("node_type", getattr(self.instance, "node_type", ""))
         config = attrs.get("config", getattr(self.instance, "config", {})) or {}
         if node_type not in {
-            WorkflowNode.NodeType.COMMAND,
-            WorkflowNode.NodeType.SCRIPT,
-            WorkflowNode.NodeType.PLAYBOOK,
-            WorkflowNode.NodeType.MODULE,
+            NodeType.COMMAND,
+            NodeType.SCRIPT,
+            NodeType.PLAYBOOK,
+            NodeType.MODULE,
         }:
             return attrs
         if not isinstance(config, dict):

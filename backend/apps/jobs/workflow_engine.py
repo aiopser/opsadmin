@@ -1,3 +1,6 @@
+from common.workflow.node_types import NodeType
+from common.workflow.conditions import InvalidCondition, expression_is_true
+from common.workflow.node_types import ANSIBLE_NODE_TYPES, CONTROL_NODE_TYPES
 from uuid import uuid4
 from apps.jobs.events import append_run_event
 from collections import defaultdict
@@ -7,7 +10,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.automation.models import WorkflowNode
-from apps.automation.workflow_graph import serialize_graph
+from common.workflow.schema import validate_graph
 from apps.jobs.models import WorkerPool
 
 from .input_secrets import resolve_workflow_inputs
@@ -15,18 +18,6 @@ from .worker_pools import queue_for_pool
 from .models import JobEventLog, NodeRun, NodeRunAttempt, WorkflowRun
 
 
-ANSIBLE_NODE_TYPES = {
-    WorkflowNode.NodeType.COMMAND,
-    WorkflowNode.NodeType.SCRIPT,
-    WorkflowNode.NodeType.PLAYBOOK,
-    WorkflowNode.NodeType.MODULE,
-}
-CONTROL_NODE_TYPES = {
-    WorkflowNode.NodeType.START,
-    WorkflowNode.NodeType.END,
-    WorkflowNode.NodeType.PARALLEL_GATEWAY,
-    WorkflowNode.NodeType.PARALLEL_JOIN,
-}
 SUCCESS_NODE_STATUSES = {
     NodeRun.Status.SUCCESS,
     NodeRun.Status.SKIPPED,
@@ -61,7 +52,7 @@ def runtime_context(run, node_runs, include_secrets=True):
             if include_secrets
             else dict(run.input_vars or {})
         ),
-        "global": getattr(run.workflow_version, "global_vars", {}) or {},
+        "global": (run.graph_snapshot or {}).get("globalVars") or {},
         "system": {
             "workflow_run_id": run.id,
             "triggered_by_id": run.triggered_by_id,
@@ -82,45 +73,6 @@ def _graph_maps(graph):
     return nodes, edges, incoming, outgoing
 
 
-def _ensure_executable_graph(graph):
-    graph = {
-        "nodes": [dict(item) for item in (graph.get("nodes") or [])],
-        "edges": [dict(item) for item in (graph.get("edges") or [])],
-    }
-    if any(item.get("type") == WorkflowNode.NodeType.START for item in graph["nodes"]):
-        return graph
-    task_nodes = graph["nodes"]
-    graph["nodes"] = [
-        {"id": "__start__", "name": "开始", "type": WorkflowNode.NodeType.START},
-        *task_nodes,
-        {"id": "__end__", "name": "结束", "type": WorkflowNode.NodeType.END},
-    ]
-    if not graph["edges"]:
-        keys = ["__start__", *[str(item["id"]) for item in task_nodes], "__end__"]
-        graph["edges"] = [
-            {"id": f"__edge_{index}__", "source": source, "target": target}
-            for index, (source, target) in enumerate(zip(keys, keys[1:]), start=1)
-        ]
-        return graph
-    incoming_keys = {str(edge["target"]) for edge in graph["edges"]}
-    outgoing_keys = {str(edge["source"]) for edge in graph["edges"]}
-    roots = [
-        str(item["id"]) for item in task_nodes if str(item["id"]) not in incoming_keys
-    ]
-    leaves = [
-        str(item["id"]) for item in task_nodes if str(item["id"]) not in outgoing_keys
-    ]
-    graph["edges"].extend(
-        {"id": f"__start_edge_{index}__", "source": "__start__", "target": key}
-        for index, key in enumerate(roots, start=1)
-    )
-    graph["edges"].extend(
-        {"id": f"__end_edge_{index}__", "source": key, "target": "__end__"}
-        for index, key in enumerate(leaves, start=1)
-    )
-    return graph
-
-
 def _engine_state(run):
     context_vars = dict(run.context_vars or {})
     state = dict(context_vars.get("_engine") or {})
@@ -129,19 +81,48 @@ def _engine_state(run):
     return context_vars, state
 
 
-def _activate_edges(state, edge_items):
+def _activate_edges(run, node_runs, state, edge_items):
+    resolved = set(state.get("resolved_edges") or [])
+    if all(str(edge["id"]) in resolved for edge in edge_items):
+        return True
+    try:
+        context = runtime_context(run, node_runs)
+        selected = [
+            edge
+            for edge in edge_items
+            if not edge.get("isDefault")
+            and (
+                not edge.get("condition")
+                or expression_is_true(edge["condition"], context)
+            )
+        ]
+    except InvalidCondition:
+        run.status = WorkflowRun.Status.FAILED
+        run.failure_reason = "Invalid workflow branch condition"
+        run.finished_at = timezone.now()
+        run.save(
+            update_fields=["status", "failure_reason", "finished_at", "updated_at"]
+        )
+        return False
+    if not selected:
+        selected = [edge for edge in edge_items if edge.get("isDefault")]
     active = set(state.get("active_edges") or [])
-    active.update(str(item["id"]) for item in edge_items)
+    active.update(str(item["id"]) for item in selected)
+    resolved.update(str(item["id"]) for item in edge_items)
     state["active_edges"] = sorted(active)
+    state["resolved_edges"] = sorted(resolved)
+    return True
 
 
-def _node_is_ready(node_key, node_type, incoming, active_edges, node_runs):
+def _node_is_ready(
+    node_key, node_type, incoming, active_edges, node_runs, resolved_edges
+):
     incoming_edges = incoming.get(node_key) or []
     selected = [edge for edge in incoming_edges if str(edge["id"]) in active_edges]
     if not selected:
         return False
-    if node_type == WorkflowNode.NodeType.PARALLEL_JOIN:
-        if len(selected) != len(incoming_edges):
+    if node_type == NodeType.PARALLEL_JOIN:
+        if any(str(edge["id"]) not in resolved_edges for edge in incoming_edges):
             return False
         return all(
             node_runs[str(edge["source"])].status in SUCCESS_NODE_STATUSES
@@ -181,10 +162,12 @@ def _mark_control_success(run, node_run):
 
 
 def _process_failed_node(run, node_run):
-    node = node_run.workflow_node
-    max_attempts = int((node.retry_policy or {}).get("maxAttempts") or 1)
+    node = next(
+        item for item in run.graph_snapshot["nodes"] if item["id"] == node_run.node_key
+    )
+    max_attempts = int((node.get("retryPolicy") or {}).get("maxAttempts") or 1)
     if (
-        node.failure_policy == WorkflowNode.FailurePolicy.RETRY
+        node.get("failurePolicy") == WorkflowNode.FailurePolicy.RETRY
         and node_run.attempt_count < max_attempts
     ):
         node_run.status = NodeRun.Status.PENDING
@@ -194,9 +177,8 @@ def _process_failed_node(run, node_run):
             update_fields=["status", "failure_reason", "finished_at", "updated_at"]
         )
         return "retry"
-    if (
-        node.failure_policy == WorkflowNode.FailurePolicy.IGNORE
-        or node.continue_on_error
+    if node.get("failurePolicy") == WorkflowNode.FailurePolicy.IGNORE or node.get(
+        "continueOnError", False
     ):
         node_run.status = NodeRun.Status.IGNORED
         node_run.save(update_fields=["status", "updated_at"])
@@ -248,14 +230,22 @@ def plan_dispatch(workflow_run_id):
         )
         return []
 
-    graph = _ensure_executable_graph(
-        run.graph_snapshot
-        or run.workflow_version.graph_snapshot
-        or serialize_graph(run.workflow_version)
-    )
-    run.graph_snapshot = graph
+    graph = run.graph_snapshot
+    errors = validate_graph(graph)
+    if errors:
+        run.status = WorkflowRun.Status.FAILED
+        run.failure_reason = "; ".join(errors)
+        run.finished_at = now
+        run.save(
+            update_fields=["status", "failure_reason", "finished_at", "updated_at"]
+        )
+        return []
     nodes, _, incoming, outgoing = _graph_maps(graph)
-    model_nodes = {node.node_key: node for node in run.workflow_version.nodes.all()}
+    model_nodes = (
+        {node.node_key: node for node in run.workflow_version.nodes.all()}
+        if run.workflow_version_id
+        else {}
+    )
     node_runs = {
         item.node_key: item
         for item in run.node_runs.select_related("workflow_node").all()
@@ -269,7 +259,7 @@ def plan_dispatch(workflow_run_id):
                 command_version=model_node.command_version if model_node else None,
                 node_key=node_key,
                 node_name=item.get("name") or node_key,
-                node_type=item.get("type") or WorkflowNode.NodeType.COMMAND,
+                node_type=item.get("type") or NodeType.COMMAND,
                 config_snapshot=item.get("config") or {},
                 input_vars=item.get("inputMapping") or {},
             )
@@ -278,9 +268,7 @@ def plan_dispatch(workflow_run_id):
     active_edges = set(engine_state.get("active_edges") or [])
     if not engine_state.get("started"):
         starts = [
-            key
-            for key, item in nodes.items()
-            if item.get("type") == WorkflowNode.NodeType.START
+            key for key, item in nodes.items() if item.get("type") == NodeType.START
         ]
         if len(starts) != 1:
             run.status = WorkflowRun.Status.FAILED
@@ -292,7 +280,8 @@ def plan_dispatch(workflow_run_id):
             return []
         start_run = node_runs[starts[0]]
         _mark_control_success(run, start_run)
-        _activate_edges(engine_state, outgoing[starts[0]])
+        if not _activate_edges(run, node_runs, engine_state, outgoing[starts[0]]):
+            return []
         engine_state["started"] = True
         run.started_at = run.started_at or now
         run.workflow_deadline_at = run.workflow_deadline_at or now + timedelta(
@@ -329,12 +318,19 @@ def plan_dispatch(workflow_run_id):
                 )
                 return []
             if result == "ignore":
-                _activate_edges(engine_state, outgoing[node_run.node_key])
+                if not _activate_edges(
+                    run, node_runs, engine_state, outgoing[node_run.node_key]
+                ):
+                    return []
         elif (
             node_run.status in SUCCESS_NODE_STATUSES
             and node_run.node_type not in CONTROL_NODE_TYPES
+            and node_run.status != NodeRun.Status.SKIPPED
         ):
-            _activate_edges(engine_state, outgoing[node_run.node_key])
+            if not _activate_edges(
+                run, node_runs, engine_state, outgoing[node_run.node_key]
+            ):
+                return []
 
     changed = True
     while changed:
@@ -345,14 +341,35 @@ def plan_dispatch(workflow_run_id):
             if node_run.status != NodeRun.Status.PENDING:
                 continue
             node_type = item.get("type")
+            active_edges = set(engine_state.get("active_edges") or [])
+            inbound = incoming.get(node_key) or []
+            resolved = set(engine_state.get("resolved_edges") or [])
+            if (
+                inbound
+                and all(str(edge["id"]) in resolved for edge in inbound)
+                and not any(str(edge["id"]) in active_edges for edge in inbound)
+            ):
+                node_run.status = NodeRun.Status.SKIPPED
+                node_run.finished_at = now
+                node_run.save(update_fields=["status", "finished_at", "updated_at"])
+                resolved.update(str(edge["id"]) for edge in outgoing[node_key])
+                engine_state["resolved_edges"] = sorted(resolved)
+                changed = True
+                continue
             if node_type not in CONTROL_NODE_TYPES:
                 continue
             if not _node_is_ready(
-                node_key, node_type, incoming, active_edges, node_runs
+                node_key,
+                node_type,
+                incoming,
+                active_edges,
+                node_runs,
+                set(engine_state.get("resolved_edges") or []),
             ):
                 continue
             _mark_control_success(run, node_run)
-            _activate_edges(engine_state, outgoing[node_key])
+            if not _activate_edges(run, node_runs, engine_state, outgoing[node_key]):
+                return []
             changed = True
 
     active_edges = set(engine_state.get("active_edges") or [])
@@ -372,7 +389,14 @@ def plan_dispatch(workflow_run_id):
         node_type = item.get("type")
         if node_run.status != NodeRun.Status.PENDING or node_type in CONTROL_NODE_TYPES:
             continue
-        if not _node_is_ready(node_key, node_type, incoming, active_edges, node_runs):
+        if not _node_is_ready(
+            node_key,
+            node_type,
+            incoming,
+            active_edges,
+            node_runs,
+            set(engine_state.get("resolved_edges") or []),
+        ):
             continue
         if node_type in ANSIBLE_NODE_TYPES and available_ansible_slots <= 0:
             pool_capacity_blocked = True
@@ -403,7 +427,7 @@ def plan_dispatch(workflow_run_id):
             completed_ends = [
                 node_runs[key]
                 for key, item in nodes.items()
-                if item.get("type") == WorkflowNode.NodeType.END
+                if item.get("type") == NodeType.END
                 and node_runs[key].status == NodeRun.Status.SUCCESS
             ]
             if completed_ends:

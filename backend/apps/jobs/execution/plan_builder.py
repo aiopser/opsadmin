@@ -1,3 +1,4 @@
+from common.workflow.node_types import NodeType
 import json
 import os
 import re
@@ -327,7 +328,7 @@ def _node_command_spec(node):
         return node.command_version
     config = node.config or {}
     node_type = node.node_type
-    if node_type in {WorkflowNode.NodeType.COMMAND, WorkflowNode.NodeType.SCRIPT}:
+    if node_type in {NodeType.COMMAND, NodeType.SCRIPT}:
         language = config.get("language") or "linux_shell"
         command_type = {
             "shell": CommandVersion.CommandType.LINUX_SHELL,
@@ -340,13 +341,13 @@ def _node_command_spec(node):
             content=config.get("content") or "",
             default_vars={},
         )
-    if node_type == WorkflowNode.NodeType.PLAYBOOK:
+    if node_type == NodeType.PLAYBOOK:
         return SimpleNamespace(
             command_type=CommandVersion.CommandType.PLAYBOOK,
             content=config.get("content") or "",
             default_vars={},
         )
-    if node_type == WorkflowNode.NodeType.MODULE:
+    if node_type == NodeType.MODULE:
         return SimpleNamespace(
             command_type=CommandVersion.CommandType.ANSIBLE_MODULE,
             content=config.get("module") or "",
@@ -358,7 +359,7 @@ def _node_command_spec(node):
 def _node_playbook(run, node, command_spec, extra_vars):
     config = node.config or {}
     has_version = bool(getattr(node, "command_version", None))
-    if node.node_type == WorkflowNode.NodeType.PLAYBOOK:
+    if node.node_type == NodeType.PLAYBOOK:
         try:
             source = (
                 command_spec.content
@@ -379,7 +380,7 @@ def _node_playbook(run, node, command_spec, extra_vars):
             for play in normalized_plays:
                 play["become"] = True
         return normalized_plays
-    if node.node_type == WorkflowNode.NodeType.MODULE:
+    if node.node_type == NodeType.MODULE:
         module = str(
             command_spec.content
             if has_version
