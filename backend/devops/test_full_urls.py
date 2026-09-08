@@ -1,12 +1,2 @@
-"""Exercise the existing business routes without changing deployment settings."""
-
-from django.urls import include, path
-
-from .urls import urlpatterns as base_urlpatterns
-
-urlpatterns = [
-    *base_urlpatterns,
-    path("api/", include("apps.cmdb.urls")),
-    path("api/", include("apps.automation.urls")),
-    path("api/", include("apps.jobs.urls")),
-]
+"""Test the same routes as deployment with isolated settings."""
+from .urls import urlpatterns  # noqa: F401

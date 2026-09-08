@@ -260,7 +260,6 @@ class JobHistoryViewSetTests(SimpleTestCase):
     def test_execution_history_viewsets_are_read_only(self):
         from apps.jobs.views import (
             HostRunResultViewSet,
-            JobEventLogViewSet,
             NodeRunViewSet,
         )
         from apps.audit_center.views import AuditEventViewSet
@@ -272,7 +271,6 @@ class JobHistoryViewSetTests(SimpleTestCase):
         expected_methods = ["get", "head", "options"]
         for viewset in (
             HostRunResultViewSet,
-            JobEventLogViewSet,
             AuditEventViewSet,
         ):
             self.assertEqual(viewset.http_method_names, expected_methods)

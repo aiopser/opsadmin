@@ -157,6 +157,10 @@ class WorkflowRunViewSet(StandardModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset().filter(run_domain=self.run_domain)
+        if not self.request.user.is_active or not self.request.user.job_status:
+            return queryset.none()
+        if not self.request.user.is_superuser:
+            queryset = queryset.filter(triggered_by=self.request.user)
         created_after = self.request.query_params.get("created_after")
         created_before = self.request.query_params.get("created_before")
         if created_after:
@@ -265,15 +269,67 @@ class WorkflowRunViewSet(StandardModelViewSet):
     @action(methods=["GET"], detail=True, url_path="events")
     def events(self, request, pk=None):
         run = self.get_object()
-        event_logs = run.event_logs.all()
-        after_id = request.query_params.get("after_id")
-        if after_id:
-            try:
-                event_logs = event_logs.filter(id__gt=int(after_id))
-            except (TypeError, ValueError):
-                return api_error_response(message="after_id must be an integer")
-        serializer = JobEventLogSerializer(event_logs, many=True)
-        return api_ok_response(serializer.data)
+        params = request.query_params
+        if "after_id" in params:
+            return api_error_response(
+                message="after_id is no longer supported; use cursor"
+            )
+        cursor_text, limit_text = params.get("cursor", "0"), params.get("limit", "200")
+        if (
+            not cursor_text.isascii()
+            or not cursor_text.isdecimal()
+            or not limit_text.isascii()
+            or not limit_text.isdecimal()
+        ):
+            return api_error_response(
+                message="cursor and limit must be non-negative integers"
+            )
+        if len(cursor_text) > 20 or len(limit_text) > 4:
+            return api_error_response(message="Event pagination value is out of range")
+        cursor, limit = int(cursor_text), int(limit_text)
+        if not 1 <= limit <= 1000:
+            return api_error_response(message="limit must be between 1 and 1000")
+        rows = list(
+            run.event_logs.filter(
+                sequence__gt=cursor, sequence__lte=run.event_sequence
+            ).order_by("sequence")[: limit + 1]
+        )
+        events = rows[:limit]
+        return api_ok_response(
+            {
+                "events": JobEventLogSerializer(events, many=True).data,
+                "next_cursor": events[-1].sequence if events else cursor,
+                "has_more": len(rows) > limit,
+                "terminal": run.status
+                in {
+                    WorkflowRun.Status.SUCCESS,
+                    WorkflowRun.Status.FAILED,
+                    WorkflowRun.Status.TIMEOUT,
+                    WorkflowRun.Status.CANCELED,
+                },
+                "snapshot_version": run.event_sequence,
+            }
+        )
+
+    @action(methods=["POST"], detail=True, url_path="realtime-ticket")
+    def realtime_ticket(self, request, pk=None):
+        from .realtime.access import can_view_run
+        from .realtime.tickets import issue_ticket, TTL_SECONDS
+        from rest_framework.exceptions import PermissionDenied
+        from common.api.responses import SERVER_ERROR
+
+        run = self.get_object()
+        if not can_view_run(request.user, run):
+            raise PermissionDenied("Run events access denied")
+        try:
+            ticket = issue_ticket(user_id=request.user.id, run_id=run.id)
+        except Exception:
+            return api_error_response(
+                message="Realtime temporarily unavailable",
+                code=SERVER_ERROR,
+                http_status=503,
+            )
+        return api_ok_response({"ticket": ticket, "expires_in": TTL_SECONDS})
 
     def create(self, request, *args, **kwargs):
         serializer = WorkflowRunCreateSerializer(
@@ -596,6 +652,20 @@ class ScheduledJobViewSet(StandardModelViewSet):
 class ReadOnlyHistoryViewSet(StandardModelViewSet):
     http_method_names = ["get", "head", "options"]
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        if not user.is_active or not user.job_status:
+            return queryset.none()
+        if user.is_superuser:
+            return queryset
+        owner = (
+            "workflow_run__triggered_by"
+            if queryset.model is NodeRun
+            else "node_run__workflow_run__triggered_by"
+        )
+        return queryset.filter(**{owner: user})
+
 
 class NodeRunViewSet(ReadOnlyHistoryViewSet):
     http_method_names = ["get", "post", "head", "options"]
@@ -652,14 +722,6 @@ class HostRunResultViewSet(ReadOnlyHistoryViewSet):
     ordering_fields = ("id", "hostname", "status", "started_at", "finished_at")
     filterset_fields = ("node_run", "status", "host_id")
     search_fields = ("hostname", "ip", "stdout", "stderr")
-
-
-class JobEventLogViewSet(ReadOnlyHistoryViewSet):
-    queryset = JobEventLog.objects.select_related("workflow_run", "node_run").all()
-    serializer_class = JobEventLogSerializer
-    ordering_fields = ("id", "created_at")
-    filterset_fields = ("workflow_run", "node_run", "event_type", "host_id")
-    search_fields = ("event_type", "message")
 
 
 class SecurityRuleViewSet(StandardModelViewSet):

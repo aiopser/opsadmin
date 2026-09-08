@@ -52,10 +52,10 @@ INSTALLED_APPS = [
     "apps.user.apps.UserConfig",
     "apps.permission.apps.PermissionConfig",
     "apps.audit_center.apps.AuditCenterConfig",
-    # "apps.cmdb.apps.CMDBConfig",
-    # "apps.automation.apps.AutomationConfig",
-    # "apps.jobs.apps.JobsConfig",
-    # "apps.ops.apps.OpsConfig",
+    "apps.cmdb.apps.CMDBConfig",
+    "apps.automation.apps.AutomationConfig",
+    "apps.jobs.apps.JobsConfig",
+    "apps.ops.apps.OpsConfig",
     # Third-party apps
     "rest_framework",
     "drf_spectacular",
@@ -326,3 +326,21 @@ SPECTACULAR_SETTINGS = {
     #     {"name": "权限管理", "description": "角色、权限点、菜单与 RBAC 接口"},
     # ],
 }
+
+# Dedicated optional realtime transport; no deployment connection is inferred.
+JOBS_REALTIME_REDIS_URL = os.environ.get("DEVOPS_REALTIME_REDIS_URL", "")
+JOBS_REALTIME_ALLOWED_ORIGINS = [
+    value.strip()
+    for value in os.environ.get("DEVOPS_REALTIME_ALLOWED_ORIGINS", "").split(",")
+    if value.strip()
+]
+CHANNEL_LAYERS = (
+    {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {"hosts": [JOBS_REALTIME_REDIS_URL]},
+        }
+    }
+    if JOBS_REALTIME_REDIS_URL
+    else {}
+)

@@ -787,6 +787,12 @@ SYSTEM_PERMISSIONS = [
                 "method": "GET",
             },
             {
+                "code": "realtime_ticket",
+                "name": "订阅执行通知",
+                "path": "/api/v1/tasks/runs/:id/realtime-ticket",
+                "method": "POST",
+            },
+            {
                 "code": "log",
                 "name": "执行实时日志",
                 "path": "/api/v1/tasks/runs/:id/log",
@@ -846,6 +852,12 @@ SYSTEM_PERMISSIONS = [
                 "name": "作业事件日志",
                 "path": "/api/v1/ops/runs/:id/events",
                 "method": "GET",
+            },
+            {
+                "code": "realtime_ticket",
+                "name": "订阅执行通知",
+                "path": "/api/v1/ops/runs/:id/realtime-ticket",
+                "method": "POST",
             },
             {
                 "code": "log",
@@ -1036,7 +1048,13 @@ SYSTEM_PERMISSIONS = [
     *_read_permissions("jobs.host_result", "主机执行结果", "/api/v1/jobs/host-results"),
     *_read_permissions("jobs.event", "执行事件", "/api/v1/jobs/events"),
     *_read_permissions("audit.event", "平台审计", "/api/v1/audit/events"),
-    {"code": "audit.event.export", "name": "导出审计事件", "type": Permission.PermissionType.API, "path": "/api/v1/audit/events/export", "method": "GET"},
+    {
+        "code": "audit.event.export",
+        "name": "导出审计事件",
+        "type": Permission.PermissionType.API,
+        "path": "/api/v1/audit/events/export",
+        "method": "GET",
+    },
     *_rest_permissions(
         "jobs.scheduled_job",
         "定时任务",

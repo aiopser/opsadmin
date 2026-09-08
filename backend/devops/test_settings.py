@@ -47,3 +47,6 @@ CHANNEL_LAYERS = {
         "BACKEND": "channels.layers.InMemoryChannelLayer",
     }
 }
+
+JOBS_REALTIME_REDIS_URL = ""
+JOBS_REALTIME_ALLOWED_ORIGINS = ["http://localhost:9527"]

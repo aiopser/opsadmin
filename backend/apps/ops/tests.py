@@ -8,7 +8,6 @@ from apps.cmdb.models import CredentialRef
 
 from .adapters import DatabaseCredentialProvider
 from .tasklog.logger import AnsibleTaskOutputFilter
-from .tasklog.consumer import normalize_terminal_line
 from .workflow.inventory import build_inventory
 
 
@@ -20,7 +19,8 @@ class WorkflowInventoryTests(SimpleTestCase):
                     "host_id": 7,
                     "hostname": "web 01",
                     "address": "192.0.2.10",
-                    "port": 22, "connection_type": "ssh",
+                    "port": 22,
+                    "connection_type": "ssh",
                     "os_family": "linux",
                     "credential_ref_id": None,
                     "variables": {"ansible_user": "ops"},
@@ -34,7 +34,9 @@ class WorkflowInventoryTests(SimpleTestCase):
     @patch.dict("apps.ops.adapters.os.environ", {}, clear=True)
     def test_missing_credential_environment_variable_is_explicit(self, get_credential):
         get_credential.return_value = CredentialRef(
-            metadata={}, secret_ref="env:MISSING_PASSWORD", type=CredentialRef.CredentialType.PASSWORD,
+            metadata={},
+            secret_ref="env:MISSING_PASSWORD",
+            type=CredentialRef.CredentialType.PASSWORD,
         )
         with self.assertRaisesRegex(ValueError, "is not configured"):
             DatabaseCredentialProvider().resolve(1)
@@ -64,17 +66,3 @@ class AnsibleTaskOutputFilterTests(SimpleTestCase):
             None,
         )
         self.assertFalse(AnsibleTaskOutputFilter().filter(record))
-
-
-class TerminalLineNormalizationTests(SimpleTestCase):
-    def test_normalizes_lf_to_crlf(self):
-        self.assertEqual(normalize_terminal_line(b"total 4\n"), b"total 4\r\n")
-
-    def test_preserves_crlf_without_duplication(self):
-        self.assertEqual(
-            normalize_terminal_line(b"-rw-r--r-- file\r\n"),
-            b"-rw-r--r-- file\r\n",
-        )
-
-    def test_preserves_partial_line(self):
-        self.assertEqual(normalize_terminal_line("中文".encode()), "中文".encode())

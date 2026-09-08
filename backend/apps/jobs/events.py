@@ -347,4 +347,7 @@ def _append_once(run_id, node_run_id, attempt_id, event_key, event):
                 run_id=run.id, sequence=log.sequence, attempt_id=attempt_id, event=safe
             )
         )
+    from .realtime.publisher import publish_events_available
+
+    transaction.on_commit(lambda: publish_events_available(run.id, log.sequence))
     return log

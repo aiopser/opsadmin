@@ -10,7 +10,12 @@ from drf_spectacular.views import (
 )
 from rest_framework.permissions import AllowAny
 
-from common.api.log_views import LogBatchDeleteApiView, LogListApiView, VisitOverviewApiView, VisitTrendApiView
+from common.api.log_views import (
+    LogBatchDeleteApiView,
+    LogListApiView,
+    VisitOverviewApiView,
+    VisitTrendApiView,
+)
 from common.api.file_views import FileUploadApiView
 
 
@@ -41,9 +46,9 @@ urlpatterns = [
     # path("api/v1/files", FileUploadApiView.as_view()),
     path("api/", include("apps.user.urls")),
     path("api/", include("apps.permission.urls")),
-    # path("api/", include("apps.cmdb.urls")),
-    # path("api/", include("apps.automation.urls")),
-    # path("api/", include("apps.jobs.urls")),
+    path("api/", include("apps.cmdb.urls")),
+    path("api/", include("apps.automation.urls")),
+    path("api/", include("apps.jobs.urls")),
     path("api/", include("apps.audit_center.urls")),
 ]
 

@@ -81,3 +81,13 @@ WorkerPool/serializer/view/admin 仅归 jobs，表 jobs_worker_pool，唯一 API
 专项事件 9 个可执行用例通过，MySQL 并发用例明确 skipped；最终全量 288 passed / 11 原基线 failed / 4 明确 skipped / 15 subtests passed（95.23 秒）。4 skipped 为真实 Runner 3 项和 MySQL 并发 1 项。两项 automation 原种子干扰失败随新空库基线消除。SQLite 测试新库建库、迁移差异检查通过；Black 使用项目可写缓存完成格式化，diff --check 通过。
 
 未完成：MySQL 空库和并发真实验收、外部集成；T10 实时通知尚未接入，T11 stdout 归档尚未实现。没有连接或清空已有数据库。
+
+## P4 / T10 增量读取与实时通知
+
+唯一 events 接口改为 cursor/limit/sequence 协议，保留现有 envelope；普通用户运行和节点/主机历史按 owner 限制，超管保留 RBAC；新增 realtime-ticket 子资源及权限种子。realtime 模块实现用户/run 绑定、60 秒 Redis Lua 单次消费票据、Origin 校验、唯一 WS 路径、跨 run 分组、订阅后二次权限检查、提交后 best-effort 通知。默认和测试使用相同业务 app/路由，测试独立覆盖所有外部服务配置；未启动部署服务或连接外部资产。
+
+删除：after_id 读取、全局 jobs/events API/ViewSet、旧文件轮询 WS consumer/routing 和 query JWT 认证代码；其三项终端行转换测试删除，替换为通知握手/隔离与 REST 补拉契约。剩余 tasklog 信号/文件捕获链留 T11 删除。
+
+实际专项 REST 9 passed、实时 10 passed；全量 304 passed / 11 原基线 failed / 4 明确 skipped / 15 subtests passed（62.82 秒）；Black 和 diff --check 通过。配置与协议见 realtime-events.md。
+
+未完成：真实 Redis 原子消费、真实多实例 Channel Layer、浏览器接入（T14）；T07/MySQL 环境缺口不变。未将 fake Redis 或内存 Channel Layer 宣称为真实集成通过。

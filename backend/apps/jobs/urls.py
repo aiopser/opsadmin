@@ -7,7 +7,6 @@ from .views import (
     EngineSettingsView,
     GatewayViewSet,
     HostRunResultViewSet,
-    JobEventLogViewSet,
     ModuleRunViewSet,
     NodeRunViewSet,
     NotifySettingsView,
@@ -24,7 +23,9 @@ from .views import (
 )
 
 router = SimpleRouter(trailing_slash=False)
-router.register(r"v1/jobs/worker-pools", WorkerPoolViewSet, basename="jobs-worker-pools")
+router.register(
+    r"v1/jobs/worker-pools", WorkerPoolViewSet, basename="jobs-worker-pools"
+)
 router.register(
     r"v1/tasks/runs",
     WorkflowRunViewSet,
@@ -49,7 +50,6 @@ router.register(
     HostRunResultViewSet,
     basename="jobs-host-results",
 )
-router.register(r"v1/jobs/events", JobEventLogViewSet, basename="jobs-events")
 router.register(
     r"v1/jobs/security-rules",
     SecurityRuleViewSet,
