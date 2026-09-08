@@ -24,12 +24,14 @@ def _inventory_value(value):
 
 def _host_line(host, credential_provider):
     hostname = host.get("inventory_hostname") or inventory_hostname(host)
-    ip = host.get("ip") or host.get("primary_ip")
-    port = host.get("connection_port")
+    ip = host["address"]
+    port = host["port"]
     parts = [hostname, f"ansible_host={ip}"]
     if port:
         parts.append(f"ansible_port={port}")
-    variables = dict(host.get("ansible_connection_vars") or {})
+    variables = dict(host.get("variables") or {})
+    variables.pop("gateway_ref_id", None)
+    variables["ansible_connection"] = host["connection_type"]
     credential_ref_id = host.get("credential_ref_id")
     if credential_ref_id:
         variables.update(credential_provider.resolve(credential_ref_id))
@@ -44,7 +46,7 @@ def build_inventory(host_snapshots, group_vars=None):
     linux_hosts = []
     windows_hosts = []
     for host in host_snapshots:
-        os_family = str(host.get("os_family", "")).lower()
+        os_family = "windows" if host["connection_type"] == "winrm" else "linux"
         if os_family == "windows":
             windows_hosts.append(host)
         else:

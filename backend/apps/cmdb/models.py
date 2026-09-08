@@ -129,6 +129,7 @@ class WorkerPool(StandardModelMixin):
 
 
 class CredentialRef(StandardModelMixin):
+    is_active = models.BooleanField(default=True)
     class CredentialType(models.TextChoices):
         SSH_KEY = "ssh_key", "SSH Key"
         PASSWORD = "password", "Password"

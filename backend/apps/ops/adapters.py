@@ -42,6 +42,8 @@ class DatabaseCredentialProvider(CredentialProvider):
 
     def resolve(self, credential_id: int) -> Mapping[str, Any]:
         credential = CredentialRef.objects.get(id=credential_id)
+        if not credential.is_active:
+            raise ValueError("Credential is disabled")
         variables = dict((credential.metadata or {}).get("ansible_vars") or {})
 
         # Inject username and connection params from credential

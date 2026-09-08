@@ -434,7 +434,7 @@ class GatewayExecutionTests(OpsExtensionApiTests):
         )
         self.assertEqual(response.status_code, 200, response.data)
         run = WorkflowRun.objects.latest("id")
-        self.assertEqual(run.target_snapshot[0]["default_gateway_id"], gateway.id)
+        self.assertEqual(run.target_snapshot[0]["variables"]["gateway_ref_id"], gateway.id)
 
     def test_quick_command_run_persists_host_execution_options(self):
         response = self._request(
@@ -630,12 +630,12 @@ class GatewayExecutionTests(OpsExtensionApiTests):
                 {
                     "hostname": "china",
                     "connection_type": "ssh",
-                    "default_gateway_id": first.id,
+                    "variables": {"gateway_ref_id": first.id},
                 },
                 {
                     "hostname": "sea",
                     "connection_type": "ssh",
-                    "default_gateway_id": second.id,
+                    "variables": {"gateway_ref_id": second.id},
                 },
                 {"hostname": "local", "connection_type": "ssh"},
             ]
@@ -643,12 +643,12 @@ class GatewayExecutionTests(OpsExtensionApiTests):
         self.assertEqual(group_vars, {})
         self.assertEqual(private_dir, "")
         self.assertIn(
-            "10.0.0.1", hosts[0]["ansible_connection_vars"]["ansible_ssh_common_args"]
+            "10.0.0.1", hosts[0]["variables"]["ansible_ssh_common_args"]
         )
         self.assertIn(
-            "10.0.1.1", hosts[1]["ansible_connection_vars"]["ansible_ssh_common_args"]
+            "10.0.1.1", hosts[1]["variables"]["ansible_ssh_common_args"]
         )
-        self.assertNotIn("ansible_connection_vars", hosts[2])
+        self.assertNotIn("ansible_ssh_common_args", hosts[2].get("variables", {}))
 
     def test_run_gateway_overrides_host_default_gateway(self):
         host_gateway = self._create_gateway(address="10.0.0.1:22")
@@ -658,12 +658,12 @@ class GatewayExecutionTests(OpsExtensionApiTests):
                 {
                     "hostname": "web",
                     "connection_type": "ssh",
-                    "default_gateway_id": host_gateway.id,
+                    "variables": {"gateway_ref_id": host_gateway.id},
                 }
             ],
             {"gateway_id": override_gateway.id},
         )
-        args = hosts[0]["ansible_connection_vars"]["ansible_ssh_common_args"]
+        args = hosts[0]["variables"]["ansible_ssh_common_args"]
         self.assertIn("10.0.9.1", args)
         self.assertNotIn("10.0.0.1", args)
 
@@ -674,14 +674,14 @@ class GatewayExecutionTests(OpsExtensionApiTests):
                 {
                     "hostname": "web",
                     "connection_type": "ssh",
-                    "default_gateway_id": host_gateway.id,
+                    "variables": {"gateway_ref_id": host_gateway.id},
                 }
             ],
             {"bypass_host_gateway": True},
         )
         self.assertEqual(group_vars, {})
         self.assertEqual(private_dir, "")
-        self.assertNotIn("ansible_connection_vars", hosts[0])
+        self.assertNotIn("ansible_ssh_common_args", hosts[0].get("variables", {}))
 
     def test_prepare_multiple_key_gateways_uses_one_runner_directory(self):
         first = self._create_gateway(auth_type=Gateway.AuthType.KEY)
@@ -693,12 +693,12 @@ class GatewayExecutionTests(OpsExtensionApiTests):
                 {
                     "hostname": "one",
                     "connection_type": "ssh",
-                    "default_gateway_id": first.id,
+                    "variables": {"gateway_ref_id": first.id},
                 },
                 {
                     "hostname": "two",
                     "connection_type": "ssh",
-                    "default_gateway_id": second.id,
+                    "variables": {"gateway_ref_id": second.id},
                 },
             ]
         )
@@ -711,11 +711,11 @@ class GatewayExecutionTests(OpsExtensionApiTests):
             )
             self.assertIn(
                 private_dir,
-                hosts[0]["ansible_connection_vars"]["ansible_ssh_common_args"],
+                hosts[0]["variables"]["ansible_ssh_common_args"],
             )
             self.assertIn(
                 private_dir,
-                hosts[1]["ansible_connection_vars"]["ansible_ssh_common_args"],
+                hosts[1]["variables"]["ansible_ssh_common_args"],
             )
         finally:
             shutil.rmtree(private_dir, ignore_errors=True)

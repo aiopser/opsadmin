@@ -16,6 +16,7 @@ from apps.automation.models import CommandAtom, CommandVersion, WorkflowNode
 from apps.automation.workflow_graph import serialize_graph
 from apps.cmdb.crypto import decrypt_secret
 from apps.cmdb.models import AssetHost
+from apps.cmdb.targets import snapshot_targets
 from apps.ops.workflow.ansible_service import (
     AnsibleRunnerService,
     AnsibleRunnerUnavailable,
@@ -216,9 +217,9 @@ def prepare_host_gateway_execution(host_snapshots, input_vars=None):
         return snapshots, {}, ""
     override_gateway_id = (input_vars or {}).get("gateway_id")
     gateway_ids = {
-        override_gateway_id or host.get("default_gateway_id")
+        override_gateway_id or (host.get("variables") or {}).get("gateway_ref_id")
         for host in snapshots
-        if override_gateway_id or host.get("default_gateway_id")
+        if override_gateway_id or (host.get("variables") or {}).get("gateway_ref_id")
     }
     if not gateway_ids:
         return snapshots, {}, ""
@@ -248,15 +249,15 @@ def prepare_host_gateway_execution(host_snapshots, input_vars=None):
 
     prepared_hosts = []
     for host in snapshots:
-        gateway_id = override_gateway_id or host.get("default_gateway_id")
+        gateway_id = override_gateway_id or (host.get("variables") or {}).get("gateway_ref_id")
         if not gateway_id:
             prepared_hosts.append(host)
             continue
         if str(host.get("connection_type") or "ssh").lower() != "ssh":
             raise InvalidGateway("Gateway proxy is only supported for SSH hosts")
-        variables = dict(host.get("ansible_connection_vars") or {})
+        variables = dict(host.get("variables") or {})
         variables.update(proxy_vars[gateway_id])
-        host["ansible_connection_vars"] = variables
+        host["variables"] = variables
         prepared_hosts.append(host)
     return prepared_hosts, {}, private_data_dir
 
@@ -316,36 +317,6 @@ def get_execution_timeout_seconds():
         return 300
 
 
-def build_host_snapshot(host):
-    labels = [
-        str(binding.tag)
-        for binding in getattr(host, "tag_bindings", []).all()
-        if binding.tag
-    ]
-    return {
-        "host_id": host.id,
-        "asset_type": host.asset_type,
-        "hostname": host.hostname,
-        "inventory_hostname": inventory_hostname(
-            {"host_id": host.id, "hostname": host.hostname}
-        ),
-        "ip": host.primary_ip,
-        "os_family": host.os_family,
-        "connection_type": host.connection_type,
-        "connection_port": host.connection_port,
-        "ansible_connection_vars": host.ansible_connection_vars,
-        "credential_ref_id": host.credential_ref_id,
-        "default_gateway_id": host.default_gateway_id,
-        "labels": labels,
-        "image_name": host.image_name,
-        "cpu_cores": host.cpu_cores,
-        "memory_mb": host.memory_mb,
-        "system_disk_gb": host.system_disk_gb,
-        "data_disk_gb": host.data_disk_gb,
-        "metadata": host.metadata,
-    }
-
-
 @transaction.atomic
 def create_workflow_run(
     workflow_version,
@@ -359,7 +330,7 @@ def create_workflow_run(
     timeout_seconds=None,
     queue_timeout_seconds=None,
 ):
-    target_snapshot = [build_host_snapshot(host) for host in target_hosts]
+    target_snapshot = snapshot_targets(actor=triggered_by, targets=target_hosts)
     safe_input_vars, secret_input_vars_encrypted = protect_workflow_inputs(
         workflow_version,
         input_vars,
@@ -412,20 +383,7 @@ def create_workflow_run_from_host_ids(
     timeout_seconds=None,
     queue_timeout_seconds=None,
 ):
-    requested_host_ids = set(host_ids)
-    hosts = list(
-        AssetHost.objects.filter(
-            id__in=requested_host_ids,
-            status=AssetHost.HostStatus.ACTIVE,
-        )
-        .select_for_update()
-        .select_related("credential_ref", "default_gateway")
-        .prefetch_related(
-            "tag_bindings__tag",
-        )
-    )
-    if {host.id for host in hosts} != requested_host_ids:
-        raise InvalidTargetHosts("One or more target hosts are missing or inactive")
+    hosts = [{"host_id": host_id} for host_id in host_ids]
     return create_workflow_run(
         workflow_version=workflow_version,
         target_hosts=hosts,
@@ -636,7 +594,7 @@ def _mark_workflow_work_canceled(run):
                 defaults={
                     "host_id": host_id,
                     "hostname": hostname,
-                    "ip": target.get("ip") or "0.0.0.0",
+                    "ip": target.get("address") or "0.0.0.0",
                     "status": HostRunResult.Status.CANCELED,
                     "raw_event_data": {
                         "event": "workflow_canceled",
@@ -662,7 +620,7 @@ def _materialize_failed_target_results(node_run, targets, error, rc):
             defaults={
                 "host_id": host_id,
                 "hostname": hostname,
-                "ip": target.get("ip") or "0.0.0.0",
+                "ip": target.get("address") or "0.0.0.0",
                 "status": HostRunResult.Status.FAILED,
                 "stderr": error,
                 "raw_event_data": {

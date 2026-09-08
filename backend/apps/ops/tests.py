@@ -21,11 +21,11 @@ class WorkflowInventoryTests(SimpleTestCase):
                 {
                     "host_id": 7,
                     "hostname": "web 01",
-                    "ip": "192.0.2.10",
-                    "connection_port": 22,
+                    "address": "192.0.2.10",
+                    "port": 22, "connection_type": "ssh",
                     "os_family": "linux",
                     "credential_ref_id": None,
-                    "ansible_connection_vars": {"ansible_user": "ops"},
+                    "variables": {"ansible_user": "ops"},
                 }
             ]
         )

@@ -178,7 +178,7 @@ def _resolve_event_host(workflow_run, event):
     if host_id is None:
         host_id = target.get("host_id")
     hostname = target.get("hostname") or event["hostname"]
-    ip = event["ip"] or target.get("ip", "")
+    ip = event["ip"] or target.get("address", "")
     return host_id, hostname, ip
 
 

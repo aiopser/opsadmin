@@ -350,34 +350,6 @@ class QuickCommandRiskClassifierTests(SimpleTestCase):
         self.assertEqual(quick_command_risk_level(source), CommandAtom.RiskLevel.LOW)
 
 
-class WorkflowRunCreationLockContractTests(SimpleTestCase):
-    @patch("apps.jobs.services.create_workflow_run")
-    @patch("apps.jobs.services.AssetHost")
-    def test_selected_active_hosts_are_locked_before_snapshot_creation(
-        self, asset_host, create_run
-    ):
-        from apps.jobs.services import create_workflow_run_from_host_ids
-
-        host = SimpleNamespace(id=7)
-        queryset = asset_host.objects.filter.return_value
-        queryset.select_for_update.return_value.select_related.return_value.prefetch_related.return_value = [
-            host
-        ]
-        asset_host.HostStatus.ACTIVE = "active"
-
-        create_workflow_run_from_host_ids.__wrapped__(
-            workflow_version=SimpleNamespace(),
-            host_ids=[7],
-            input_vars={},
-            worker_pool=SimpleNamespace(),
-            triggered_by=SimpleNamespace(),
-        )
-
-        asset_host.objects.filter.assert_called_once_with(id__in={7}, status="active")
-        queryset.select_for_update.assert_called_once_with()
-        create_run.assert_called_once()
-
-
 class RunnerEventSanitizationTests(SimpleTestCase):
     def test_preserves_redacted_native_runner_event_structure(self):
         safe_event = sanitize_runner_event(
@@ -779,6 +751,7 @@ class WorkflowRunServiceTests(TestCase):
         self.api_role = Role.objects.create(name="job_runner")
         self.user.role.add(self.api_role)
         self.api_role.permission.add(
+            Permission.objects.create(name="Use test asset", code="test.cmdb.host.detail", type="api", path="/api/v1/cmdb/hosts/:id", method="GET"),
             Permission.objects.create(
                 name="创建工作流执行",
                 code="test.jobs.workflow_run.create",
@@ -978,6 +951,7 @@ class WorkflowRunServiceTests(TestCase):
             format="json",
         )
         force_authenticate(request, user=self.user)
+        request.user = self.user
         return QuickCommandRunViewSet.as_view({"post": "create"})(request)
 
     def grant_high_risk_execution(self):
@@ -1039,6 +1013,7 @@ class WorkflowRunServiceTests(TestCase):
             format="json",
         )
         force_authenticate(request, user=self.user)
+        request.user = self.user
         before = timezone.now()
 
         response = ScheduledJobViewSet.as_view({"post": "create"})(request)
@@ -1166,6 +1141,7 @@ class WorkflowRunServiceTests(TestCase):
             format="json",
         )
         force_authenticate(request, user=self.user)
+        request.user = self.user
 
         response = WorkflowRunViewSet.as_view({"post": "create"})(request)
 
@@ -1177,6 +1153,7 @@ class WorkflowRunServiceTests(TestCase):
             "/api/v1/tasks/runs", {}, format="json"
         )
         force_authenticate(request, user=self.user)
+        request.user = self.user
         serializer = WorkflowRunCreateSerializer(
             data={
                 "workflowVersionId": self.workflow_version.id,
@@ -1202,6 +1179,7 @@ class WorkflowRunServiceTests(TestCase):
             "/api/v1/jobs/quick-commands/runs", {}, format="json"
         )
         force_authenticate(request, user=self.user)
+        request.user = self.user
         serializer = QuickCommandRunCreateSerializer(
             data={
                 "commandType": "linux_shell",
@@ -1279,6 +1257,7 @@ class WorkflowRunServiceTests(TestCase):
             f"/api/v1/automation/command-versions/{self.command_version.id}"
         )
         force_authenticate(request, user=self.user)
+        request.user = self.user
 
         response = CommandVersionViewSet.as_view({"get": "retrieve"})(
             request,
@@ -1580,7 +1559,7 @@ class WorkflowRunServiceTests(TestCase):
 
         self.assertEqual(run.status, WorkflowRun.Status.PENDING)
         self.assertEqual(run.target_snapshot[0]["hostname"], self.host.hostname)
-        self.assertEqual(run.target_snapshot[0]["ip"], self.host.primary_ip)
+        self.assertEqual(run.target_snapshot[0]["address"], self.host.primary_ip)
         self.assertEqual(run.worker_pool_id, self.worker_pool.id)
 
     @patch("apps.jobs.services.AnsibleRunnerService")
@@ -2003,6 +1982,7 @@ class WorkflowRunServiceTests(TestCase):
             format="json",
         )
         force_authenticate(request, user=self.user)
+        request.user = self.user
         response = WorkflowRunViewSet.as_view({"post": "create"})(request)
 
         self.assertEqual(response.status_code, 400)
@@ -2019,6 +1999,7 @@ class WorkflowRunServiceTests(TestCase):
             format="json",
         )
         force_authenticate(request, user=self.user)
+        request.user = self.user
         response = WorkflowRunViewSet.as_view({"post": "create"})(request)
 
         self.assertEqual(response.status_code, 200)
@@ -2059,6 +2040,7 @@ class WorkflowRunServiceTests(TestCase):
             format="json",
         )
         force_authenticate(request, user=self.user)
+        request.user = self.user
 
         response = WorkflowRunViewSet.as_view({"post": "create"})(request)
 
@@ -2086,6 +2068,7 @@ class WorkflowRunServiceTests(TestCase):
             format="json",
         )
         force_authenticate(request, user=self.user)
+        request.user = self.user
 
         response = WorkflowRunViewSet.as_view({"post": "validate_run"})(request)
 
@@ -2144,6 +2127,7 @@ class WorkflowRunServiceTests(TestCase):
             format="json",
         )
         force_authenticate(request, user=self.user)
+        request.user = self.user
         response = WorkflowRunViewSet.as_view({"post": "create"})(request)
 
         self.assertEqual(response.status_code, 400)
@@ -2166,6 +2150,7 @@ class WorkflowRunServiceTests(TestCase):
             f"/api/v1/tasks/runs/{run.id}/cancel"
         )
         force_authenticate(request, user=self.user)
+        request.user = self.user
         response = WorkflowRunViewSet.as_view({"post": "cancel"})(
             request, pk=str(run.id)
         )

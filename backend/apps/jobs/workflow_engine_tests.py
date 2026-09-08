@@ -70,6 +70,13 @@ class WorkflowGraphRuntimeTests(TestCase):
             connection_type=AssetHost.ConnectionType.SSH,
             connection_port=22,
         )
+        from apps.permission.models import Permission, Role
+        from apps.permission.services import sync_casbin_rules, CasbinEnforcerService
+        role = Role.objects.create(name="graph-assets")
+        role.permission.add(Permission.objects.create(name="Graph assets", code="test.graph.assets", type="api", path="/api/v1/cmdb/hosts/:id", method="GET"))
+        self.user.role.add(role)
+        sync_casbin_rules()
+        CasbinEnforcerService.reload()
         self.sequence = 0
 
     def create_graph_run(self, nodes, edges, input_vars=None):

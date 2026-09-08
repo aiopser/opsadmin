@@ -1,27 +1,21 @@
-from types import SimpleNamespace
-from unittest import TestCase
-from unittest.mock import patch
-
+import pytest
+from apps.automation.models import WorkflowTemplate, WorkflowVersion
+from apps.cmdb.models import AssetHost, WorkerPool
 from apps.jobs.services import create_workflow_run
 
 
-class WorkflowRunCreationGovernanceTests(TestCase):
-    @patch("apps.jobs.services.WorkflowRun.objects.create")
-    @patch("apps.jobs.services.build_host_snapshot", return_value={"host_id": 1})
-    @patch("apps.jobs.services.get_engine_settings", return_value={"timeout": 300})
-    def test_creation_explicitly_initializes_worker_governance_fields(
-        self, _settings, _snapshot, create
-    ):
-        create_workflow_run.__wrapped__(
-            workflow_version=SimpleNamespace(),
-            target_hosts=[SimpleNamespace()],
-            input_vars={},
-            worker_pool=SimpleNamespace(),
-            triggered_by=SimpleNamespace(),
-        )
-
-        fields = create.call_args.kwargs
-        self.assertEqual(fields["celery_task_id"], "")
-        self.assertEqual(fields["worker_name"], "")
-        self.assertEqual(fields["runner_workspace"], "")
-        self.assertEqual(fields["timeout_seconds"], 300)
+@pytest.mark.django_db
+def test_creation_initializes_governance_and_persists_snapshot(user):
+    user.is_superuser = True
+    user.save()
+    host = AssetHost.objects.create(hostname="governance", primary_ip="192.0.2.30", os_family="linux", connection_type="ssh")
+    pool = WorkerPool.objects.create(code="governance", name="Test", queue_name="test")
+    template = WorkflowTemplate.objects.create(code="governance", name="Test")
+    version = WorkflowVersion.objects.create(workflow=template, version=1, status="published", graph_snapshot={"nodes": [], "edges": []})
+    run = create_workflow_run(workflow_version=version, target_hosts=[host], input_vars={}, worker_pool=pool, triggered_by=user, timeout_seconds=300)
+    run.refresh_from_db()
+    assert run.celery_task_id == ""
+    assert run.worker_name == ""
+    assert run.runner_workspace == ""
+    assert run.timeout_seconds == 300
+    assert run.target_snapshot[0]["address"] == "192.0.2.30"

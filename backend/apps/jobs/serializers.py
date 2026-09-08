@@ -5,7 +5,7 @@ from rest_framework import serializers
 from apps.automation.models import CommandAtom, CommandVersion, WorkflowVersion
 from apps.cmdb.crypto import encrypt_secret
 from apps.cmdb.models import AssetHost, HostTagBinding, WorkerPool
-from apps.cmdb.services import resolve_group_host_ids
+from apps.cmdb.targets import resolve_targets
 from apps.ops.workflow.events import normalize_runner_event
 from common.api.serializers import StandardModelSerializer
 
@@ -221,8 +221,6 @@ class WorkflowRunCreateSerializer(serializers.Serializer):
         host_ids = set(attrs.get("hostIds") or [])
         group_ids = attrs.get("groupIds") or []
         tag_ids = attrs.get("tagIds") or []
-        if group_ids:
-            host_ids.update(resolve_group_host_ids(group_ids))
         if tag_ids:
             host_ids.update(
                 HostTagBinding.objects.filter(tag_id__in=tag_ids).values_list(
@@ -230,16 +228,11 @@ class WorkflowRunCreateSerializer(serializers.Serializer):
                     flat=True,
                 )
             )
-        if not host_ids:
-            raise serializers.ValidationError({"hostIds": "请至少选择一台主机、一个分组或一个标签"})
-
-        hosts = AssetHost.objects.filter(
-            id__in=host_ids,
-            status=AssetHost.HostStatus.ACTIVE,
+        targets = resolve_targets(
+            actor=getattr(self.context.get("request"), "user", None),
+            host_ids=host_ids, group_ids=group_ids,
         )
-        if hosts.count() != len(host_ids):
-            raise serializers.ValidationError({"hostIds": "存在无效或未启用的主机"})
-        attrs["hostIds"] = sorted(host_ids)
+        attrs["hostIds"] = [target["host_id"] for target in targets]
 
         worker_pool_id = attrs.get("workerPoolId")
         if worker_pool_id:
