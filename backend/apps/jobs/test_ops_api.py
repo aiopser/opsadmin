@@ -37,6 +37,15 @@ from .views import (
 
 
 class OpsExtensionApiTests(TestCase):
+    # T13 契约：所有可克隆运行必须携带发布冻结的合法图快照。
+    MINIMAL_GRAPH = {
+        "nodes": [
+            {"id": "start", "type": "start"},
+            {"id": "end", "type": "end"},
+        ],
+        "edges": [{"id": "start-end", "source": "start", "target": "end"}],
+    }
+
     def setUp(self):
         self.user = get_user_model().objects.create_superuser(
             username="ops-user",
@@ -530,6 +539,7 @@ class GatewayExecutionTests(OpsExtensionApiTests):
             trigger_type=WorkflowRun.TriggerType.MANUAL,
             status=WorkflowRun.Status.FAILED,
             target_snapshot=[{"host_id": self.host.id, "hostname": "web01"}],
+            graph_snapshot=self.MINIMAL_GRAPH,
             queue_timeout_seconds=60,
         )
         response = self._request(
@@ -541,7 +551,13 @@ class GatewayExecutionTests(OpsExtensionApiTests):
         retry_run = WorkflowRun.objects.latest("id")
         self.assertEqual(response.data["data"]["id"], retry_run.id)
         self.assertNotEqual(retry_run.id, run.id)
-        self.assertEqual(retry_run.target_snapshot, run.target_snapshot)
+        # T04/T13：克隆经 snapshot_targets 重新解析，目标主机不变且为完整非敏感快照
+        self.assertEqual(
+            [(t["host_id"], t["hostname"]) for t in retry_run.target_snapshot],
+            [(t["host_id"], t["hostname"]) for t in run.target_snapshot],
+        )
+        self.assertIn("address", retry_run.target_snapshot[0])
+        self.assertIn("connection_type", retry_run.target_snapshot[0])
 
     def test_workflow_run_rerun_clones_finished_run(self):
         """重跑：已结束的任务克隆原运行重新调度，未结束的拒绝。"""
@@ -550,6 +566,7 @@ class GatewayExecutionTests(OpsExtensionApiTests):
             trigger_type=WorkflowRun.TriggerType.MANUAL,
             status=WorkflowRun.Status.SUCCESS,
             target_snapshot=[{"host_id": self.host.id, "hostname": "web01"}],
+            graph_snapshot=self.MINIMAL_GRAPH,
             queue_timeout_seconds=60,
         )
         response = self._request(
@@ -561,7 +578,12 @@ class GatewayExecutionTests(OpsExtensionApiTests):
         rerun_run = WorkflowRun.objects.latest("id")
         self.assertEqual(response.data["data"]["id"], rerun_run.id)
         self.assertNotEqual(rerun_run.id, run.id)
-        self.assertEqual(rerun_run.target_snapshot, run.target_snapshot)
+        # T04/T13：克隆经 snapshot_targets 重新解析，目标主机不变且为完整非敏感快照
+        self.assertEqual(
+            [(t["host_id"], t["hostname"]) for t in rerun_run.target_snapshot],
+            [(t["host_id"], t["hostname"]) for t in run.target_snapshot],
+        )
+        self.assertIn("address", rerun_run.target_snapshot[0])
         self.assertEqual(rerun_run.trigger_type, WorkflowRun.TriggerType.MANUAL)
 
         running = WorkflowRun.objects.create(
@@ -714,11 +736,13 @@ class GatewayExecutionTests(OpsExtensionApiTests):
 
     def test_module_run_with_gateway_sets_input_vars(self):
         gateway = self._create_gateway()
+        atom = CommandAtom.objects.create(name="Gateway shell", code="gateway-shell", resource_kind="module", status="published")
+        version = CommandVersion.objects.create(command=atom, version=1, status="published", command_type="ansible_module", content="ansible.builtin.shell")
         response = self._request(
             "post",
             ModuleRunViewSet.as_view({"post": "create"}),
             {
-                "module": "shell",
+                "moduleVersionId": version.id,
                 "moduleArgs": "uptime",
                 "hostIds": [self.host.id],
                 "gatewayId": gateway.id,

@@ -81,6 +81,7 @@ from .settings_service import (
 from apps.jobs.application.runs import (
     InvalidTargetHosts,
     create_workflow_run_from_host_ids,
+    clone_workflow_run,
     scheduled_job_run_options,
 )
 from .models import (
@@ -445,7 +446,7 @@ class WorkflowRunViewSet(StandardModelViewSet):
         if run.status != WorkflowRun.Status.FAILED:
             return api_error_response(message="只有失败的执行任务可以重试")
 
-        retry_run = self._clone_run(run, request.user)
+        retry_run = clone_workflow_run(run, request.user)
         append_run_event(
             run_id=(retry_run).id,
             node_run_id=None,
@@ -486,7 +487,7 @@ class WorkflowRunViewSet(StandardModelViewSet):
         }:
             return api_error_response(message="未结束的执行任务不能重跑")
 
-        rerun_run = self._clone_run(run, request.user)
+        rerun_run = clone_workflow_run(run, request.user)
         append_run_event(
             run_id=(rerun_run).id,
             node_run_id=None,
@@ -514,28 +515,6 @@ class WorkflowRunViewSet(StandardModelViewSet):
         )
         transaction.on_commit(lambda: enqueue_workflow_run(rerun_run.id))
         return api_ok_response(self.get_serializer(rerun_run).data)
-
-    @staticmethod
-    def _clone_run(run, user):
-        """以原运行为模板克隆一个新的待调度运行（重试/重跑共用）。"""
-        now = timezone.now()
-        return WorkflowRun.objects.create(
-            workflow_version=run.workflow_version,
-            run_domain=run.run_domain,
-            execution_kind=run.execution_kind,
-            trigger_type=WorkflowRun.TriggerType.MANUAL,
-            triggered_by=user,
-            input_vars=run.input_vars,
-            secret_input_vars_encrypted=run.secret_input_vars_encrypted,
-            target_snapshot=run.target_snapshot,
-            context_vars={"inputs": run.input_vars or {}},
-            graph_snapshot=run.graph_snapshot,
-            worker_pool=run.worker_pool,
-            timeout_seconds=run.timeout_seconds,
-            queue_timeout_seconds=run.queue_timeout_seconds,
-            queue_deadline_at=now + timedelta(seconds=run.queue_timeout_seconds),
-        )
-
 
 class OpsWorkflowRunViewSet(WorkflowRunViewSet):
     """作业系统运行历史；与任务工作流共享执行引擎但不共享查询口径。"""

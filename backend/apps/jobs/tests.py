@@ -176,6 +176,7 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
         run = SimpleNamespace(
             node_runs=SimpleNamespace(all=lambda: []),
             graph_snapshot={},
+            execution_kind="workflow",
             workflow_version=None,
             id=1,
             triggered_by_id=None,
@@ -201,6 +202,7 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
         run = SimpleNamespace(
             node_runs=SimpleNamespace(all=lambda: []),
             graph_snapshot={},
+            execution_kind="quick_command",
             workflow_version=SimpleNamespace(
                 workflow=SimpleNamespace(code="__quick_linux_shell"),
                 global_vars={},
@@ -573,9 +575,34 @@ class RunnerFailureFallbackTests(SimpleTestCase):
         self.assertEqual(results["id:2"].status, HostRunResult.Status.FAILED)
 
 
-from apps.jobs.application.cancel import _mark_workflow_work_canceled
 from apps.jobs.application.runs import create_workflow_run
-from apps.jobs.execution.registry import run_workflow_ansible
+def execute_graph_fixture(run_id):
+    """Drive real graph/claim tasks synchronously with broker transport isolated."""
+    from apps.jobs.tasks import run_workflow, execute_node
+    from apps.jobs.workflow_engine import TERMINAL_NODE_STATUSES
+    with patch("apps.jobs.tasks.enqueue_node_run"), patch("apps.jobs.tasks.enqueue_workflow_run"):
+        for _ in range(20):
+            result = run_workflow(run_id)
+            for node_id in result["queuedNodes"]:
+                node = NodeRun.objects.get(pk=node_id)
+                execute_node(node_id, node.attempt_count)
+            run = WorkflowRun.objects.get(pk=run_id)
+            if run.status in {"success", "failed", "canceled", "timeout"}:
+                return run
+        raise AssertionError("Graph did not terminate")
+
+
+def publish_linear_fixture(version):
+    """Build an explicit graph for test command nodes before publication."""
+    from apps.automation.models import WorkflowEdge
+    commands = list(version.nodes.order_by("order_index", "id"))
+    start = WorkflowNode.objects.create(workflow_version=version, node_key="start", name="Start", node_type="start")
+    end = WorkflowNode.objects.create(workflow_version=version, node_key="end", name="End", node_type="end")
+    path = [start, *commands, end]
+    for index, (source, target) in enumerate(zip(path, path[1:])):
+        WorkflowEdge.objects.create(workflow_version=version, edge_key=f"edge-{index}", source_node=source, target_node=target)
+    version.publish(None)
+
 from apps.jobs.views import WorkflowRunViewSet
 
 
@@ -630,7 +657,7 @@ class WorkflowRunServiceTests(TestCase):
         self.workflow_version = WorkflowVersion.objects.create(
             workflow=self.workflow,
             version=1,
-            status=WorkflowVersion.Status.PUBLISHED,
+            status=WorkflowVersion.Status.DRAFT,
             created_by=self.user,
             published_by=self.user,
         )
@@ -641,6 +668,7 @@ class WorkflowRunServiceTests(TestCase):
             command_version=self.command_version,
             order_index=1,
         )
+        publish_linear_fixture(self.workflow_version)
         self.api_role = Role.objects.create(name="job_runner")
         self.user.role.add(self.api_role)
         self.api_role.permission.add(
@@ -839,6 +867,7 @@ class WorkflowRunServiceTests(TestCase):
             ],
         )
 
+        publish_linear_fixture(version)
         run = create_workflow_run(
             workflow_version=version,
             target_hosts=[self.host],
@@ -1641,7 +1670,7 @@ class WorkflowRunServiceTests(TestCase):
             triggered_by=self.user,
         )
         AssetHost.objects.filter(pk=self.host.pk).update(status="inactive")
-        result = run_workflow_ansible(run.id)
+        result = execute_graph_fixture(run.id)
         self.assertEqual(result.status, WorkflowRun.Status.FAILED)
         executor.return_value.execute.assert_not_called()
 
@@ -1682,9 +1711,9 @@ class WorkflowRunServiceTests(TestCase):
 
         runner_service.return_value.execute.side_effect = execute
 
-        result = run_workflow_ansible(run.id)
+        result = execute_graph_fixture(run.id)
 
-        node_run = NodeRun.objects.get(workflow_run=run)
+        node_run = NodeRun.objects.exclude(node_type__in={"start", "end", "parallel_gateway", "parallel_join"}).get(workflow_run=run)
         host_result = HostRunResult.objects.get(node_run=node_run, hostname="web01")
         serialized = json.dumps(
             {
@@ -1729,9 +1758,9 @@ class WorkflowRunServiceTests(TestCase):
             "ansible-runner unavailable"
         )
 
-        run_workflow_ansible(run.id)
+        execute_graph_fixture(run.id)
 
-        node_run = NodeRun.objects.get(workflow_run=run)
+        node_run = NodeRun.objects.exclude(node_type__in={"start", "end", "parallel_gateway", "parallel_join"}).get(workflow_run=run)
         host_results = HostRunResult.objects.filter(node_run=node_run)
         self.assertEqual(host_results.count(), 2)
         self.assertEqual(
@@ -1775,9 +1804,9 @@ class WorkflowRunServiceTests(TestCase):
 
         runner_service.return_value.execute.side_effect = execute
 
-        run_workflow_ansible(run.id)
+        execute_graph_fixture(run.id)
 
-        node_run = NodeRun.objects.get(workflow_run=run)
+        node_run = NodeRun.objects.exclude(node_type__in={"start", "end", "parallel_gateway", "parallel_join"}).get(workflow_run=run)
         host_results = HostRunResult.objects.filter(node_run=node_run)
         self.assertEqual(host_results.count(), 2)
         self.assertEqual(
@@ -1818,10 +1847,10 @@ class WorkflowRunServiceTests(TestCase):
             }
         )
 
-        run_workflow_ansible(run.id)
+        execute_graph_fixture(run.id)
 
         run.refresh_from_db()
-        node_run = NodeRun.objects.get(workflow_run=run)
+        node_run = NodeRun.objects.exclude(node_type__in={"start", "end", "parallel_gateway", "parallel_join"}).get(workflow_run=run)
         self.assertEqual(run.status, WorkflowRun.Status.FAILED)
         self.assertEqual(node_run.status, NodeRun.Status.FAILED)
         self.assertEqual(
@@ -1876,9 +1905,9 @@ class WorkflowRunServiceTests(TestCase):
 
         runner_service.return_value.execute.side_effect = execute
 
-        result = run_workflow_ansible(run.id)
+        result = execute_graph_fixture(run.id)
 
-        node_run = NodeRun.objects.get(workflow_run=run)
+        node_run = NodeRun.objects.exclude(node_type__in={"start", "end", "parallel_gateway", "parallel_join"}).get(workflow_run=run)
         host_result = HostRunResult.objects.get(node_run=node_run, hostname="web01")
         self.assertEqual(result.status, WorkflowRun.Status.CANCELED)
         self.assertEqual(node_run.status, NodeRun.Status.CANCELED)
@@ -1894,6 +1923,10 @@ class WorkflowRunServiceTests(TestCase):
     def test_ansible_preclaim_cancellation_materializes_all_node_and_host_results(
         self, runner_service
     ):
+        self.workflow_version = WorkflowVersion.objects.create(workflow=self.workflow, version=2)
+        self.node.pk = None
+        self.node.workflow_version = self.workflow_version
+        self.node.save()
         second_node = WorkflowNode.objects.create(
             workflow_version=self.workflow_version,
             node_key="restart_service",
@@ -1901,6 +1934,7 @@ class WorkflowRunServiceTests(TestCase):
             command_version=self.command_version,
             order_index=2,
         )
+        publish_linear_fixture(self.workflow_version)
         run = create_workflow_run(
             workflow_version=self.workflow_version,
             target_hosts=[self.host],
@@ -1911,6 +1945,7 @@ class WorkflowRunServiceTests(TestCase):
         completed_node_run = NodeRun.objects.create(
             workflow_run=run,
             workflow_node=self.node,
+            node_key=self.node.node_key,
             command_version=self.command_version,
             status=NodeRun.Status.SUCCESS,
         )
@@ -1925,11 +1960,11 @@ class WorkflowRunServiceTests(TestCase):
         )
         WorkflowRun.objects.filter(id=run.id).update(status=WorkflowRun.Status.CANCELED)
 
-        result = run_workflow_ansible(run.id)
+        result = execute_graph_fixture(run.id)
 
         node_runs = {
             node_run.workflow_node_id: node_run
-            for node_run in NodeRun.objects.filter(workflow_run=run)
+            for node_run in NodeRun.objects.filter(workflow_run=run).exclude(node_type__in={"start", "end", "parallel_gateway", "parallel_join"})
         }
         self.assertEqual(result.status, WorkflowRun.Status.CANCELED)
         self.assertEqual(set(node_runs), {self.node.id, second_node.id})
@@ -1952,6 +1987,10 @@ class WorkflowRunServiceTests(TestCase):
     def test_ansible_midrun_cancellation_materializes_unstarted_node_work(
         self, runner_service
     ):
+        self.workflow_version = WorkflowVersion.objects.create(workflow=self.workflow, version=2)
+        self.node.pk = None
+        self.node.workflow_version = self.workflow_version
+        self.node.save()
         second_node = WorkflowNode.objects.create(
             workflow_version=self.workflow_version,
             node_key="restart_service",
@@ -1959,6 +1998,7 @@ class WorkflowRunServiceTests(TestCase):
             command_version=self.command_version,
             order_index=2,
         )
+        publish_linear_fixture(self.workflow_version)
         run = create_workflow_run(
             workflow_version=self.workflow_version,
             target_hosts=[self.host],
@@ -1968,7 +2008,7 @@ class WorkflowRunServiceTests(TestCase):
         )
 
         def execute(plan, event_handler, cancel_callback, **_kwargs):
-            self.assertEqual(plan.node_run_id, NodeRun.objects.get(workflow_run=run).id)
+            self.assertEqual(plan.node_run_id, NodeRun.objects.get(workflow_run=run, node_key=self.node.node_key).id)
             WorkflowRun.objects.filter(id=run.id).update(
                 status=WorkflowRun.Status.CANCELED
             )
@@ -1979,11 +2019,11 @@ class WorkflowRunServiceTests(TestCase):
 
         runner_service.return_value.execute.side_effect = execute
 
-        result = run_workflow_ansible(run.id)
+        result = execute_graph_fixture(run.id)
 
         node_runs = {
             node_run.workflow_node_id: node_run
-            for node_run in NodeRun.objects.filter(workflow_run=run)
+            for node_run in NodeRun.objects.filter(workflow_run=run).exclude(node_type__in={"start", "end", "parallel_gateway", "parallel_join"})
         }
         self.assertEqual(result.status, WorkflowRun.Status.CANCELED)
         self.assertEqual(set(node_runs), {self.node.id, second_node.id})
@@ -2052,9 +2092,9 @@ class WorkflowRunServiceTests(TestCase):
 
         runner_service.return_value.execute.side_effect = execute
 
-        result = run_workflow_ansible(run.id)
+        result = execute_graph_fixture(run.id)
 
-        node_run = NodeRun.objects.get(workflow_run=run)
+        node_run = NodeRun.objects.exclude(node_type__in={"start", "end", "parallel_gateway", "parallel_join"}).get(workflow_run=run)
         host_results = {
             host_result.hostname: host_result
             for host_result in HostRunResult.objects.filter(node_run=node_run)

@@ -20,9 +20,14 @@ def test_creation_initializes_governance_and_persists_snapshot(user):
     version = WorkflowVersion.objects.create(
         workflow=template,
         version=1,
-        status="published",
-        graph_snapshot={"nodes": [], "edges": []},
+
     )
+    from apps.automation.workflow_graph import replace_graph
+    replace_graph(version, {
+        "nodes": [{"id": "start", "type": "start"}, {"id": "end", "type": "end"}],
+        "edges": [{"id": "done", "source": "start", "target": "end"}],
+    })
+    version.publish(user)
     run = create_workflow_run(
         workflow_version=version,
         target_hosts=[host],

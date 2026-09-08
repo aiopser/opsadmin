@@ -45,7 +45,7 @@ def ensure_quick_command_workflows() -> dict[str, WorkflowVersion]:
                 "risk_level": CommandAtom.RiskLevel.LOW,
             },
         )
-        command_version, _ = CommandVersion.objects.update_or_create(
+        command_version, _ = CommandVersion.objects.get_or_create(
             command=command,
             version=1,
             defaults={
@@ -63,11 +63,11 @@ def ensure_quick_command_workflows() -> dict[str, WorkflowVersion]:
                 "owner_team": "system",
             },
         )
-        workflow_version, _ = WorkflowVersion.objects.update_or_create(
+        workflow_version, created = WorkflowVersion.objects.get_or_create(
             workflow=workflow,
             version=1,
             defaults={
-                "status": WorkflowVersion.Status.PUBLISHED,
+                "status": WorkflowVersion.Status.DRAFT,
                 "input_schema": {
                     "type": "object",
                     "required": ["command_content"],
@@ -75,14 +75,21 @@ def ensure_quick_command_workflows() -> dict[str, WorkflowVersion]:
                 },
             },
         )
-        WorkflowNode.objects.update_or_create(
-            workflow_version=workflow_version,
-            node_key="quick_command",
-            defaults={
-                "name": display_name,
-                "command_version": command_version,
-                "order_index": 1,
-            },
-        )
+        if created:
+            from apps.automation.workflow_graph import replace_graph
+            errors = replace_graph(workflow_version, {
+                "nodes": [
+                    {"id": "start", "type": "start"},
+                    {"id": "quick_command", "type": "command", "name": display_name, "commandVersionId": command_version.id, "timeoutSeconds": 300},
+                    {"id": "end", "type": "end"},
+                ],
+                "edges": [
+                    {"id": "start_command", "source": "start", "target": "quick_command"},
+                    {"id": "command_end", "source": "quick_command", "target": "end"},
+                ],
+            })
+            if errors:
+                raise ValueError("; ".join(errors))
+            workflow_version.publish(None)
         versions[command_type] = workflow_version
     return versions

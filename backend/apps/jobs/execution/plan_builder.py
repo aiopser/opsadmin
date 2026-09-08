@@ -307,10 +307,7 @@ def _merge_node_vars(run, node):
     if command_version:
         # Resource source is immutable after publish. Runtime inputs may override
         # declared variables, but never the executable body itself.
-        workflow_version = getattr(run, "workflow_version", None)
-        if workflow_version is not None and is_quick_command_workflow_version(
-            workflow_version
-        ):
+        if run.execution_kind == "quick_command":
             # Quick-command workflows carry a literal "{{ command_content }}"
             # placeholder body; the real command is injected via run inputs.
             # Overwriting with the placeholder makes the variable reference

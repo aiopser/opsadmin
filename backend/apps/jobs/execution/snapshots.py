@@ -77,3 +77,21 @@ def execution_resource(node_run):
         channel.secret_encrypted = live.secret_encrypted
         return NotificationTemplate(**fields, channel=channel)
     raise ValueError("Unsupported resource type")
+
+
+def ensure_node_runs(run):
+    from apps.jobs.models import NodeRun
+    definitions = {node.node_key: node for node in run.workflow_version.nodes.select_related("command_version").all()} if run.workflow_version_id else {}
+    existing = {node.node_key: node for node in run.node_runs.all()}
+    for item in (run.graph_snapshot or {}).get("nodes", []):
+        key = str(item["id"])
+        if key in existing:
+            continue
+        definition = definitions.get(key)
+        existing[key] = NodeRun.objects.create(
+            workflow_run=run, workflow_node=definition,
+            command_version=definition.command_version if definition else None,
+            node_key=key, node_name=item.get("name") or key, node_type=item["type"],
+            config_snapshot=deepcopy(item.get("config") or {}), input_vars=deepcopy(item.get("inputMapping") or {}),
+        )
+    return existing

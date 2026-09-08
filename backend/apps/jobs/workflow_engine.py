@@ -1,3 +1,5 @@
+from .application.cancel import settle_canceled_work
+from .execution.snapshots import ensure_node_runs
 from common.workflow.node_types import NodeType
 from common.workflow.conditions import InvalidCondition, expression_is_true
 from common.workflow.node_types import ANSIBLE_NODE_TYPES, CONTROL_NODE_TYPES
@@ -193,6 +195,9 @@ def plan_dispatch(workflow_run_id):
         .select_related("workflow_version", "workflow_version__workflow", "worker_pool")
         .get(id=workflow_run_id)
     )
+    if run.status == WorkflowRun.Status.CANCELED:
+        settle_canceled_work(run)
+        return []
     if run.status in {
         WorkflowRun.Status.SUCCESS,
         WorkflowRun.Status.FAILED,
@@ -201,9 +206,7 @@ def plan_dispatch(workflow_run_id):
     }:
         return []
     if run.status == WorkflowRun.Status.CANCEL_REQUESTED:
-        run.node_runs.filter(
-            status__in=[NodeRun.Status.PENDING, NodeRun.Status.QUEUED]
-        ).update(status=NodeRun.Status.CANCELED, finished_at=timezone.now())
+        settle_canceled_work(run)
         if not run.node_runs.filter(status=NodeRun.Status.RUNNING).exists():
             run.status = WorkflowRun.Status.CANCELED
             run.finished_at = timezone.now()
@@ -241,28 +244,7 @@ def plan_dispatch(workflow_run_id):
         )
         return []
     nodes, _, incoming, outgoing = _graph_maps(graph)
-    model_nodes = (
-        {node.node_key: node for node in run.workflow_version.nodes.all()}
-        if run.workflow_version_id
-        else {}
-    )
-    node_runs = {
-        item.node_key: item
-        for item in run.node_runs.select_related("workflow_node").all()
-    }
-    for node_key, item in nodes.items():
-        if node_key not in node_runs:
-            model_node = model_nodes.get(node_key)
-            node_runs[node_key] = NodeRun.objects.create(
-                workflow_run=run,
-                workflow_node=model_node,
-                command_version=model_node.command_version if model_node else None,
-                node_key=node_key,
-                node_name=item.get("name") or node_key,
-                node_type=item.get("type") or NodeType.COMMAND,
-                config_snapshot=item.get("config") or {},
-                input_vars=item.get("inputMapping") or {},
-            )
+    node_runs = ensure_node_runs(run)
 
     context_vars, engine_state = _engine_state(run)
     active_edges = set(engine_state.get("active_edges") or [])

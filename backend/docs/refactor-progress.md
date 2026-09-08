@@ -109,3 +109,15 @@ WorkerPool/serializer/view/admin 仅归 jobs，表 jobs_worker_pool，唯一 API
 实际测试：automation 与图运行专项 53 passed / 2 subtests passed；最终完整回归 341 passed / 10 原基线 failed / 4 明确 skipped / 17 subtests passed（63.01 秒）。旧表达式缺失失败消除；原秘密输入测试改为创建新版本，保留加密断言，不绕过发布不可变约束。Black、迁移差异检查通过。
 
 未完成：T13 系统快捷模板仍待按完整图发布，运行创建回退和旧顺序执行路径待删除；所有入口治理完成后补充端到端快照验收。T14 前端 editorMode 和实时协议、T07/MySQL/Redis/共享存储真实验收缺口不变。
+
+## P5 / T13 执行入口收敛
+
+运行创建只剩 application/runs._persist_run 单一入口：create_workflow_run 校验 PUBLISHED + validate_graph 后落库；快捷命令、手工作业、克隆（重试/重跑）均复用同一服务，execution_kind/run_domain 区分展示与策略。clone_workflow_run 替代视图内 _clone_run，克隆时重新解析目标快照并继承 domain/kind，trigger 重置 MANUAL。取消统一 settle_canceled_work（替代 _mark_node_run_canceled/_mark_workflow_work_canceled），PENDING/QUEUED 节点与 queued attempt 一次结算且不动终态。registry.run_workflow_ansible 旧线性顺序执行路径整体删除，所有运行统一 plan_dispatch 图调度；ensure_node_runs 统一物化 NodeRun。系统快捷模板改为 DRAFT → replace_graph → publish 发布流程，满足发布冻结契约；快捷命令判定由 workflow_version 探测改为 run.execution_kind。
+
+删除：run_workflow_ansible、_claim_workflow_run、_mark_workflow_failed、views._clone_run 及散落取消标记；plan_builder 旧 quick command 版本探测。生产代码不再有 _persist_run 之外的 WorkflowRun.objects.create。
+
+新增 apps/jobs/test_execution_entrypoints.py 15 用例：三入口产生同一种可查询运行记录且快照相互隔离、draft 版本拒绝、统一取消结算、API 执行器成功路径凭据使用、超时与 HTTP 失败消息不泄露令牌、loopback 出站目标在传输层之前被拒（SSRF）、Jenkins crumb/trigger/queue/log/build 全链路 mock 及 queue 超时 QUEUE_TIMEOUT、通知 webhook mock 投递与失败落库；全程不调用真实 Jenkins 构建或通知收件人。test_ops_api 两个 rerun/retry 回归更新为新契约：运行必须携带合法 graph_snapshot，克隆后快照为 snapshot_targets 重新解析的完整非敏感格式。
+
+实际测试：入口契约专项 15 passed；最终全量 357 passed / 9 原基线 failed / 4 skipped / 17 subtests（76 秒）。manage.py check 与迁移差异检查通过；pytest 临时目录在沙箱下需项目内 basetemp，Black 在沙箱中挂起跳过（格式人工对齐）。
+
+未完成：真实 Jenkins/通知/外部 API 集成仅 mock 覆盖（按计划不真实外呼）；定时任务入口沿用 scheduled_job_run_options + 统一创建服务，未新增独立用例；T14 前端契约与页面改造、T07/MySQL/Redis/共享存储真实验收缺口不变。
