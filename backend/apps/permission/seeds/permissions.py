@@ -1036,6 +1036,7 @@ SYSTEM_PERMISSIONS = [
     *_read_permissions("jobs.host_result", "主机执行结果", "/api/v1/jobs/host-results"),
     *_read_permissions("jobs.event", "执行事件", "/api/v1/jobs/events"),
     *_read_permissions("audit.event", "平台审计", "/api/v1/audit/events"),
+    {"code": "audit.event.export", "name": "导出审计事件", "type": Permission.PermissionType.API, "path": "/api/v1/audit/events/export", "method": "GET"},
     *_rest_permissions(
         "jobs.scheduled_job",
         "定时任务",

@@ -21,6 +21,8 @@ class DomainAuditEvent(StandardModelMixin):
     before = models.JSONField(default=dict, blank=True)
     after = models.JSONField(default=dict, blank=True)
     request_id = models.CharField(max_length=128, blank=True, default="")
+    run_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    result = models.CharField(max_length=16, default="success", choices=[("success", "Success"), ("failure", "Failure")])
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     user_agent = models.CharField(max_length=255, blank=True, default="")
 

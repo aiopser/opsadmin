@@ -1,4 +1,5 @@
 from .models import DomainAuditEvent
+from common.redaction import redact_text, redact_value
 
 
 def _get_client_ip(request):
@@ -19,6 +20,8 @@ def create_domain_audit_event(
     after=None,
     request=None,
     domain=None,
+    run_id=None,
+    result="success",
 ):
     user = actor if getattr(actor, "is_authenticated", False) else None
     resolved_domain = domain or _resolve_domain(action, resource_type, resource_id)
@@ -28,14 +31,16 @@ def create_domain_audit_event(
         action=action,
         resource_type=resource_type,
         resource_id=str(resource_id or ""),
-        before=before or {},
-        after=after or {},
+        before=redact_value(before or {}),
+        after=redact_value(after or {}),
+        run_id=str(run_id or (resource_id if resource_type == "workflow_run" else "") or ""),
+        result=result,
         request_id=getattr(request, "id", "")
         or request.META.get("HTTP_X_REQUEST_ID", "")
         if request
         else "",
         ip_address=_get_client_ip(request),
-        user_agent=request.META.get("HTTP_USER_AGENT", "")[:255] if request else "",
+        user_agent=redact_text(request.META.get("HTTP_USER_AGENT", ""))[:255] if request else "",
     )
 
 

@@ -3,7 +3,7 @@ import { request } from '../request';
 
 /**
  * 审计事件（后端 DomainAuditEvent）
- * AuditEventSerializer 输出 snake_case 原始字段 + camelCase 别名，此处统一走 camelCase
+ * AuditEventSerializer 的唯一 camelCase 响应契约
  */
 export interface AuditEvent {
   id: number;
@@ -22,6 +22,8 @@ export interface AuditEvent {
   /** 变更后快照 */
   after: Record<string, unknown>;
   requestId: string;
+  runId: string;
+  result: 'success' | 'failure';
   ipAddress: string | null;
   userAgent: string;
   createdAt: string;
