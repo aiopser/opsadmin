@@ -9,8 +9,6 @@ from apps.cmdb.models import CredentialRef
 from .adapters import DatabaseCredentialProvider
 from .tasklog.logger import AnsibleTaskOutputFilter
 from .tasklog.consumer import normalize_terminal_line
-from .workflow.ansible_service import _WorkflowCallback
-from .workflow.ansible_service import AnsibleRunnerService
 from .workflow.inventory import build_inventory
 
 
@@ -35,15 +33,9 @@ class WorkflowInventoryTests(SimpleTestCase):
     @patch("apps.ops.adapters.CredentialRef.objects.get")
     @patch.dict("apps.ops.adapters.os.environ", {}, clear=True)
     def test_missing_credential_environment_variable_is_explicit(self, get_credential):
-        get_credential.return_value = type(
-            "Credential",
-            (),
-            {
-                "metadata": {},
-                "secret_ref": "env:MISSING_PASSWORD",
-                "type": CredentialRef.CredentialType.PASSWORD,
-            },
-        )()
+        get_credential.return_value = CredentialRef(
+            metadata={}, secret_ref="env:MISSING_PASSWORD", type=CredentialRef.CredentialType.PASSWORD,
+        )
         with self.assertRaisesRegex(ValueError, "is not configured"):
             DatabaseCredentialProvider().resolve(1)
 
@@ -86,75 +78,3 @@ class TerminalLineNormalizationTests(SimpleTestCase):
 
     def test_preserves_partial_line(self):
         self.assertEqual(normalize_terminal_line("中文".encode()), "中文".encode())
-
-
-class WorkflowCallbackOutputTests(SimpleTestCase):
-    @patch("builtins.print")
-    def test_writes_remote_command_stdout_to_task_log_stream(self, print_output):
-        callback = _WorkflowCallback()
-        callback.event_handler(
-            {
-                "event": "runner_on_ok",
-                "event_data": {
-                    "host": "ops-test",
-                    "res": {
-                        "changed": True,
-                        "rc": 0,
-                        "stdout": "total 4\n-rw-r--r-- 1 root root 4 app.txt\n",
-                    },
-                },
-            }
-        )
-        print_output.assert_called_once_with(
-            "total 4\n-rw-r--r-- 1 root root 4 app.txt",
-            flush=True,
-        )
-
-    @patch("builtins.print")
-    def test_does_not_write_no_log_result(self, print_output):
-        callback = _WorkflowCallback()
-        callback.event_handler(
-            {
-                "event": "runner_on_ok",
-                "event_data": {
-                    "no_log": True,
-                    "res": {"stdout": "secret"},
-                },
-            }
-        )
-        print_output.assert_not_called()
-
-
-class WorkflowAnsibleServiceTests(SimpleTestCase):
-    @patch("apps.ops.workflow.ansible_service.JumpServerAnsibleService")
-    def test_adhoc_plan_runs_raw_without_creating_a_playbook(self, service_class):
-        def execute(_execution, callback=None, **_kwargs):
-            callback.status = "success"
-            callback.summary = {"ok": ["target"]}
-            return callback
-
-        service_class.return_value.run.side_effect = execute
-        plan = SimpleNamespace(
-            private_data_dir="",
-            inventory="[linux]\ntarget ansible_host=192.0.2.10\n",
-            playbook=[],
-            module="raw",
-            module_args="/bin/bash -c ls",
-            extra_vars={},
-            env_vars={},
-            timeout_seconds=30,
-            forks=5,
-            check_mode=False,
-        )
-
-        result = AnsibleRunnerService().run(plan)
-
-        execution = service_class.return_value.run.call_args.args[0]
-        self.assertIsNone(execution.playbook)
-        self.assertEqual(execution.module, "raw")
-        self.assertEqual(execution.module_args, "/bin/bash -c ls")
-        self.assertEqual(
-            service_class.return_value.run.call_args.kwargs["cmdline"],
-            "--forks 5",
-        )
-        self.assertEqual(result["status"], "success")

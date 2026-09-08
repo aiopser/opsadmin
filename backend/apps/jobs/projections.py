@@ -1,7 +1,7 @@
 from django.db import transaction
 from django.utils import timezone
 
-from apps.ops.workflow.adapters import RunnerResult
+from apps.ops.contracts import RunnerResult
 
 from .models import WorkflowRun
 

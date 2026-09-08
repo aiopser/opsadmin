@@ -137,7 +137,7 @@ def sync_asset_source(record_id):
 
 
 @shared_task(name="cmdb.discover_host_facts")
-def discover_host_facts(host_id):
+def discover_host_facts(host_id, actor_id):
     """Collect hardware/OS facts from a host via Ansible setup module."""
     host = AssetHost.objects.select_related("credential_ref", "default_gateway").get(
         id=host_id
@@ -148,57 +148,22 @@ def discover_host_facts(host_id):
 
     private_data_dir = ""
     try:
-        from apps.jobs.services import prepare_host_gateway_execution
-        from apps.ops.adapters import AnsibleExecutionInput
-        from apps.ops.services import JumpServerAnsibleService
-        from apps.ops.workflow.inventory import build_inventory
+        from django.contrib.auth import get_user_model
+        from .execution import execute_asset_module
 
-        port = host.connection_port or credential.effective_port or 22
-        inventory_hosts, group_vars, private_data_dir = prepare_host_gateway_execution(
-            [
-                {
-                    "host_id": host.id,
-                    "hostname": "target",
-                    "ip": str(host.primary_ip),
-                    "os_family": host.os_family,
-                    "connection_type": host.connection_type,
-                    "connection_port": port,
-                    "credential_ref_id": credential.id,
-                    "default_gateway_id": host.default_gateway_id,
-                    "ansible_connection_vars": host.ansible_connection_vars,
-                }
-            ]
-        )
-        inventory_text = build_inventory(inventory_hosts, group_vars)
-        if not private_data_dir:
-            private_data_dir = tempfile.mkdtemp(prefix="devops-facts-")
-
-        service = JumpServerAnsibleService()
-        execution = AnsibleExecutionInput(
-            inventory=inventory_text,
-            module="setup",
-            module_args="gather_subset=!all,!min,hardware,network",
-            host_pattern="all",
-            private_data_dir=private_data_dir,
-            timeout=60,
-        )
-        cb = service.run(execution)
-
-        if not cb.is_success():
-            return {
-                "hostId": host_id,
-                "status": "failed",
-                "reason": "setup module failed",
-            }
-
-        # Extract ansible_facts from callback results
+        actor = get_user_model().objects.get(pk=actor_id)
         facts = {}
-        for host_data in cb.result.get("ok", {}).values():
-            for detail in host_data.values():
-                res = detail.get("res", {})
-                if "ansible_facts" in res:
-                    facts = res["ansible_facts"]
-                    break
+
+        def collect(event):
+            if event.event_type == "host_ok" and isinstance(event.result.get("ansible_facts"), dict):
+                facts.update(event.result["ansible_facts"])
+
+        result = execute_asset_module(
+            actor=actor, host_id=host_id, module="ansible.windows.setup" if host.connection_type == "winrm" else "ansible.builtin.setup",
+            module_args="gather_subset=!all,!min,hardware,network", on_event=collect,
+        )
+        if result.status != "success":
+            return {"hostId": host_id, "status": "failed", "reason": "setup module failed"}
 
         if not facts:
             return {

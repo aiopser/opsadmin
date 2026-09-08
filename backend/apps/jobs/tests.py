@@ -30,7 +30,8 @@ from apps.jobs.models import (
 )
 from apps.jobs.serializers import WorkflowRunCreateSerializer
 from apps.jobs.events import persist_runner_event, sanitize_runner_event
-from apps.ops.workflow.ansible_service import AnsibleRunnerUnavailable
+from apps.ops.contracts import AnsibleRunnerUnavailable, RunnerResult
+from apps.ops.workflow.events import normalize_runner_event
 from apps.permission.models import Permission, Role
 from apps.permission.services import CasbinEnforcerService, sync_casbin_rules
 
@@ -1564,7 +1565,18 @@ class WorkflowRunServiceTests(TestCase):
         self.assertEqual(run.target_snapshot[0]["address"], self.host.primary_ip)
         self.assertEqual(run.worker_pool_id, self.worker_pool.id)
 
-    @patch("apps.jobs.services.AnsibleRunnerService")
+    @patch("apps.jobs.services.AnsibleExecutor")
+    def test_asset_disabled_after_submission_is_not_executed(self, executor):
+        run = create_workflow_run(
+            workflow_version=self.workflow_version, target_hosts=[self.host], input_vars={},
+            worker_pool=self.worker_pool, triggered_by=self.user,
+        )
+        AssetHost.objects.filter(pk=self.host.pk).update(status="inactive")
+        result = run_workflow_ansible(run.id)
+        self.assertEqual(result.status, WorkflowRun.Status.FAILED)
+        executor.return_value.execute.assert_not_called()
+
+    @patch("apps.jobs.services.AnsibleExecutor")
     def test_ansible_workflow_persists_callback_events_without_terminal_aggregation(
         self, runner_service
     ):
@@ -1578,7 +1590,7 @@ class WorkflowRunServiceTests(TestCase):
 
         def execute(plan, event_handler, cancel_callback, **_kwargs):
             event_handler(
-                {
+                normalize_runner_event({
                     "event": "runner_on_ok",
                     "event_data": {
                         "host": "web01",
@@ -1590,12 +1602,12 @@ class WorkflowRunServiceTests(TestCase):
                             "rc": 0,
                         },
                     },
-                }
+                })
             )
             self.assertFalse(cancel_callback())
-            return {"status": "successful", "rc": 0, "stats": {"ok": {}}}
+            return RunnerResult.from_mapping({"status": "successful", "rc": 0, "stats": {"ok": {}}})
 
-        runner_service.return_value.run.side_effect = execute
+        runner_service.return_value.execute.side_effect = execute
 
         result = run_workflow_ansible(run.id)
 
@@ -1622,7 +1634,7 @@ class WorkflowRunServiceTests(TestCase):
         self.assertNotIn("do-not-store", serialized)
         self.assertNotIn("runner_result", serialized)
 
-    @patch("apps.jobs.services.AnsibleRunnerService")
+    @patch("apps.jobs.services.AnsibleExecutor")
     def test_ansible_unavailable_materializes_failed_result_for_every_target(
         self, runner_service
     ):
@@ -1640,7 +1652,7 @@ class WorkflowRunServiceTests(TestCase):
             worker_pool=self.worker_pool,
             triggered_by=self.user,
         )
-        runner_service.return_value.run.side_effect = AnsibleRunnerUnavailable(
+        runner_service.return_value.execute.side_effect = AnsibleRunnerUnavailable(
             "ansible-runner unavailable"
         )
 
@@ -1658,7 +1670,7 @@ class WorkflowRunServiceTests(TestCase):
             {f"id:{self.host.id}", f"id:{second_host.id}"},
         )
 
-    @patch("apps.jobs.services.AnsibleRunnerService")
+    @patch("apps.jobs.services.AnsibleExecutor")
     def test_ansible_exception_reuses_callback_result_without_duplicates(
         self, runner_service
     ):
@@ -1679,14 +1691,14 @@ class WorkflowRunServiceTests(TestCase):
 
         def execute(plan, event_handler, cancel_callback, **_kwargs):
             event_handler(
-                {
+                normalize_runner_event({
                     "event": "runner_on_ok",
                     "event_data": {"host": "web01", "res": {"rc": 0}},
-                }
+                })
             )
             raise RuntimeError("runner crashed")
 
-        runner_service.return_value.run.side_effect = execute
+        runner_service.return_value.execute.side_effect = execute
 
         run_workflow_ansible(run.id)
 
@@ -1705,7 +1717,7 @@ class WorkflowRunServiceTests(TestCase):
             1,
         )
 
-    @patch("apps.jobs.services.AnsibleRunnerService")
+    @patch("apps.jobs.services.AnsibleExecutor")
     def test_ansible_no_callbacks_materializes_failed_result_for_every_target(
         self, runner_service
     ):
@@ -1723,11 +1735,11 @@ class WorkflowRunServiceTests(TestCase):
             worker_pool=self.worker_pool,
             triggered_by=self.user,
         )
-        runner_service.return_value.run.return_value = {
+        runner_service.return_value.execute.return_value = RunnerResult.from_mapping({
             "status": "successful",
             "rc": 0,
             "stats": {},
-        }
+        })
 
         run_workflow_ansible(run.id)
 
@@ -1743,7 +1755,7 @@ class WorkflowRunServiceTests(TestCase):
             2,
         )
 
-    @patch("apps.jobs.services.AnsibleRunnerService")
+    @patch("apps.jobs.services.AnsibleExecutor")
     def test_ansible_cancel_callback_marks_active_node_and_host_work_canceled(
         self, runner_service
     ):
@@ -1757,10 +1769,10 @@ class WorkflowRunServiceTests(TestCase):
 
         def execute(plan, event_handler, cancel_callback, **_kwargs):
             event_handler(
-                {
+                normalize_runner_event({
                     "event": "runner_on_start",
                     "event_data": {"host": "web01"},
-                }
+                })
             )
             WorkflowRun.objects.filter(id=run.id).update(
                 status=WorkflowRun.Status.CANCELED
@@ -1768,18 +1780,18 @@ class WorkflowRunServiceTests(TestCase):
             self.assertTrue(cancel_callback())
             self.assertFalse(
                 event_handler(
-                    {
+                    normalize_runner_event({
                         "event": "runner_on_ok",
                         "event_data": {
                             "host": "web01",
                             "res": {"stdout": "must-not-replace-canceled", "rc": 0},
                         },
-                    }
+                    })
                 )
             )
-            return {"status": "canceled", "rc": 1, "stats": {}}
+            return RunnerResult.from_mapping({"status": "canceled", "rc": 1, "stats": {}})
 
-        runner_service.return_value.run.side_effect = execute
+        runner_service.return_value.execute.side_effect = execute
 
         result = run_workflow_ansible(run.id)
 
@@ -1795,7 +1807,7 @@ class WorkflowRunServiceTests(TestCase):
             ).exists()
         )
 
-    @patch("apps.jobs.services.AnsibleRunnerService")
+    @patch("apps.jobs.services.AnsibleExecutor")
     def test_ansible_preclaim_cancellation_materializes_all_node_and_host_results(
         self, runner_service
     ):
@@ -1851,9 +1863,9 @@ class WorkflowRunServiceTests(TestCase):
             canceled_host_results.count(),
             1,
         )
-        runner_service.return_value.run.assert_not_called()
+        runner_service.return_value.execute.assert_not_called()
 
-    @patch("apps.jobs.services.AnsibleRunnerService")
+    @patch("apps.jobs.services.AnsibleExecutor")
     def test_ansible_midrun_cancellation_materializes_unstarted_node_work(
         self, runner_service
     ):
@@ -1878,9 +1890,9 @@ class WorkflowRunServiceTests(TestCase):
                 status=WorkflowRun.Status.CANCELED
             )
             self.assertTrue(cancel_callback())
-            return {"status": "canceled", "rc": 1, "stats": {}}
+            return RunnerResult.from_mapping({"status": "canceled", "rc": 1, "stats": {}})
 
-        runner_service.return_value.run.side_effect = execute
+        runner_service.return_value.execute.side_effect = execute
 
         result = run_workflow_ansible(run.id)
 
@@ -1912,9 +1924,9 @@ class WorkflowRunServiceTests(TestCase):
             ),
             {node_run.id for node_run in node_runs.values()},
         )
-        self.assertEqual(runner_service.return_value.run.call_count, 1)
+        self.assertEqual(runner_service.return_value.execute.call_count, 1)
 
-    @patch("apps.jobs.services.AnsibleRunnerService")
+    @patch("apps.jobs.services.AnsibleExecutor")
     def test_ansible_cancellation_fills_missing_targets_and_preserves_terminal_results(
         self, runner_service
     ):
@@ -1935,21 +1947,21 @@ class WorkflowRunServiceTests(TestCase):
 
         def execute(plan, event_handler, cancel_callback, **_kwargs):
             event_handler(
-                {
+                normalize_runner_event({
                     "event": "runner_on_ok",
                     "event_data": {
                         "host": "web01",
                         "res": {"stdout": "completed", "rc": 0},
                     },
-                }
+                })
             )
             WorkflowRun.objects.filter(id=run.id).update(
                 status=WorkflowRun.Status.CANCELED
             )
             self.assertTrue(cancel_callback())
-            return {"status": "canceled", "rc": 1, "stats": {}}
+            return RunnerResult.from_mapping({"status": "canceled", "rc": 1, "stats": {}})
 
-        runner_service.return_value.run.side_effect = execute
+        runner_service.return_value.execute.side_effect = execute
 
         result = run_workflow_ansible(run.id)
 

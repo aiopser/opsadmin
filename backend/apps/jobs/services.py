@@ -1,5 +1,6 @@
 from django.db import transaction
 from django.utils import timezone
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from datetime import timedelta
 import json
 import logging
@@ -18,15 +19,11 @@ from apps.cmdb.crypto import decrypt_secret
 from apps.cmdb.models import AssetHost
 from apps.cmdb.targets import snapshot_targets
 from .worker_pools import resolve_worker_pool
-from apps.ops.workflow.ansible_service import (
-    AnsibleRunnerService,
-    AnsibleRunnerUnavailable,
-)
-from apps.ops.workflow.adapters import AnsibleRunnerAdapter
+from apps.ops.contracts import AnsibleRunnerUnavailable, ExecutionPlan
+from apps.ops.executor import AnsibleExecutor
 from apps.ops.workflow.inventory import build_inventory
 from apps.ops.workflow.inventory import inventory_hostname
 from apps.ops.workflow.playbooks import build_playbook
-from apps.ops.workflow.plans import ExecutionPlan
 
 from .events import persist_runner_event
 from .input_secrets import protect_workflow_inputs, resolve_workflow_inputs
@@ -268,8 +265,9 @@ def build_gateway_inventory(host_snapshots, input_vars=None):
         host_snapshots,
         input_vars,
     )
+    private_data_dir = private_data_dir or tempfile.mkdtemp(prefix="devops-inventory-")
     try:
-        return build_inventory(prepared_hosts, group_vars), private_data_dir
+        return build_inventory(prepared_hosts, group_vars, key_directory=private_data_dir), private_data_dir
     except Exception:
         if private_data_dir:
             shutil.rmtree(private_data_dir, ignore_errors=True)
@@ -918,6 +916,7 @@ def execute_ansible_node(node_run_id):
     ).get(id=node_run_id)
     run = node_run.workflow_run
     node = node_run.workflow_node
+    snapshot_targets(actor=run.triggered_by, targets=run.target_snapshot or [])
     if not node:
         raise ValueError("Workflow node is required")
 
@@ -972,6 +971,7 @@ def execute_ansible_node(node_run_id):
     plan = ExecutionPlan(
         run_id=run.id,
         node_run_id=node_run.id,
+        attempt_id=max(node_run.attempt_count, 1),
         command_type=command_spec.command_type,
         target_hosts=run.target_snapshot or [],
         inventory=inventory,
@@ -994,7 +994,7 @@ def execute_ansible_node(node_run_id):
         ExecutionLease.touch(run.id)
         if _is_workflow_run_canceled(run):
             return False
-        persist_runner_event(workflow_run=run, node_run=node_run, event=event)
+        persist_runner_event(workflow_run=run, node_run=node_run, event=event.raw_event)
         return True
 
     def cancel_callback():
@@ -1002,11 +1002,7 @@ def execute_ansible_node(node_run_id):
 
     materialize_failed_results = False
     try:
-        runner_result = AnsibleRunnerAdapter(
-            plan,
-            service=AnsibleRunnerService(),
-            cancel_check=cancel_callback,
-        ).start(handle_event, lambda *_args: None)
+        runner_result = AnsibleExecutor().execute(plan, handle_event, cancel_callback)
         status = runner_result.status
         rc = int(runner_result.return_code or 0)
         error = runner_result.error or ""
@@ -1017,6 +1013,9 @@ def execute_ansible_node(node_run_id):
         logger.exception("Ansible node %s failed", node_run.id)
         status, rc, error = "failed", 1, str(exc) or "Ansible runner execution failed."
         materialize_failed_results = True
+
+    finally:
+        shutil.rmtree(gateway_private_dir, ignore_errors=True)
 
     if not callbacks_received:
         status, rc = "failed", rc or 1
@@ -1121,8 +1120,9 @@ def run_workflow_ansible(workflow_run_id):
     )
 
     try:
+        snapshot_targets(actor=run.triggered_by, targets=run.target_snapshot or [])
         source_playbook = build_source_playbook(run)
-    except InvalidSourcePlaybook as exc:
+    except (InvalidSourcePlaybook, PermissionDenied, ValidationError) as exc:
         return _mark_workflow_failed(run, started_at, str(exc))
 
     nodes = (
@@ -1135,7 +1135,7 @@ def run_workflow_ansible(workflow_run_id):
             "id",
         )
     )
-    runner_service = AnsibleRunnerService()
+    executor = AnsibleExecutor()
     workflow_failed = False
     failure_reason = ""
 
@@ -1190,6 +1190,7 @@ def run_workflow_ansible(workflow_run_id):
         plan = ExecutionPlan(
             run_id=run.id,
             node_run_id=node_run.id,
+            attempt_id=max(node_run.attempt_count, 1),
             command_type=node.command_version.command_type,
             target_hosts=run.target_snapshot or [],
             inventory=inventory,
@@ -1215,7 +1216,7 @@ def run_workflow_ansible(workflow_run_id):
             persist_runner_event(
                 workflow_run=run,
                 node_run=node_run,
-                event=event,
+                event=event.raw_event,
             )
             return True
 
@@ -1227,12 +1228,7 @@ def run_workflow_ansible(workflow_run_id):
 
         materialize_failed_results = False
         try:
-            runner = AnsibleRunnerAdapter(
-                plan,
-                service=runner_service,
-                cancel_check=cancel_callback,
-            )
-            runner_result = runner.start(handle_event, lambda *_args: None)
+            runner_result = executor.execute(plan, handle_event, cancel_callback)
             result = {
                 "status": runner_result.status,
                 "rc": runner_result.return_code,
@@ -1255,6 +1251,9 @@ def run_workflow_ansible(workflow_run_id):
                 "error": "Ansible runner execution failed.",
             }
             materialize_failed_results = True
+
+        finally:
+            shutil.rmtree(gateway_private_dir, ignore_errors=True)
 
         if not callbacks_received:
             result = dict(result) if isinstance(result, dict) else {}

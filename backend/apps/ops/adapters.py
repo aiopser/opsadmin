@@ -1,6 +1,5 @@
-"""Platform-to-JumpServer input contracts."""
+"""Execution-time credential resolution."""
 
-from dataclasses import dataclass, field
 from pathlib import Path
 import os
 import stat
@@ -8,23 +7,6 @@ import tempfile
 from typing import Any, Mapping
 
 from apps.cmdb.models import CredentialRef
-
-# Directory for temporary SSH key files
-_KEY_TMP_DIR = Path(tempfile.gettempdir()) / "devops-ansible-keys"
-
-
-@dataclass(frozen=True)
-class AnsibleExecutionInput:
-    inventory: str | Path
-    playbook: str | Path | None = None
-    private_data_dir: str | Path = "/tmp/devops-ansible"
-    extra_vars: Mapping[str, Any] = field(default_factory=dict)
-    env_vars: Mapping[str, str] = field(default_factory=dict)
-    verbosity: int = 0
-    timeout: int = -1
-    host_pattern: str = "*"
-    module: str | None = None
-    module_args: str = ""
 
 
 class CredentialProvider:
@@ -39,6 +21,9 @@ class DatabaseCredentialProvider(CredentialProvider):
     - encrypted_secret (inline, Fernet-encrypted in DB)
     - secret_ref (external: env:/file:/vault://)
     """
+
+    def __init__(self, key_directory=None):
+        self.key_directory = Path(key_directory) if key_directory else None
 
     def resolve(self, credential_id: int) -> Mapping[str, Any]:
         credential = CredentialRef.objects.get(id=credential_id)
@@ -89,8 +74,7 @@ class DatabaseCredentialProvider(CredentialProvider):
             )
         return ""
 
-    @staticmethod
-    def _inject_secret(variables: dict, credential: CredentialRef, secret: str):
+    def _inject_secret(self, variables: dict, credential: CredentialRef, secret: str):
         """Inject resolved secret into Ansible variables based on credential type."""
         if credential.type == CredentialRef.CredentialType.PASSWORD:
             variables["ansible_password"] = secret
@@ -98,26 +82,20 @@ class DatabaseCredentialProvider(CredentialProvider):
             # 速度远优于 paramiko；前提是 worker 节点已安装 sshpass。
         elif credential.type == CredentialRef.CredentialType.SSH_KEY:
             # secret is either a file path (from file: ref) or raw key content
-            if secret.startswith("/") and Path(secret).is_file():
+            if credential.secret_ref.startswith("file:") and not credential.encrypted_secret and Path(secret).is_file():
                 variables["ansible_private_key_file"] = secret
             else:
                 # Write key content to a temp file (INI inventory cannot hold multiline values)
-                key_path = DatabaseCredentialProvider._write_key_to_tmp(
+                key_path = self._write_key_to_tmp(
                     secret, credential.id
                 )
                 variables["ansible_private_key_file"] = str(key_path)
 
-    @staticmethod
-    def _write_key_to_tmp(key_content: str, credential_id: int) -> Path:
-        """Write SSH private key content to a temp file with 0600 permissions.
-
-        Returns the path to the key file. The file is reused across calls for the
-        same credential to avoid excessive file creation.
-        """
-        _KEY_TMP_DIR.mkdir(parents=True, exist_ok=True)
-        key_path = _KEY_TMP_DIR / f"cred_{credential_id}.key"
-        # Only rewrite if content changed (simple size heuristic + overwrite)
-        key_path.write_text(key_content, encoding="utf-8")
-        # Restrict permissions: owner read/write only
-        os.chmod(key_path, stat.S_IRUSR | stat.S_IWUSR)
-        return key_path
+    def _write_key_to_tmp(self, key_content: str, credential_id: int) -> Path:
+        if self.key_directory is None:
+            raise ValueError("Execution-owned key directory is required")
+        descriptor, name = tempfile.mkstemp(prefix=f"cred-{credential_id}-", suffix=".key", dir=self.key_directory)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            os.chmod(name, stat.S_IRUSR | stat.S_IWUSR)
+            stream.write(key_content)
+        return Path(name)

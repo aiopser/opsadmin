@@ -47,3 +47,13 @@ WorkerPool/serializer/view/admin 仅归 jobs，表 jobs_worker_pool，唯一 API
 删除：CMDB WorkerPool 模型、serializer/view/admin、旧路由、init_cmdb_defaults；旧 CMDB 引用仅存在历史迁移（T09 统一重建）和断言旧路由 404 的负向测试。原 CMDB config_summary 测试中池断言移至 jobs 的 API/队列用例，资产配置断言保持。
 
 专项 worker pools + CMDB 17 passed，最终全量 258 passed / 14 原基线 failed / 13 subtests passed（54.97 秒），迁移差异检查通过。新增 jobs/0025、0026 与 cmdb/0010 仅测试空库执行，无历史池数据搬迁。未验证真实 Worker 在线/失联、真实凭据临时文件生命周期（T06/T07），未声称 SQLite 等价 MySQL。
+
+## P3 / T06 唯一执行契约
+
+新增 ops/contracts.py 与 AnsibleExecutor.execute；jobs 两条当前运行路径、CMDB 资产连接探测和事实采集直接使用统一执行器。RunnerEvent 在边界脱敏并保留未知事件；无主机回调、失败主机回调均不能被退出码 0 覆盖。取消、超时、异常及执行自有目录生命周期有专项测试。凭据私钥改为执行目录内唯一临时文件，移除全局固定凭据文件；执行前重验资产授权/状态，保留原运行快照。连接测试现只接受 hostId，使用资产绑定凭据和网关；事实采集必须提供 actor_id。仓库前端没有调用这两个旧协议的代码。
+
+删除：ops/workflow/adapters.py、plans.py、ansible_service.py 和 ops/services.py；AnsibleExecutionInput、旧 Callback stdout 打印、inspect.signature 适配及固定全局 SSH key 文件逻辑。旧包装测试替换为 execute 业务契约、no_log/临时目录/adhoc 参数测试；未删除失败业务断言。缺失环境凭据测试改用真实 CredentialRef 对象修复原不完整替身。
+
+实际测试：执行器 12 passed；CMDB 授权/私钥成功及异常清理 3 passed；jobs Ansible + 执行前停用 20 passed；最终全量 270 passed / 13 原基线 failed / 13 subtests passed（57.72 秒）。compileall 通过，diff 空白问题已修复。没有连接任何真实目标。
+
+未完成：真实 SSH/WinRM/网关集成属 T07；自有迁移重建 T09；底层旧 tasklog 日志链 T11。当前 services.py 的职责拆分及统一创建入口在 T08/T13，旧 Runner Adapter/Service 入口已删除。

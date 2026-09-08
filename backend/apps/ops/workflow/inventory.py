@@ -41,8 +41,8 @@ def _host_line(host, credential_provider):
     return " ".join(parts)
 
 
-def build_inventory(host_snapshots, group_vars=None):
-    credential_provider = DatabaseCredentialProvider()
+def build_inventory(host_snapshots, group_vars=None, *, key_directory=None):
+    credential_provider = DatabaseCredentialProvider(key_directory)
     linux_hosts = []
     windows_hosts = []
     for host in host_snapshots:

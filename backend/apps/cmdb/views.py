@@ -468,80 +468,18 @@ class CredentialRefViewSet(CMDBAuditModelViewSet):
 
     @action(detail=False, methods=["post"], url_path="test-connection")
     def test_connection(self, request):
-        """Test SSH/WinRM connectivity using credential + target host."""
-        credential_id = request.data.get("credential_id")
-        host_ip = request.data.get("host_ip", "").strip()
-        port = request.data.get("port")
-        gateway_id = request.data.get("gateway_id")
+        """Probe an authorized asset using its bound credential and gateway."""
+        from .execution import execute_asset_module
+        from .targets import resolve_targets
 
-        if not credential_id:
-            return api_error_response("请选择凭据")
-        if not host_ip:
-            return api_error_response("请输入目标主机 IP")
-
-        credential = CredentialRef.objects.filter(id=credential_id).first()
-        if not credential:
-            return api_error_response("凭据不存在")
-
-        effective_port = int(port) if port else (credential.effective_port or 22)
-
-        conn_type = credential.connection_type or "ssh"
-        private_data_dir = ""
-        try:
-            from apps.jobs.services import prepare_host_gateway_execution
-            from apps.ops.adapters import AnsibleExecutionInput
-            from apps.ops.services import JumpServerAnsibleService
-            from apps.ops.workflow.inventory import build_inventory
-
-            hosts, group_vars, private_data_dir = prepare_host_gateway_execution(
-                [
-                    {
-                        "host_id": 0,
-                        "hostname": "target",
-                        "ip": host_ip,
-                        "os_family": "windows" if conn_type == "winrm" else "linux",
-                        "connection_type": conn_type,
-                        "connection_port": effective_port,
-                        "credential_ref_id": credential.id,
-                        "default_gateway_id": gateway_id,
-                    }
-                ]
-            )
-            inventory_text = build_inventory(hosts, group_vars)
-            if not private_data_dir:
-                private_data_dir = tempfile.mkdtemp(prefix="devops-connection-test-")
-
-            service = JumpServerAnsibleService()
-            execution = AnsibleExecutionInput(
-                inventory=inventory_text,
-                module="ping",
-                host_pattern="all",
-                private_data_dir=private_data_dir,
-                timeout=15,
-            )
-            cb = service.run(execution)
-            if cb.is_success():
-                return api_ok_response({"success": True, "message": "连接成功"})
-            error_msg = ""
-            for host_data in cb.result.get("dark", {}).values():
-                for detail in host_data.values():
-                    error_msg = detail.get("stderr") or detail.get("res", {}).get(
-                        "msg", ""
-                    )
-                    break
-            for host_data in cb.result.get("failures", {}).values():
-                for detail in host_data.values():
-                    error_msg = detail.get("stderr") or detail.get("res", {}).get(
-                        "msg", ""
-                    )
-                    break
-            return api_ok_response({"success": False, "message": error_msg or "连接失败"})
-        except Exception as exc:
-            return api_ok_response({"success": False, "message": str(exc)})
-        finally:
-            if private_data_dir:
-                shutil.rmtree(private_data_dir, ignore_errors=True)
-
+        host_id = request.data.get("hostId")
+        targets = resolve_targets(actor=request.user, host_ids=[host_id], group_ids=[])
+        module = "ansible.windows.win_ping" if targets[0]["connection_type"] == "winrm" else "ansible.builtin.ping"
+        result = execute_asset_module(
+            actor=request.user, host_id=host_id, module=module, timeout=15, on_event=lambda event: None,
+        )
+        success = result.status == "success"
+        return api_ok_response({"success": success, "message": "连接成功" if success else "连接失败"})
 
 
 
