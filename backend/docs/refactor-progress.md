@@ -71,3 +71,13 @@ WorkerPool/serializer/view/admin 仅归 jobs，表 jobs_worker_pool，唯一 API
 实际验证：调度契约 9 passed。全量首轮 279 passed / 13 原基线 failed / 3 T07 明确 skipped / 13 subtests passed（58.00 秒）。随后取消/超时映射与失联语义补验：jobs/tests.py + 调度契约 86 passed / 1 原图表达式失败 / 15 subtests passed（18.80 秒）。旧 jobs.services/Celery fallback 引用清零，git diff --check 通过。
 
 未完成：真实多 Worker/Redis 故障集成、MySQL 并发锁语义；事件持久化目前仍多处写入，T09 统一并加 sequence/幂等约束。恢复调度记录查询的批量效率在后续事件索引及 T15 验证。
+
+## P4 / T09 事件序列、幂等投影与新迁移基线
+
+新增 append_run_event 唯一事件写入口，run 行锁分配 sequence；event_key 按 node/attempt 隔离，同事务写日志及投影；重复返回已有事件。新增 run.event_sequence、事件 sequence/event_key/attempt 及数据库唯一约束；投影记录 last_sequence/attempt，拒绝旧 attempt 和乱序 counter 覆盖，终态不会回退到运行态。仅对 MySQL 1205/1213 做最多三次事务重试。全部内部事件和 Runner 调用直接更新。
+
+删除：persist_runner_event、所有运行时旁路 JobEventLog.objects.create（仅唯一入口保留）；80 个项目历史迁移源文件及历史 ops label；三项旧回填迁移测试替换为新空库实际数据库约束/事件幂等测试。实际 makemigrations 生成 11 个 initial 文件，保留第三方迁移，不提供旧库升级或数据回填。详见 migration-baseline.md。
+
+专项事件 9 个可执行用例通过，MySQL 并发用例明确 skipped；最终全量 288 passed / 11 原基线 failed / 4 明确 skipped / 15 subtests passed（95.23 秒）。4 skipped 为真实 Runner 3 项和 MySQL 并发 1 项。两项 automation 原种子干扰失败随新空库基线消除。SQLite 测试新库建库、迁移差异检查通过；Black 使用项目可写缓存完成格式化，diff --check 通过。
+
+未完成：MySQL 空库和并发真实验收、外部集成；T10 实时通知尚未接入，T11 stdout 归档尚未实现。没有连接或清空已有数据库。

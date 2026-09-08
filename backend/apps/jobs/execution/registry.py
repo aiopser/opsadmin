@@ -1,3 +1,4 @@
+from uuid import uuid4
 from django.db import transaction
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -8,12 +9,32 @@ from apps.cmdb.targets import snapshot_targets
 from apps.ops.contracts import AnsibleRunnerUnavailable, ExecutionPlan
 from apps.ops.executor import AnsibleExecutor
 from apps.ops.workflow.playbooks import build_playbook
-from apps.jobs.events import persist_runner_event
+from apps.jobs.events import append_run_event
 from apps.jobs.input_secrets import resolve_workflow_inputs
 from apps.jobs.models import HostRunResult, JobEventLog, NodeRun, WorkflowRun
 from apps.jobs.state_machine import ExecutionLease
-from apps.jobs.application.cancel import _is_workflow_run_canceled, _mark_workflow_work_canceled, should_stop_workflow_run
-from apps.jobs.execution.plan_builder import INTERNAL_INPUT_VAR_KEYS, InvalidGateway, InvalidSourcePlaybook, _ansible_execution_options, _apply_host_execution_options, _effective_ansible_timeout, _extract_version_outputs, _merge_node_vars, _node_command_spec, _node_playbook, _quick_command_adhoc_spec, _validate_version_arguments, build_gateway_inventory, build_source_playbook, wrap_command_lines_with_markers
+from apps.jobs.application.cancel import (
+    _is_workflow_run_canceled,
+    _mark_workflow_work_canceled,
+    should_stop_workflow_run,
+)
+from apps.jobs.execution.plan_builder import (
+    INTERNAL_INPUT_VAR_KEYS,
+    InvalidGateway,
+    InvalidSourcePlaybook,
+    _ansible_execution_options,
+    _apply_host_execution_options,
+    _effective_ansible_timeout,
+    _extract_version_outputs,
+    _merge_node_vars,
+    _node_command_spec,
+    _node_playbook,
+    _quick_command_adhoc_spec,
+    _validate_version_arguments,
+    build_gateway_inventory,
+    build_source_playbook,
+    wrap_command_lines_with_markers,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -91,12 +112,15 @@ def execute_ansible_node(node_run_id):
             "updated_at",
         ]
     )
-    JobEventLog.objects.create(
-        workflow_run=run,
-        node_run=node_run,
-        event_type="node_started",
-        message=f"Node {node.node_key} started.",
-        payload={"node_key": node.node_key, "runner_mode": "ansible"},
+    append_run_event(
+        run_id=(run).id,
+        node_run_id=(node_run).id,
+        event_key=uuid4().hex,
+        event={
+            "event_type": "node_started",
+            "message": f"Node {node.node_key} started.",
+            "payload": {"node_key": node.node_key, "runner_mode": "ansible"},
+        },
     )
 
     command_spec = _node_command_spec(node)
@@ -143,6 +167,11 @@ def execute_ansible_node(node_run_id):
         module_args=adhoc_spec[1] if adhoc_spec else "",
     )
     callbacks_received = False
+    runner_attempt_id = (
+        node_run.attempts.filter(attempt=node_run.attempt_count)
+        .values_list("id", flat=True)
+        .first()
+    )
 
     def handle_event(event):
         nonlocal callbacks_received
@@ -151,7 +180,13 @@ def execute_ansible_node(node_run_id):
         ExecutionLease.touch(run.id)
         if _is_workflow_run_canceled(run):
             return False
-        persist_runner_event(workflow_run=run, node_run=node_run, event=event.raw_event)
+        append_run_event(
+            run_id=(run).id,
+            node_run_id=(node_run).id,
+            attempt_id=runner_attempt_id,
+            event_key=str((event.raw_event).get("uuid") or uuid4().hex),
+            event=event.raw_event,
+        )
         return True
 
     def cancel_callback():
@@ -201,7 +236,10 @@ def execute_ansible_node(node_run_id):
         stdout = host_output.get("stdout") or ""
         extracted_outputs.update(extract_output_vars(stdout))
         extracted_outputs.update(_extract_version_outputs(stdout, command_spec))
-    node_run.status = {"canceled": NodeRun.Status.CANCELED, "timeout": NodeRun.Status.TIMEOUT}.get(status, NodeRun.Status.SUCCESS if success else NodeRun.Status.FAILED)
+    node_run.status = {
+        "canceled": NodeRun.Status.CANCELED,
+        "timeout": NodeRun.Status.TIMEOUT,
+    }.get(status, NodeRun.Status.SUCCESS if success else NodeRun.Status.FAILED)
     node_run.exit_code = rc
     node_run.finished_at = finished_at
     node_run.duration_ms = int((finished_at - node_started_at).total_seconds() * 1000)
@@ -218,12 +256,19 @@ def execute_ansible_node(node_run_id):
             "updated_at",
         ]
     )
-    JobEventLog.objects.create(
-        workflow_run=run,
-        node_run=node_run,
-        event_type="node_succeeded" if success else "node_failed",
-        message=f"Node {node.node_key} {'succeeded' if success else 'failed'}.",
-        payload={"node_key": node.node_key, "runner_status": status, "runner_rc": rc},
+    append_run_event(
+        run_id=(run).id,
+        node_run_id=(node_run).id,
+        event_key=uuid4().hex,
+        event={
+            "event_type": "node_succeeded" if success else "node_failed",
+            "message": f"Node {node.node_key} {('succeeded' if success else 'failed')}.",
+            "payload": {
+                "node_key": node.node_key,
+                "runner_status": status,
+                "runner_rc": rc,
+            },
+        },
     )
     return node_run
 
@@ -244,11 +289,15 @@ def _mark_workflow_failed(run, started_at, failure_reason):
             "updated_at",
         ]
     )
-    JobEventLog.objects.create(
-        workflow_run=run,
-        event_type="workflow_failed",
-        message=failure_reason,
-        payload={"workflow_run_id": run.id},
+    append_run_event(
+        run_id=(run).id,
+        node_run_id=None,
+        event_key=uuid4().hex,
+        event={
+            "event_type": "workflow_failed",
+            "message": failure_reason,
+            "payload": {"workflow_run_id": run.id},
+        },
     )
     return run
 
@@ -269,11 +318,15 @@ def run_workflow_ansible(workflow_run_id):
             started_at,
             "Workflow version is required.",
         )
-    JobEventLog.objects.create(
-        workflow_run=run,
-        event_type="workflow_started",
-        message="Workflow run started by ansible-runner.",
-        payload={"workflow_run_id": run.id, "runner_mode": "ansible"},
+    append_run_event(
+        run_id=(run).id,
+        node_run_id=None,
+        event_key=uuid4().hex,
+        event={
+            "event_type": "workflow_started",
+            "message": "Workflow run started by ansible-runner.",
+            "payload": {"workflow_run_id": run.id, "runner_mode": "ansible"},
+        },
     )
 
     try:
@@ -312,12 +365,15 @@ def run_workflow_ansible(workflow_run_id):
                 "failure_reason": "",
             },
         )
-        JobEventLog.objects.create(
-            workflow_run=run,
-            node_run=node_run,
-            event_type="node_started",
-            message=f"Node {node.node_key} started.",
-            payload={"node_key": node.node_key, "runner_mode": "ansible"},
+        append_run_event(
+            run_id=(run).id,
+            node_run_id=(node_run).id,
+            event_key=uuid4().hex,
+            event={
+                "event_type": "node_started",
+                "message": f"Node {node.node_key} started.",
+                "payload": {"node_key": node.node_key, "runner_mode": "ansible"},
+            },
         )
 
         extra_vars = _merge_node_vars(run, node)
@@ -362,6 +418,11 @@ def run_workflow_ansible(workflow_run_id):
         )
 
         callbacks_received = False
+        runner_attempt_id = (
+            node_run.attempts.filter(attempt=node_run.attempt_count)
+            .values_list("id", flat=True)
+            .first()
+        )
 
         def handle_event(event):
             nonlocal callbacks_received
@@ -369,9 +430,11 @@ def run_workflow_ansible(workflow_run_id):
             ExecutionLease.touch(run.id)
             if _is_workflow_run_canceled(run):
                 return False
-            persist_runner_event(
-                workflow_run=run,
-                node_run=node_run,
+            append_run_event(
+                run_id=(run).id,
+                node_run_id=(node_run).id,
+                attempt_id=runner_attempt_id,
+                event_key=str((event.raw_event).get("uuid") or uuid4().hex),
                 event=event.raw_event,
             )
             return True
@@ -456,19 +519,20 @@ def run_workflow_ansible(workflow_run_id):
                 "updated_at",
             ]
         )
-        JobEventLog.objects.create(
-            workflow_run=run,
-            node_run=node_run,
-            event_type="node_succeeded" if node_success else "node_failed",
-            message=(
-                f"Node {node.node_key} succeeded."
+        append_run_event(
+            run_id=(run).id,
+            node_run_id=(node_run).id,
+            event_key=uuid4().hex,
+            event={
+                "event_type": "node_succeeded" if node_success else "node_failed",
+                "message": f"Node {node.node_key} succeeded."
                 if node_success
-                else f"Node {node.node_key} failed."
-            ),
-            payload={
-                "node_key": node.node_key,
-                "runner_status": status,
-                "runner_rc": rc,
+                else f"Node {node.node_key} failed.",
+                "payload": {
+                    "node_key": node.node_key,
+                    "runner_status": status,
+                    "runner_rc": rc,
+                },
             },
         )
 
@@ -498,10 +562,14 @@ def run_workflow_ansible(workflow_run_id):
             "updated_at",
         ]
     )
-    JobEventLog.objects.create(
-        workflow_run=run,
-        event_type="workflow_succeeded",
-        message="Workflow run succeeded.",
-        payload={"workflow_run_id": run.id, "runner_mode": "ansible"},
+    append_run_event(
+        run_id=(run).id,
+        node_run_id=None,
+        event_key=uuid4().hex,
+        event={
+            "event_type": "workflow_succeeded",
+            "message": "Workflow run succeeded.",
+            "payload": {"workflow_run_id": run.id, "runner_mode": "ansible"},
+        },
     )
     return run

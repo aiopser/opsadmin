@@ -1,3 +1,5 @@
+from uuid import uuid4
+from apps.jobs.events import append_run_event
 import csv
 import socket
 from datetime import datetime, timedelta
@@ -28,23 +30,43 @@ class WorkerPoolViewSet(StandardModelViewSet):
 
     def perform_create(self, serializer, request=None):
         instance = serializer.save()
-        create_domain_audit_event(self.request.user, "jobs.worker_pool.create", "worker_pool", instance.pk, after=serializer.data)
+        create_domain_audit_event(
+            self.request.user,
+            "jobs.worker_pool.create",
+            "worker_pool",
+            instance.pk,
+            after=serializer.data,
+        )
 
     def perform_update(self, serializer, request=None):
         before = self.get_serializer(serializer.instance).data
         instance = serializer.save()
-        create_domain_audit_event(self.request.user, "jobs.worker_pool.update", "worker_pool", instance.pk, before=before, after=serializer.data)
+        create_domain_audit_event(
+            self.request.user,
+            "jobs.worker_pool.update",
+            "worker_pool",
+            instance.pk,
+            before=before,
+            after=serializer.data,
+        )
 
     def perform_destroy(self, instance):
         before = self.get_serializer(instance).data
         identifier = instance.pk
         instance.delete()
-        create_domain_audit_event(self.request.user, "jobs.worker_pool.delete", "worker_pool", identifier, before=before)
+        create_domain_audit_event(
+            self.request.user,
+            "jobs.worker_pool.delete",
+            "worker_pool",
+            identifier,
+            before=before,
+        )
 
     @transaction.atomic
     def destroy(self, request, *args, **kwargs):
         self.perform_destroy(self.get_object())
         return api_ok_response()
+
 
 from apps.audit_center.services import create_domain_audit_event
 from .recovery import recover_stale_execution
@@ -56,7 +78,11 @@ from .settings_service import (
     save_engine_settings,
     save_notify_settings,
 )
-from apps.jobs.application.runs import InvalidTargetHosts, create_workflow_run_from_host_ids, scheduled_job_run_options
+from apps.jobs.application.runs import (
+    InvalidTargetHosts,
+    create_workflow_run_from_host_ids,
+    scheduled_job_run_options,
+)
 from .models import (
     CommandIntercept,
     Gateway,
@@ -268,11 +294,15 @@ class WorkflowRunViewSet(StandardModelViewSet):
             },
             request=request,
         )
-        JobEventLog.objects.create(
-            workflow_run=run,
-            event_type="workflow_dispatch_requested",
-            message="Workflow run dispatch requested.",
-            payload={"workflow_run_id": run.id},
+        append_run_event(
+            run_id=(run).id,
+            node_run_id=None,
+            event_key=uuid4().hex,
+            event={
+                "event_type": "workflow_dispatch_requested",
+                "message": "Workflow run dispatch requested.",
+                "payload": {"workflow_run_id": run.id},
+            },
         )
         transaction.on_commit(lambda: enqueue_workflow_run(run.id))
         run.refresh_from_db()
@@ -312,11 +342,15 @@ class WorkflowRunViewSet(StandardModelViewSet):
 
         previous_status = run.status
         run = request_execution_cancel(run.id)
-        JobEventLog.objects.create(
-            workflow_run=run,
-            event_type="workflow_cancel_requested",
-            message="Workflow run cancellation requested.",
-            payload={"workflow_run_id": run.id},
+        append_run_event(
+            run_id=(run).id,
+            node_run_id=None,
+            event_key=uuid4().hex,
+            event={
+                "event_type": "workflow_cancel_requested",
+                "message": "Workflow run cancellation requested.",
+                "payload": {"workflow_run_id": run.id},
+            },
         )
         create_domain_audit_event(
             actor=request.user,
@@ -336,11 +370,18 @@ class WorkflowRunViewSet(StandardModelViewSet):
             return api_error_response(message="只有失败的执行任务可以重试")
 
         retry_run = self._clone_run(run, request.user)
-        JobEventLog.objects.create(
-            workflow_run=retry_run,
-            event_type="workflow_retry_requested",
-            message="Retry failed nodes requested.",
-            payload={"source_workflow_run_id": run.id, "workflow_run_id": retry_run.id},
+        append_run_event(
+            run_id=(retry_run).id,
+            node_run_id=None,
+            event_key=uuid4().hex,
+            event={
+                "event_type": "workflow_retry_requested",
+                "message": "Retry failed nodes requested.",
+                "payload": {
+                    "source_workflow_run_id": run.id,
+                    "workflow_run_id": retry_run.id,
+                },
+            },
         )
         create_domain_audit_event(
             actor=request.user,
@@ -370,11 +411,18 @@ class WorkflowRunViewSet(StandardModelViewSet):
             return api_error_response(message="未结束的执行任务不能重跑")
 
         rerun_run = self._clone_run(run, request.user)
-        JobEventLog.objects.create(
-            workflow_run=rerun_run,
-            event_type="workflow_rerun_requested",
-            message="Workflow run rerun requested.",
-            payload={"source_workflow_run_id": run.id, "workflow_run_id": rerun_run.id},
+        append_run_event(
+            run_id=(rerun_run).id,
+            node_run_id=None,
+            event_key=uuid4().hex,
+            event={
+                "event_type": "workflow_rerun_requested",
+                "message": "Workflow run rerun requested.",
+                "payload": {
+                    "source_workflow_run_id": run.id,
+                    "workflow_run_id": rerun_run.id,
+                },
+            },
         )
         create_domain_audit_event(
             actor=request.user,
@@ -446,11 +494,15 @@ class QuickCommandRunViewSet(StandardModelViewSet):
             },
             request=request,
         )
-        JobEventLog.objects.create(
-            workflow_run=run,
-            event_type="workflow_dispatch_requested",
-            message="Quick-command workflow run dispatch requested.",
-            payload={"workflow_run_id": run.id},
+        append_run_event(
+            run_id=(run).id,
+            node_run_id=None,
+            event_key=uuid4().hex,
+            event={
+                "event_type": "workflow_dispatch_requested",
+                "message": "Quick-command workflow run dispatch requested.",
+                "payload": {"workflow_run_id": run.id},
+            },
         )
         transaction.on_commit(lambda: enqueue_workflow_run(run.id))
         run.refresh_from_db()
@@ -524,11 +576,15 @@ class ScheduledJobViewSet(StandardModelViewSet):
             )
         except InvalidTargetHosts:
             return api_error_response("定时任务包含无效或未启用的目标主机")
-        JobEventLog.objects.create(
-            workflow_run=run,
-            event_type="workflow_dispatch_requested",
-            message="Scheduled workflow run manually dispatched.",
-            payload={"scheduled_job_id": schedule.id, "workflow_run_id": run.id},
+        append_run_event(
+            run_id=(run).id,
+            node_run_id=None,
+            event_key=uuid4().hex,
+            event={
+                "event_type": "workflow_dispatch_requested",
+                "message": "Scheduled workflow run manually dispatched.",
+                "payload": {"scheduled_job_id": schedule.id, "workflow_run_id": run.id},
+            },
         )
         schedule.last_run_at = timezone.now()
         schedule.last_workflow_run = run
@@ -702,11 +758,15 @@ class PlaybookRunViewSet(StandardModelViewSet):
             },
             request=request,
         )
-        JobEventLog.objects.create(
-            workflow_run=run,
-            event_type="workflow_dispatch_requested",
-            message="Playbook workflow run dispatch requested.",
-            payload={"workflow_run_id": run.id},
+        append_run_event(
+            run_id=(run).id,
+            node_run_id=None,
+            event_key=uuid4().hex,
+            event={
+                "event_type": "workflow_dispatch_requested",
+                "message": "Playbook workflow run dispatch requested.",
+                "payload": {"workflow_run_id": run.id},
+            },
         )
         transaction.on_commit(lambda: enqueue_workflow_run(run.id))
         run.refresh_from_db()
@@ -737,11 +797,15 @@ class ModuleRunViewSet(StandardModelViewSet):
             },
             request=request,
         )
-        JobEventLog.objects.create(
-            workflow_run=run,
-            event_type="workflow_dispatch_requested",
-            message="Module ad-hoc workflow run dispatch requested.",
-            payload={"workflow_run_id": run.id},
+        append_run_event(
+            run_id=(run).id,
+            node_run_id=None,
+            event_key=uuid4().hex,
+            event={
+                "event_type": "workflow_dispatch_requested",
+                "message": "Module ad-hoc workflow run dispatch requested.",
+                "payload": {"workflow_run_id": run.id},
+            },
         )
         transaction.on_commit(lambda: enqueue_workflow_run(run.id))
         run.refresh_from_db()
@@ -823,10 +887,7 @@ class DashboardHealthView(APIView):
             queue_name: sorted(
                 node_name
                 for node_name, worker_queues in active_queues.items()
-                if any(
-                    item.get("name") == queue_name
-                    for item in (worker_queues or [])
-                )
+                if any(item.get("name") == queue_name for item in (worker_queues or []))
             )
             for queue_name in queues
         }
@@ -886,7 +947,9 @@ class DashboardRecentView(APIView):
             run_domain=WorkflowRun.RunDomain.OPS,
         ).select_related(
             "workflow_version", "workflow_version__workflow", "triggered_by"
-        )[:10]
+        )[
+            :10
+        ]
         items = []
         for run in runs:
             input_vars = run.input_vars or {}

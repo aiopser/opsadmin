@@ -1,3 +1,5 @@
+from uuid import uuid4
+from apps.jobs.events import append_run_event
 from collections import defaultdict
 from datetime import timedelta
 
@@ -166,12 +168,15 @@ def _mark_control_success(run, node_run):
             "updated_at",
         ]
     )
-    JobEventLog.objects.create(
-        workflow_run=run,
-        node_run=node_run,
-        event_type="node_succeeded",
-        message=f"Control node {node_run.node_key} completed.",
-        payload={"node_key": node_run.node_key, "node_type": node_run.node_type},
+    append_run_event(
+        run_id=(run).id,
+        node_run_id=(node_run).id,
+        event_key=uuid4().hex,
+        event={
+            "event_type": "node_succeeded",
+            "message": f"Control node {node_run.node_key} completed.",
+            "payload": {"node_key": node_run.node_key, "node_type": node_run.node_type},
+        },
     )
 
 
@@ -214,8 +219,9 @@ def plan_dispatch(workflow_run_id):
     }:
         return []
     if run.status == WorkflowRun.Status.CANCEL_REQUESTED:
-        run.node_runs.filter(status__in=[NodeRun.Status.PENDING, NodeRun.Status.QUEUED]).update(
-            status=NodeRun.Status.CANCELED, finished_at=timezone.now())
+        run.node_runs.filter(
+            status__in=[NodeRun.Status.PENDING, NodeRun.Status.QUEUED]
+        ).update(status=NodeRun.Status.CANCELED, finished_at=timezone.now())
         if not run.node_runs.filter(status=NodeRun.Status.RUNNING).exists():
             run.status = WorkflowRun.Status.CANCELED
             run.finished_at = timezone.now()
@@ -293,11 +299,15 @@ def plan_dispatch(workflow_run_id):
             seconds=run.timeout_seconds
         )
         run.status = WorkflowRun.Status.RUNNING
-        JobEventLog.objects.create(
-            workflow_run=run,
-            event_type="workflow_started",
-            message="Workflow graph execution started.",
-            payload={"workflow_run_id": run.id},
+        append_run_event(
+            run_id=(run).id,
+            node_run_id=None,
+            event_key=uuid4().hex,
+            event={
+                "event_type": "workflow_started",
+                "message": "Workflow graph execution started.",
+                "payload": {"workflow_run_id": run.id},
+            },
         )
 
     for node_run in node_runs.values():
@@ -360,10 +370,7 @@ def plan_dispatch(workflow_run_id):
     for node_key, item in nodes.items():
         node_run = node_runs[node_key]
         node_type = item.get("type")
-        if (
-            node_run.status != NodeRun.Status.PENDING
-            or node_type in CONTROL_NODE_TYPES
-        ):
+        if node_run.status != NodeRun.Status.PENDING or node_type in CONTROL_NODE_TYPES:
             continue
         if not _node_is_ready(node_key, node_type, incoming, active_edges, node_runs):
             continue
@@ -409,11 +416,15 @@ def plan_dispatch(workflow_run_id):
                 run.node_runs.filter(status=NodeRun.Status.PENDING).update(
                     status=NodeRun.Status.SKIPPED, finished_at=now
                 )
-                JobEventLog.objects.create(
-                    workflow_run=run,
-                    event_type="workflow_succeeded",
-                    message="Workflow graph execution succeeded.",
-                    payload={"workflow_run_id": run.id},
+                append_run_event(
+                    run_id=(run).id,
+                    node_run_id=None,
+                    event_key=uuid4().hex,
+                    event={
+                        "event_type": "workflow_succeeded",
+                        "message": "Workflow graph execution succeeded.",
+                        "payload": {"workflow_run_id": run.id},
+                    },
                 )
             else:
                 run.status = WorkflowRun.Status.FAILED

@@ -9,6 +9,7 @@ class JobEvent:
     event_type: str
     sequence: int
     node_id: int | None = None
+    attempt_id: int | None = None
     host_id: int | None = None
     message: str = ""
     payload: dict = field(default_factory=dict)
@@ -18,7 +19,7 @@ class JobEvent:
     result: dict = field(default_factory=dict)
 
     @classmethod
-    def from_sanitized(cls, *, run_id, sequence, event):
+    def from_sanitized(cls, *, run_id, sequence, event, attempt_id=None):
         normalized = normalize_runner_event(
             {"event": event.get("event"), "event_data": event.get("event_data")}
         )
@@ -26,6 +27,7 @@ class JobEvent:
             run_id=run_id,
             event_type=normalized.event_type if normalized else event["event"],
             sequence=sequence,
+            attempt_id=attempt_id,
             host_id=event.get("host_id"),
             message=event.get("message", ""),
             payload=event.get("payload") or {},
@@ -37,6 +39,8 @@ class JobEvent:
 
     def as_runner_event(self):
         return {
+            "sequence": self.sequence,
+            "attempt_id": self.attempt_id,
             "event": self.source_event_type or self.event_type,
             "host_id": self.host_id,
             "hostname": self.hostname,

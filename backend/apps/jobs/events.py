@@ -5,13 +5,14 @@ import re
 
 from common.redaction import REDACTED_VALUE, SENSITIVE_KEY_PATTERN, redact_text
 
-from django.db import transaction
+from django.db import OperationalError, transaction
 from django.utils import timezone
 
 from apps.ops.workflow.events import normalize_runner_event
 from apps.ops.workflow.inventory import inventory_hostname
 
-from .models import HostRunResult, JobEventLog
+from .models import HostRunResult, JobEventLog, NodeRun, NodeRunAttempt, WorkflowRun
+from common.redaction import redact_value
 
 
 logger = logging.getLogger(__name__)
@@ -228,13 +229,32 @@ def update_host_result_from_event(*, node_run, event):
         ip,
         status,
     )
+    defaults["last_sequence"] = event.get("sequence", 0)
+    defaults["attempt_id"] = event.get("attempt_id")
     host_result, created = HostRunResult.objects.select_for_update().get_or_create(
         defaults=defaults,
         **lookup,
     )
+    previous_counter = (host_result.raw_event_data.get("runner_event") or {}).get(
+        "counter"
+    )
+    incoming_counter = (event["payload"].get("runner_event") or {}).get("counter")
+    if not created and host_result.attempt_id == defaults["attempt_id"]:
+        if (
+            isinstance(previous_counter, int)
+            and isinstance(incoming_counter, int)
+            and incoming_counter <= previous_counter
+        ):
+            return host_result
     if created or (
-        host_result.status in TERMINAL_HOST_STATUSES
-        and status not in TERMINAL_HOST_STATUSES
+        host_result.attempt_id == defaults["attempt_id"]
+        and (
+            host_result.last_sequence > defaults["last_sequence"]
+            or (
+                host_result.status in TERMINAL_HOST_STATUSES
+                and status not in TERMINAL_HOST_STATUSES
+            )
+        )
     ):
         return host_result
 
@@ -244,29 +264,87 @@ def update_host_result_from_event(*, node_run, event):
     return host_result
 
 
-@transaction.atomic
-def persist_runner_event(*, workflow_run, node_run, event):
-    if node_run.workflow_run_id != workflow_run.id:
-        raise ValueError("node_run does not belong to workflow_run")
-    safe_event = sanitize_runner_event(event)
-    host_id, _, _ = _resolve_event_host(workflow_run, safe_event)
-    safe_event["host_id"] = host_id
-    log = JobEventLog.objects.create(
-        workflow_run=workflow_run,
-        node_run=node_run,
-        host_id=safe_event["host_id"],
-        event_type=safe_event["event"],
-        message=safe_event["message"],
-        payload=safe_event["payload"],
-    )
-    from .event_types import JobEvent
-    from .projections import JobEventProjector
+def append_run_event(*, run_id, node_run_id=None, attempt_id=None, event_key, event):
+    """Serialize run events and project once, retrying only bounded database deadlocks."""
+    if not isinstance(event_key, str) or not event_key or len(event_key) > 200:
+        raise ValueError("Event key must contain 1 to 200 characters")
+    if not isinstance(event, dict):
+        raise ValueError("Event must be an object")
+    for retry in range(3):
+        try:
+            return _append_once(run_id, node_run_id, attempt_id, event_key, event)
+        except OperationalError as exc:
+            if not exc.args or exc.args[0] not in {1205, 1213} or retry == 2:
+                raise
 
-    JobEventProjector(workflow_run=workflow_run, node_run=node_run,).apply(
-        JobEvent.from_sanitized(
-            run_id=workflow_run.id,
-            sequence=log.id,
-            event=safe_event,
-        )
+
+@transaction.atomic
+def _append_once(run_id, node_run_id, attempt_id, event_key, event):
+    run = WorkflowRun.objects.select_for_update().get(pk=run_id)
+    node = (
+        NodeRun.objects.filter(pk=node_run_id, workflow_run_id=run_id).first()
+        if node_run_id
+        else None
     )
+    if node_run_id and node is None:
+        raise ValueError("Node does not belong to run")
+    if attempt_id is None and node is not None:
+        attempt_id = (
+            node.attempts.filter(attempt=node.attempt_count)
+            .values_list("id", flat=True)
+            .first()
+        )
+    attempt = (
+        NodeRunAttempt.objects.filter(pk=attempt_id, node_run_id=node_run_id).first()
+        if attempt_id
+        else None
+    )
+    if attempt_id and (node is None or attempt is None):
+        raise ValueError("Attempt does not belong to node")
+    # A producer key is unique within its node/attempt, including internal run events.
+    scoped_key = f"{node_run_id or 0}:{attempt_id or 0}:{event_key}"
+    previous = JobEventLog.objects.filter(
+        workflow_run=run, event_key=scoped_key
+    ).first()
+    if previous:
+        return previous
+    runner_event = "event" in event
+    safe = (
+        sanitize_runner_event(event)
+        if runner_event
+        else {
+            "event": str(event.get("event_type") or "run_event"),
+            "message": redact_text(str(event.get("message") or "")),
+            "payload": redact_value(event.get("payload") or {}),
+            "host_id": event.get("host_id"),
+        }
+    )
+    if runner_event:
+        safe["host_id"] = _resolve_event_host(run, safe)[0]
+    run.event_sequence += 1
+    run.save(update_fields=["event_sequence"])
+    log = JobEventLog.objects.create(
+        workflow_run=run,
+        node_run=node,
+        attempt=attempt,
+        sequence=run.event_sequence,
+        event_key=scoped_key,
+        host_id=safe["host_id"],
+        event_type=safe["event"],
+        message=safe["message"],
+        payload=safe["payload"],
+    )
+    if (
+        runner_event
+        and node
+        and (attempt is None or attempt.attempt == node.attempt_count)
+    ):
+        from .event_types import JobEvent
+        from .projections import JobEventProjector
+
+        JobEventProjector(workflow_run=run, node_run=node).apply(
+            JobEvent.from_sanitized(
+                run_id=run.id, sequence=log.sequence, attempt_id=attempt_id, event=safe
+            )
+        )
     return log

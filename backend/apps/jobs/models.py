@@ -93,6 +93,7 @@ class WorkflowRun(StandardModelMixin):
     context_vars = models.JSONField(default=dict, blank=True)
     graph_snapshot = models.JSONField(default=dict, blank=True)
     target_snapshot = models.JSONField(default=list, blank=True)
+    event_sequence = models.PositiveBigIntegerField(default=0)
     worker_pool = models.ForeignKey(
         "jobs.WorkerPool",
         on_delete=models.PROTECT,
@@ -116,8 +117,12 @@ class WorkflowRun(StandardModelMixin):
         db_table = "jobs_workflow_run"
         ordering = ["-id"]
         indexes = [
-            models.Index(fields=["run_domain", "status"], name="jobs_run_domain_status_idx"),
-            models.Index(fields=["run_domain", "created_at"], name="jobs_run_domain_created_idx"),
+            models.Index(
+                fields=["run_domain", "status"], name="jobs_run_domain_status_idx"
+            ),
+            models.Index(
+                fields=["run_domain", "created_at"], name="jobs_run_domain_created_idx"
+            ),
         ]
 
 
@@ -295,6 +300,10 @@ class HostRunResult(StandardModelMixin):
     host_id = models.IntegerField(null=True, blank=True)
     hostname = models.CharField(max_length=128)
     host_key = models.CharField(max_length=140)
+    last_sequence = models.PositiveBigIntegerField(default=0)
+    attempt = models.ForeignKey(
+        NodeRunAttempt, null=True, blank=True, on_delete=models.SET_NULL
+    )
     ip = models.GenericIPAddressField()
     status = models.CharField(
         max_length=16,
@@ -335,6 +344,11 @@ class HostRunResult(StandardModelMixin):
 
 
 class JobEventLog(StandardModelMixin):
+    sequence = models.PositiveBigIntegerField()
+    event_key = models.CharField(max_length=256)
+    attempt = models.ForeignKey(
+        NodeRunAttempt, null=True, blank=True, on_delete=models.PROTECT
+    )
     workflow_run = models.ForeignKey(
         WorkflowRun,
         on_delete=models.CASCADE,
@@ -354,7 +368,15 @@ class JobEventLog(StandardModelMixin):
 
     class Meta:
         db_table = "jobs_event_log"
-        ordering = ["id"]
+        ordering = ["sequence"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["workflow_run", "sequence"], name="jobs_event_run_sequence_uniq"
+            ),
+            models.UniqueConstraint(
+                fields=["workflow_run", "event_key"], name="jobs_event_run_key_uniq"
+            ),
+        ]
 
 
 class SecurityRule(StandardModelMixin):

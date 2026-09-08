@@ -1,3 +1,5 @@
+from uuid import uuid4
+from apps.jobs.events import append_run_event
 import logging
 
 from celery import current_task, shared_task
@@ -19,8 +21,16 @@ from apps.jobs.models import (
 from apps.jobs.node_executors import execute_generic_node, record_generic_result
 from apps.jobs.recovery import recover_stale_executions
 from apps.jobs.state_machine import ExecutionLease
-from apps.jobs.application.dispatch import enqueue_node_run, enqueue_workflow_run, recover_pending_dispatches
-from apps.jobs.application.runs import InvalidTargetHosts, create_workflow_run_from_host_ids, scheduled_job_run_options
+from apps.jobs.application.dispatch import (
+    enqueue_node_run,
+    enqueue_workflow_run,
+    recover_pending_dispatches,
+)
+from apps.jobs.application.runs import (
+    InvalidTargetHosts,
+    create_workflow_run_from_host_ids,
+    scheduled_job_run_options,
+)
 from apps.jobs.execution.registry import execute_ansible_node
 from apps.jobs.workflow_engine import (
     ANSIBLE_NODE_TYPES,
@@ -41,7 +51,16 @@ TERMINAL_WORKFLOW_STATUSES = {
 
 def _claim_node_run(node_run_id, task_id, now, attempt):
     return bool(
-        NodeRun.objects.filter(id=node_run_id, attempt_count=attempt, status=NodeRun.Status.QUEUED,).exclude(workflow_run__status__in=TERMINAL_WORKFLOW_STATUSES | {WorkflowRun.Status.CANCEL_REQUESTED}).update(
+        NodeRun.objects.filter(
+            id=node_run_id,
+            attempt_count=attempt,
+            status=NodeRun.Status.QUEUED,
+        )
+        .exclude(
+            workflow_run__status__in=TERMINAL_WORKFLOW_STATUSES
+            | {WorkflowRun.Status.CANCEL_REQUESTED}
+        )
+        .update(
             status=NodeRun.Status.RUNNING,
             celery_task_id=task_id,
             started_at=now,
@@ -83,11 +102,18 @@ def _mark_dispatch_failed(workflow_run_id, exc):
     run.node_runs.filter(
         status__in=[NodeRun.Status.PENDING, NodeRun.Status.QUEUED]
     ).update(status=NodeRun.Status.CANCELED, finished_at=now, updated_at=now)
-    JobEventLog.objects.create(
-        workflow_run=run,
-        event_type="workflow_failed",
-        message=run.failure_reason,
-        payload={"workflow_run_id": run.id, "error_type": exc.__class__.__name__},
+    append_run_event(
+        run_id=(run).id,
+        node_run_id=None,
+        event_key=uuid4().hex,
+        event={
+            "event_type": "workflow_failed",
+            "message": run.failure_reason,
+            "payload": {
+                "workflow_run_id": run.id,
+                "error_type": exc.__class__.__name__,
+            },
+        },
     )
 
 
@@ -158,10 +184,7 @@ def execute_node(node_run_id, attempt):
     if not claimed:
         status = NodeRun.objects.values_list("status", flat=True).get(id=node_run_id)
         return {"nodeRunId": node_run_id, "status": status}
-    NodeRunAttempt.objects.filter(
-        node_run_id=node_run_id,
-        attempt=attempt,
-    ).update(
+    NodeRunAttempt.objects.filter(node_run_id=node_run_id, attempt=attempt,).update(
         status=NodeRunAttempt.Status.RUNNING,
         celery_task_id=task_id,
         worker_name=worker_name,
@@ -198,10 +221,7 @@ def execute_node(node_run_id, attempt):
     finally:
         finished_at = timezone.now()
         node_run.refresh_from_db()
-        NodeRunAttempt.objects.filter(
-            node_run_id=node_run_id,
-            attempt=attempt,
-        ).update(
+        NodeRunAttempt.objects.filter(node_run_id=node_run_id, attempt=attempt,).update(
             status=_attempt_terminal_status(node_run.status),
             finished_at=finished_at,
             exit_code=node_run.exit_code,
@@ -233,7 +253,10 @@ def execute_node(node_run_id, attempt):
 
 @shared_task(name="jobs.recover_stale_workflow_runs")
 def recover_stale_workflow_runs():
-    return {"dispatches": recover_pending_dispatches(), "recovered": recover_stale_executions()}
+    return {
+        "dispatches": recover_pending_dispatches(),
+        "recovered": recover_stale_executions(),
+    }
 
 
 @shared_task(name="jobs.dispatch_scheduled_jobs")
@@ -296,11 +319,18 @@ def dispatch_scheduled_jobs():
                 )
                 locked.save(update_fields=["next_run_at", "updated_at"])
                 continue
-            JobEventLog.objects.create(
-                workflow_run=run,
-                event_type="workflow_dispatch_requested",
-                message="Scheduled workflow run dispatch requested.",
-                payload={"scheduled_job_id": locked.id, "workflow_run_id": run.id},
+            append_run_event(
+                run_id=(run).id,
+                node_run_id=None,
+                event_key=uuid4().hex,
+                event={
+                    "event_type": "workflow_dispatch_requested",
+                    "message": "Scheduled workflow run dispatch requested.",
+                    "payload": {
+                        "scheduled_job_id": locked.id,
+                        "workflow_run_id": run.id,
+                    },
+                },
             )
             transaction.on_commit(lambda run_id=run.id: enqueue_workflow_run(run_id))
             locked.last_run_at = now

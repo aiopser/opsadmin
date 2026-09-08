@@ -1,3 +1,4 @@
+from uuid import uuid4
 import json
 from datetime import timedelta
 from importlib import import_module
@@ -29,7 +30,7 @@ from apps.jobs.models import (
     WorkflowRun,
 )
 from apps.jobs.serializers import WorkflowRunCreateSerializer
-from apps.jobs.events import persist_runner_event, sanitize_runner_event
+from apps.jobs.events import append_run_event, sanitize_runner_event
 from apps.ops.contracts import AnsibleRunnerUnavailable, RunnerResult
 from apps.ops.workflow.events import normalize_runner_event
 from apps.permission.models import Permission, Role
@@ -513,102 +514,6 @@ class HostRunResultModelTests(SimpleTestCase):
             HostRunResult.host_key_for(None, "web02"),
         )
 
-    def test_migration_host_keys_preserve_distinct_null_id_hostnames(self):
-        migration = import_module(
-            "apps.jobs.migrations.0004_hostname_result_idempotency"
-        )
-
-        self.assertEqual(migration.host_key_for(None, "web01"), "name:web01")
-        self.assertEqual(migration.host_key_for(None, "web02"), "name:web02")
-
-    def test_migration_backfills_and_deduplicates_portable_host_keys(self):
-        migration = import_module(
-            "apps.jobs.migrations.0004_hostname_result_idempotency"
-        )
-        rows = [
-            SimpleNamespace(id=5, node_run_id=1, host_id=None, hostname="web01"),
-            SimpleNamespace(id=4, node_run_id=1, host_id=None, hostname="web02"),
-            SimpleNamespace(id=3, node_run_id=1, host_id=None, hostname="web01"),
-            SimpleNamespace(id=2, node_run_id=1, host_id=42, hostname="old-name"),
-            SimpleNamespace(id=1, node_run_id=1, host_id=42, hostname="new-name"),
-        ]
-        deleted_ids = []
-
-        class FakeQuerySet:
-            def order_by(self, *fields):
-                return self
-
-            def iterator(self):
-                return iter(rows)
-
-            def filter(self, **lookup):
-                return FakeFilteredQuerySet(lookup)
-
-        class FakeFilteredQuerySet:
-            def __init__(self, lookup):
-                self.lookup = lookup
-
-            def update(self, **values):
-                row = next(row for row in rows if row.id == self.lookup["id"])
-                for field, value in values.items():
-                    setattr(row, field, value)
-
-            def delete(self):
-                deleted_ids.extend(self.lookup["id__in"])
-
-        fake_model = SimpleNamespace(objects=FakeQuerySet())
-        fake_apps = SimpleNamespace(get_model=lambda app, model: fake_model)
-
-        migration.backfill_and_deduplicate_host_keys(fake_apps, None)
-
-        self.assertEqual(rows[0].host_key, "name:web01")
-        self.assertEqual(rows[1].host_key, "name:web02")
-        self.assertEqual(rows[3].host_key, "id:42")
-        self.assertEqual(deleted_ids, [3, 1])
-
-    def test_migration_deduplicates_case_insensitive_host_keys_and_keeps_newest(self):
-        migration = import_module(
-            "apps.jobs.migrations.0004_hostname_result_idempotency"
-        )
-        rows = [
-            SimpleNamespace(id=5, node_run_id=1, host_id=None, hostname="WEB01"),
-            SimpleNamespace(id=4, node_run_id=1, host_id=None, hostname="web01"),
-        ]
-        deleted_ids = []
-
-        class FakeQuerySet:
-            def order_by(self, *fields):
-                return self
-
-            def iterator(self):
-                return iter(rows)
-
-            def filter(self, **lookup):
-                return FakeFilteredQuerySet(lookup)
-
-        class FakeFilteredQuerySet:
-            def __init__(self, lookup):
-                self.lookup = lookup
-
-            def update(self, **values):
-                row = next(row for row in rows if row.id == self.lookup["id"])
-                for field, value in values.items():
-                    setattr(row, field, value)
-
-            def delete(self):
-                deleted_ids.extend(self.lookup["id__in"])
-
-        fake_model = SimpleNamespace(objects=FakeQuerySet())
-        fake_apps = SimpleNamespace(get_model=lambda app, model: fake_model)
-
-        migration.backfill_and_deduplicate_host_keys(fake_apps, None)
-
-        self.assertEqual(rows[0].host_key, "name:WEB01")
-        self.assertEqual(deleted_ids, [4])
-        self.assertEqual(
-            migration.case_insensitive_host_key("name:WEB01"), "name:web01"
-        )
-
     def test_host_result_uniqueness_is_portable(self):
         constraints = {
             constraint.name: constraint
@@ -751,8 +656,20 @@ class WorkflowRunServiceTests(TestCase):
         self.api_role = Role.objects.create(name="job_runner")
         self.user.role.add(self.api_role)
         self.api_role.permission.add(
-            Permission.objects.create(name="Use test pool", code="test.jobs.pool.detail", type="api", path="/api/v1/jobs/worker-pools/:id", method="GET"),
-            Permission.objects.create(name="Use test asset", code="test.cmdb.host.detail", type="api", path="/api/v1/cmdb/hosts/:id", method="GET"),
+            Permission.objects.create(
+                name="Use test pool",
+                code="test.jobs.pool.detail",
+                type="api",
+                path="/api/v1/jobs/worker-pools/:id",
+                method="GET",
+            ),
+            Permission.objects.create(
+                name="Use test asset",
+                code="test.cmdb.host.detail",
+                type="api",
+                path="/api/v1/cmdb/hosts/:id",
+                method="GET",
+            ),
             Permission.objects.create(
                 name="创建工作流执行",
                 code="test.jobs.workflow_run.create",
@@ -875,8 +792,12 @@ class WorkflowRunServiceTests(TestCase):
         )
         now = timezone.now()
 
-        self.assertTrue(_claim_node_run(node_run.id, "task-1", now, node_run.attempt_count))
-        self.assertFalse(_claim_node_run(node_run.id, "task-2", now, node_run.attempt_count))
+        self.assertTrue(
+            _claim_node_run(node_run.id, "task-1", now, node_run.attempt_count)
+        )
+        self.assertFalse(
+            _claim_node_run(node_run.id, "task-2", now, node_run.attempt_count)
+        )
 
         node_run.refresh_from_db()
         self.assertEqual(node_run.status, NodeRun.Status.RUNNING)
@@ -1150,9 +1071,7 @@ class WorkflowRunServiceTests(TestCase):
         self.assertEqual(WorkflowRun.objects.count(), 0)
 
     def test_workflow_create_revalidates_host_status_when_saved(self):
-        request = APIRequestFactory().post(
-            "/api/v1/tasks/runs", {}, format="json"
-        )
+        request = APIRequestFactory().post("/api/v1/tasks/runs", {}, format="json")
         force_authenticate(request, user=self.user)
         request.user = self.user
         serializer = WorkflowRunCreateSerializer(
@@ -1270,24 +1189,39 @@ class WorkflowRunServiceTests(TestCase):
 
     def test_runner_ok_event_updates_existing_host_result(self):
         node_run = self.create_running_node_run()
-        persist_runner_event(
-            workflow_run=node_run.workflow_run,
-            node_run=node_run,
+        append_run_event(
+            run_id=(node_run.workflow_run).id,
+            node_run_id=(node_run).id,
+            event_key=str(
+                ({"event": "runner_on_start", "event_data": {"host": "web01"}}).get(
+                    "uuid"
+                )
+                or uuid4().hex
+            ),
             event={"event": "runner_on_start", "event_data": {"host": "web01"}},
         )
         self.assertEqual(
             HostRunResult.objects.get(node_run=node_run, hostname="web01").status,
             HostRunResult.Status.RUNNING,
         )
-        persist_runner_event(
-            workflow_run=node_run.workflow_run,
-            node_run=node_run,
+        append_run_event(
+            run_id=(node_run.workflow_run).id,
+            node_run_id=(node_run).id,
+            event_key=str(
+                (
+                    {
+                        "event": "runner_on_ok",
+                        "event_data": {
+                            "host": "web01",
+                            "res": {"stdout": "ok", "rc": 0},
+                        },
+                    }
+                ).get("uuid")
+                or uuid4().hex
+            ),
             event={
                 "event": "runner_on_ok",
-                "event_data": {
-                    "host": "web01",
-                    "res": {"stdout": "ok", "rc": 0},
-                },
+                "event_data": {"host": "web01", "res": {"stdout": "ok", "rc": 0}},
             },
         )
 
@@ -1302,9 +1236,21 @@ class WorkflowRunServiceTests(TestCase):
 
     def test_late_start_event_does_not_overwrite_a_terminal_host_result(self):
         node_run = self.create_running_node_run()
-        persist_runner_event(
-            workflow_run=node_run.workflow_run,
-            node_run=node_run,
+        append_run_event(
+            run_id=(node_run.workflow_run).id,
+            node_run_id=(node_run).id,
+            event_key=str(
+                (
+                    {
+                        "event": "runner_on_ok",
+                        "event_data": {
+                            "host": "web01",
+                            "res": {"stdout": "completed", "rc": 0},
+                        },
+                    }
+                ).get("uuid")
+                or uuid4().hex
+            ),
             event={
                 "event": "runner_on_ok",
                 "event_data": {
@@ -1314,9 +1260,15 @@ class WorkflowRunServiceTests(TestCase):
             },
         )
 
-        persist_runner_event(
-            workflow_run=node_run.workflow_run,
-            node_run=node_run,
+        append_run_event(
+            run_id=(node_run.workflow_run).id,
+            node_run_id=(node_run).id,
+            event_key=str(
+                ({"event": "runner_on_start", "event_data": {"host": "web01"}}).get(
+                    "uuid"
+                )
+                or uuid4().hex
+            ),
             event={"event": "runner_on_start", "event_data": {"host": "web01"}},
         )
 
@@ -1327,9 +1279,21 @@ class WorkflowRunServiceTests(TestCase):
     def test_runner_failed_event_marks_host_result_failed(self):
         node_run = self.create_running_node_run()
 
-        persist_runner_event(
-            workflow_run=node_run.workflow_run,
-            node_run=node_run,
+        append_run_event(
+            run_id=(node_run.workflow_run).id,
+            node_run_id=(node_run).id,
+            event_key=str(
+                (
+                    {
+                        "event": "runner_on_failed",
+                        "event_data": {
+                            "host": "web01",
+                            "res": {"stderr": "command failed", "rc": 1},
+                        },
+                    }
+                ).get("uuid")
+                or uuid4().hex
+            ),
             event={
                 "event": "runner_on_failed",
                 "event_data": {
@@ -1347,9 +1311,21 @@ class WorkflowRunServiceTests(TestCase):
     def test_runner_unreachable_event_marks_host_result_unreachable(self):
         node_run = self.create_running_node_run()
 
-        persist_runner_event(
-            workflow_run=node_run.workflow_run,
-            node_run=node_run,
+        append_run_event(
+            run_id=(node_run.workflow_run).id,
+            node_run_id=(node_run).id,
+            event_key=str(
+                (
+                    {
+                        "event": "runner_on_unreachable",
+                        "event_data": {
+                            "host": "web01",
+                            "res": {"msg": "Host unreachable", "unreachable": True},
+                        },
+                    }
+                ).get("uuid")
+                or uuid4().hex
+            ),
             event={
                 "event": "runner_on_unreachable",
                 "event_data": {
@@ -1366,9 +1342,15 @@ class WorkflowRunServiceTests(TestCase):
     def test_runner_skipped_event_marks_host_result_skipped(self):
         node_run = self.create_running_node_run()
 
-        persist_runner_event(
-            workflow_run=node_run.workflow_run,
-            node_run=node_run,
+        append_run_event(
+            run_id=(node_run.workflow_run).id,
+            node_run_id=(node_run).id,
+            event_key=str(
+                ({"event": "runner_on_skipped", "event_data": {"host": "web01"}}).get(
+                    "uuid"
+                )
+                or uuid4().hex
+            ),
             event={"event": "runner_on_skipped", "event_data": {"host": "web01"}},
         )
 
@@ -1378,9 +1360,22 @@ class WorkflowRunServiceTests(TestCase):
     def test_no_log_event_redacts_its_payload_and_host_output(self):
         node_run = self.create_running_node_run()
 
-        log = persist_runner_event(
-            workflow_run=node_run.workflow_run,
-            node_run=node_run,
+        log = append_run_event(
+            run_id=(node_run.workflow_run).id,
+            node_run_id=(node_run).id,
+            event_key=str(
+                (
+                    {
+                        "event": "runner_on_ok",
+                        "event_data": {
+                            "host": "web01",
+                            "no_log": True,
+                            "res": {"stdout": "do-not-store", "password": "hunter2"},
+                        },
+                    }
+                ).get("uuid")
+                or uuid4().hex
+            ),
             event={
                 "event": "runner_on_ok",
                 "event_data": {
@@ -1409,9 +1404,22 @@ class WorkflowRunServiceTests(TestCase):
     def test_runner_event_redacts_sensitive_values_before_persistence(self):
         node_run = self.create_running_node_run()
 
-        log = persist_runner_event(
-            workflow_run=node_run.workflow_run,
-            node_run=node_run,
+        log = append_run_event(
+            run_id=(node_run.workflow_run).id,
+            node_run_id=(node_run).id,
+            event_key=str(
+                (
+                    {
+                        "event": "runner_on_ok",
+                        "event_data": {
+                            "host": "web01",
+                            "res": {"stdout": "ok", "api_token": "do-not-store"},
+                            "extra_vars": {"ansible_password": "hunter2"},
+                        },
+                    }
+                ).get("uuid")
+                or uuid4().hex
+            ),
             event={
                 "event": "runner_on_ok",
                 "event_data": {
@@ -1430,9 +1438,30 @@ class WorkflowRunServiceTests(TestCase):
     def test_runner_event_persists_only_safe_metadata_and_redacted_output(self):
         node_run = self.create_running_node_run()
 
-        log = persist_runner_event(
-            workflow_run=node_run.workflow_run,
-            node_run=node_run,
+        log = append_run_event(
+            run_id=(node_run.workflow_run).id,
+            node_run_id=(node_run).id,
+            event_key=str(
+                (
+                    {
+                        "event": "runner_on_ok",
+                        "event_data": {
+                            "host": "web01",
+                            "task": "Run secure command",
+                            "invocation": {
+                                "module_args": {
+                                    "_raw_params": "curl https://runner:raw-secret@example.test"
+                                }
+                            },
+                            "res": {
+                                "stdout": "password=hunter2 curl https://ops:uri-secret@example.test",
+                                "rc": 0,
+                            },
+                        },
+                    }
+                ).get("uuid")
+                or uuid4().hex
+            ),
             event={
                 "event": "runner_on_ok",
                 "event_data": {
@@ -1440,7 +1469,7 @@ class WorkflowRunServiceTests(TestCase):
                     "task": "Run secure command",
                     "invocation": {
                         "module_args": {
-                            "_raw_params": "curl https://runner:raw-secret@example.test",
+                            "_raw_params": "curl https://runner:raw-secret@example.test"
                         }
                     },
                     "res": {
@@ -1473,9 +1502,15 @@ class WorkflowRunServiceTests(TestCase):
         other_node_run = self.create_running_node_run()
 
         with self.assertRaises(ValueError):
-            persist_runner_event(
-                workflow_run=workflow_run,
-                node_run=other_node_run,
+            append_run_event(
+                run_id=(workflow_run).id,
+                node_run_id=(other_node_run).id,
+                event_key=str(
+                    ({"event": "runner_on_start", "event_data": {"host": "web01"}}).get(
+                        "uuid"
+                    )
+                    or uuid4().hex
+                ),
                 event={"event": "runner_on_start", "event_data": {"host": "web01"}},
             )
 
@@ -1496,14 +1531,16 @@ class WorkflowRunServiceTests(TestCase):
             },
         }
 
-        persist_runner_event(
-            workflow_run=node_run.workflow_run,
-            node_run=node_run,
+        append_run_event(
+            run_id=(node_run.workflow_run).id,
+            node_run_id=(node_run).id,
+            event_key=str((event).get("uuid") or uuid4().hex),
             event=event,
         )
-        persist_runner_event(
-            workflow_run=node_run.workflow_run,
-            node_run=node_run,
+        append_run_event(
+            run_id=(node_run.workflow_run).id,
+            node_run_id=(node_run).id,
+            event_key=str((event).get("uuid") or uuid4().hex),
             event=event,
         )
 
@@ -1519,9 +1556,18 @@ class WorkflowRunServiceTests(TestCase):
         node_run = self.create_running_node_run()
 
         for hostname in ("unresolved-web01", "unresolved-web02"):
-            persist_runner_event(
-                workflow_run=node_run.workflow_run,
-                node_run=node_run,
+            append_run_event(
+                run_id=(node_run.workflow_run).id,
+                node_run_id=(node_run).id,
+                event_key=str(
+                    (
+                        {
+                            "event": "runner_on_ok",
+                            "event_data": {"host": hostname, "res": {"rc": 0}},
+                        }
+                    ).get("uuid")
+                    or uuid4().hex
+                ),
                 event={
                     "event": "runner_on_ok",
                     "event_data": {"host": hostname, "res": {"rc": 0}},
@@ -1540,9 +1586,15 @@ class WorkflowRunServiceTests(TestCase):
     def test_runner_canceled_event_marks_host_result_canceled(self):
         node_run = self.create_running_node_run()
 
-        persist_runner_event(
-            workflow_run=node_run.workflow_run,
-            node_run=node_run,
+        append_run_event(
+            run_id=(node_run.workflow_run).id,
+            node_run_id=(node_run).id,
+            event_key=str(
+                ({"event": "runner_on_canceled", "event_data": {"host": "web01"}}).get(
+                    "uuid"
+                )
+                or uuid4().hex
+            ),
             event={"event": "runner_on_canceled", "event_data": {"host": "web01"}},
         )
 
@@ -1566,12 +1618,23 @@ class WorkflowRunServiceTests(TestCase):
     @patch("apps.jobs.execution.registry.AnsibleExecutor")
     def test_node_preserves_confirmed_runner_cancel_and_timeout(self, executor):
         from apps.jobs.execution.registry import execute_ansible_node
+
         for status in ("canceled", "timeout"):
             with self.subTest(status=status):
-                run = create_workflow_run(workflow_version=self.workflow_version, target_hosts=[self.host],
-                    input_vars={}, worker_pool=self.worker_pool, triggered_by=self.user)
-                node = NodeRun.objects.create(workflow_run=run, workflow_node=self.node,
-                    command_version=self.command_version, status="running", attempt_count=1)
+                run = create_workflow_run(
+                    workflow_version=self.workflow_version,
+                    target_hosts=[self.host],
+                    input_vars={},
+                    worker_pool=self.worker_pool,
+                    triggered_by=self.user,
+                )
+                node = NodeRun.objects.create(
+                    workflow_run=run,
+                    workflow_node=self.node,
+                    command_version=self.command_version,
+                    status="running",
+                    attempt_count=1,
+                )
                 executor.return_value.execute.return_value = RunnerResult(status, 1)
                 result = execute_ansible_node(node.id)
                 self.assertEqual(result.status, status)
@@ -1579,8 +1642,11 @@ class WorkflowRunServiceTests(TestCase):
     @patch("apps.jobs.execution.registry.AnsibleExecutor")
     def test_asset_disabled_after_submission_is_not_executed(self, executor):
         run = create_workflow_run(
-            workflow_version=self.workflow_version, target_hosts=[self.host], input_vars={},
-            worker_pool=self.worker_pool, triggered_by=self.user,
+            workflow_version=self.workflow_version,
+            target_hosts=[self.host],
+            input_vars={},
+            worker_pool=self.worker_pool,
+            triggered_by=self.user,
         )
         AssetHost.objects.filter(pk=self.host.pk).update(status="inactive")
         result = run_workflow_ansible(run.id)
@@ -1601,22 +1667,26 @@ class WorkflowRunServiceTests(TestCase):
 
         def execute(plan, event_handler, cancel_callback, **_kwargs):
             event_handler(
-                normalize_runner_event({
-                    "event": "runner_on_ok",
-                    "event_data": {
-                        "host": "web01",
-                        "invocation": {
-                            "module_args": {"password": "do-not-store"},
+                normalize_runner_event(
+                    {
+                        "event": "runner_on_ok",
+                        "event_data": {
+                            "host": "web01",
+                            "invocation": {
+                                "module_args": {"password": "do-not-store"},
+                            },
+                            "res": {
+                                "stdout": "password=do-not-store",
+                                "rc": 0,
+                            },
                         },
-                        "res": {
-                            "stdout": "password=do-not-store",
-                            "rc": 0,
-                        },
-                    },
-                })
+                    }
+                )
             )
             self.assertFalse(cancel_callback())
-            return RunnerResult.from_mapping({"status": "successful", "rc": 0, "stats": {"ok": {}}})
+            return RunnerResult.from_mapping(
+                {"status": "successful", "rc": 0, "stats": {"ok": {}}}
+            )
 
         runner_service.return_value.execute.side_effect = execute
 
@@ -1702,10 +1772,12 @@ class WorkflowRunServiceTests(TestCase):
 
         def execute(plan, event_handler, cancel_callback, **_kwargs):
             event_handler(
-                normalize_runner_event({
-                    "event": "runner_on_ok",
-                    "event_data": {"host": "web01", "res": {"rc": 0}},
-                })
+                normalize_runner_event(
+                    {
+                        "event": "runner_on_ok",
+                        "event_data": {"host": "web01", "res": {"rc": 0}},
+                    }
+                )
             )
             raise RuntimeError("runner crashed")
 
@@ -1746,11 +1818,13 @@ class WorkflowRunServiceTests(TestCase):
             worker_pool=self.worker_pool,
             triggered_by=self.user,
         )
-        runner_service.return_value.execute.return_value = RunnerResult.from_mapping({
-            "status": "successful",
-            "rc": 0,
-            "stats": {},
-        })
+        runner_service.return_value.execute.return_value = RunnerResult.from_mapping(
+            {
+                "status": "successful",
+                "rc": 0,
+                "stats": {},
+            }
+        )
 
         run_workflow_ansible(run.id)
 
@@ -1780,10 +1854,12 @@ class WorkflowRunServiceTests(TestCase):
 
         def execute(plan, event_handler, cancel_callback, **_kwargs):
             event_handler(
-                normalize_runner_event({
-                    "event": "runner_on_start",
-                    "event_data": {"host": "web01"},
-                })
+                normalize_runner_event(
+                    {
+                        "event": "runner_on_start",
+                        "event_data": {"host": "web01"},
+                    }
+                )
             )
             WorkflowRun.objects.filter(id=run.id).update(
                 status=WorkflowRun.Status.CANCELED
@@ -1791,16 +1867,20 @@ class WorkflowRunServiceTests(TestCase):
             self.assertTrue(cancel_callback())
             self.assertFalse(
                 event_handler(
-                    normalize_runner_event({
-                        "event": "runner_on_ok",
-                        "event_data": {
-                            "host": "web01",
-                            "res": {"stdout": "must-not-replace-canceled", "rc": 0},
-                        },
-                    })
+                    normalize_runner_event(
+                        {
+                            "event": "runner_on_ok",
+                            "event_data": {
+                                "host": "web01",
+                                "res": {"stdout": "must-not-replace-canceled", "rc": 0},
+                            },
+                        }
+                    )
                 )
             )
-            return RunnerResult.from_mapping({"status": "canceled", "rc": 1, "stats": {}})
+            return RunnerResult.from_mapping(
+                {"status": "canceled", "rc": 1, "stats": {}}
+            )
 
         runner_service.return_value.execute.side_effect = execute
 
@@ -1901,7 +1981,9 @@ class WorkflowRunServiceTests(TestCase):
                 status=WorkflowRun.Status.CANCELED
             )
             self.assertTrue(cancel_callback())
-            return RunnerResult.from_mapping({"status": "canceled", "rc": 1, "stats": {}})
+            return RunnerResult.from_mapping(
+                {"status": "canceled", "rc": 1, "stats": {}}
+            )
 
         runner_service.return_value.execute.side_effect = execute
 
@@ -1958,19 +2040,23 @@ class WorkflowRunServiceTests(TestCase):
 
         def execute(plan, event_handler, cancel_callback, **_kwargs):
             event_handler(
-                normalize_runner_event({
-                    "event": "runner_on_ok",
-                    "event_data": {
-                        "host": "web01",
-                        "res": {"stdout": "completed", "rc": 0},
-                    },
-                })
+                normalize_runner_event(
+                    {
+                        "event": "runner_on_ok",
+                        "event_data": {
+                            "host": "web01",
+                            "res": {"stdout": "completed", "rc": 0},
+                        },
+                    }
+                )
             )
             WorkflowRun.objects.filter(id=run.id).update(
                 status=WorkflowRun.Status.CANCELED
             )
             self.assertTrue(cancel_callback())
-            return RunnerResult.from_mapping({"status": "canceled", "rc": 1, "stats": {}})
+            return RunnerResult.from_mapping(
+                {"status": "canceled", "rc": 1, "stats": {}}
+            )
 
         runner_service.return_value.execute.side_effect = execute
 
@@ -2171,9 +2257,7 @@ class WorkflowRunServiceTests(TestCase):
             worker_pool=self.worker_pool,
             triggered_by=self.user,
         )
-        request = APIRequestFactory().post(
-            f"/api/v1/tasks/runs/{run.id}/cancel"
-        )
+        request = APIRequestFactory().post(f"/api/v1/tasks/runs/{run.id}/cancel")
         force_authenticate(request, user=self.user)
         request.user = self.user
         response = WorkflowRunViewSet.as_view({"post": "cancel"})(

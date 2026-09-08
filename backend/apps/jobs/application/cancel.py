@@ -1,3 +1,5 @@
+from uuid import uuid4
+from apps.jobs.events import append_run_event
 from django.db import transaction
 from apps.jobs.state_machine import ExecutionStateMachine
 from django.utils import timezone
@@ -38,12 +40,15 @@ def _mark_node_run_canceled(node_run):
             "updated_at",
         ]
     )
-    JobEventLog.objects.create(
-        workflow_run=node_run.workflow_run,
-        node_run=node_run,
-        event_type="node_canceled",
-        message="Node execution canceled by user.",
-        payload={"node_run_id": node_run.id},
+    append_run_event(
+        run_id=(node_run.workflow_run).id,
+        node_run_id=(node_run).id,
+        event_key=uuid4().hex,
+        event={
+            "event_type": "node_canceled",
+            "message": "Node execution canceled by user.",
+            "payload": {"node_run_id": node_run.id},
+        },
     )
     return True
 

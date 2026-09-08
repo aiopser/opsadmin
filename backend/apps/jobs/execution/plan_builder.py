@@ -227,7 +227,9 @@ def prepare_host_gateway_execution(host_snapshots, input_vars=None):
 
     prepared_hosts = []
     for host in snapshots:
-        gateway_id = override_gateway_id or (host.get("variables") or {}).get("gateway_ref_id")
+        gateway_id = override_gateway_id or (host.get("variables") or {}).get(
+            "gateway_ref_id"
+        )
         if not gateway_id:
             prepared_hosts.append(host)
             continue
@@ -247,7 +249,10 @@ def build_gateway_inventory(host_snapshots, input_vars=None):
     )
     private_data_dir = private_data_dir or tempfile.mkdtemp(prefix="devops-inventory-")
     try:
-        return build_inventory(prepared_hosts, group_vars, key_directory=private_data_dir), private_data_dir
+        return (
+            build_inventory(prepared_hosts, group_vars, key_directory=private_data_dir),
+            private_data_dir,
+        )
     except Exception:
         if private_data_dir:
             shutil.rmtree(private_data_dir, ignore_errors=True)

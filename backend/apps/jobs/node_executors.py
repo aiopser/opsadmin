@@ -1,3 +1,5 @@
+from uuid import uuid4
+from apps.jobs.events import append_run_event
 import base64
 import ipaddress
 import json
@@ -559,10 +561,13 @@ def record_generic_result(
             "updated_at",
         ]
     )
-    JobEventLog.objects.create(
-        workflow_run=node_run.workflow_run,
-        node_run=node_run,
-        event_type="node_succeeded" if success else "node_failed",
-        message=f"Node {node_run.node_key} {'succeeded' if success else 'failed'}.",
-        payload={"node_key": node_run.node_key},
+    append_run_event(
+        run_id=(node_run.workflow_run).id,
+        node_run_id=(node_run).id,
+        event_key=uuid4().hex,
+        event={
+            "event_type": "node_succeeded" if success else "node_failed",
+            "message": f"Node {node_run.node_key} {('succeeded' if success else 'failed')}.",
+            "payload": {"node_key": node_run.node_key},
+        },
     )
