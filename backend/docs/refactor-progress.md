@@ -57,3 +57,7 @@ WorkerPool/serializer/view/admin 仅归 jobs，表 jobs_worker_pool，唯一 API
 实际测试：执行器 12 passed；CMDB 授权/私钥成功及异常清理 3 passed；jobs Ansible + 执行前停用 20 passed；最终全量 270 passed / 13 原基线 failed / 13 subtests passed（57.72 秒）。compileall 通过，diff 空白问题已修复。没有连接任何真实目标。
 
 未完成：真实 SSH/WinRM/网关集成属 T07；自有迁移重建 T09；底层旧 tasklog 日志链 T11。当前 services.py 的职责拆分及统一创建入口在 T08/T13，旧 Runner Adapter/Service 入口已删除。
+
+## P3 / T07 隔离 Runner 集成（未完成）
+
+新增 test_runner_integration.py 的 localhost-only 真 Runner 成功/失败/取消用例及 runner-validation.md。默认必须显式 opt-in 且使用 Linux 控制节点；实际本机执行结果 3 skipped，原因是没有隔离 Worker opt-in，未算通过。Docker 只读版本探测失败，daemon 管道不存在；没有启动容器或连接真实主机。删除清单：无。真实隔离成功/失败/取消与多主机、SSH key、网关、WinRM 均未验证。按用户连续推进授权继续 T08，保留 T07 验收缺口。
