@@ -17,6 +17,7 @@ from apps.automation.workflow_graph import serialize_graph
 from apps.cmdb.crypto import decrypt_secret
 from apps.cmdb.models import AssetHost
 from apps.cmdb.targets import snapshot_targets
+from .worker_pools import resolve_worker_pool
 from apps.ops.workflow.ansible_service import (
     AnsibleRunnerService,
     AnsibleRunnerUnavailable,
@@ -330,6 +331,7 @@ def create_workflow_run(
     timeout_seconds=None,
     queue_timeout_seconds=None,
 ):
+    worker_pool = resolve_worker_pool(actor=triggered_by, pool_id=worker_pool.pk, execution_kind=execution_kind)
     target_snapshot = snapshot_targets(actor=triggered_by, targets=target_hosts)
     safe_input_vars, secret_input_vars_encrypted = protect_workflow_inputs(
         workflow_version,

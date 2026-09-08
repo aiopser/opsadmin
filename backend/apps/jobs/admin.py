@@ -35,3 +35,17 @@ class JobEventLogAdmin(admin.ModelAdmin):
     )
     list_filter = ("event_type",)
     search_fields = ("message",)
+
+from .models import WorkerPool
+
+@admin.register(WorkerPool)
+class WorkerPoolAdmin(admin.ModelAdmin):
+    list_display = (
+        "code",
+        "name",
+        "queue_name",
+        "is_default",
+        "is_active",
+    )
+    search_fields = ("code", "name", "queue_name")
+    list_filter = ("is_default", "is_active")

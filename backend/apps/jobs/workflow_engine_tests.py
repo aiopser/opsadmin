@@ -8,7 +8,8 @@ from apps.automation.models import (
     WorkflowTemplate,
     WorkflowVersion,
 )
-from apps.cmdb.models import AssetHost, WorkerPool
+from apps.cmdb.models import AssetHost
+from apps.jobs.models import WorkerPool
 
 from .models import NodeRun, NodeRunAttempt, WorkflowRun
 from .services import create_workflow_run
@@ -17,7 +18,7 @@ from .workflow_engine import node_queue_name, plan_dispatch
 
 class WorkflowQueueRoutingTests(SimpleTestCase):
     def setUp(self):
-        self.worker_pool = SimpleNamespace(queue_name="ansible.region")
+        self.worker_pool = SimpleNamespace(queue_name="ansible.region", is_active=True)
 
     def test_ansible_nodes_use_worker_pool_queue(self):
         self.assertEqual(
@@ -74,6 +75,7 @@ class WorkflowGraphRuntimeTests(TestCase):
         from apps.permission.services import sync_casbin_rules, CasbinEnforcerService
         role = Role.objects.create(name="graph-assets")
         role.permission.add(Permission.objects.create(name="Graph assets", code="test.graph.assets", type="api", path="/api/v1/cmdb/hosts/:id", method="GET"))
+        role.permission.add(Permission.objects.create(name="Graph pool", code="test.graph.pool", type="api", path="/api/v1/jobs/worker-pools/:id", method="GET"))
         self.user.role.add(role)
         sync_casbin_rules()
         CasbinEnforcerService.reload()

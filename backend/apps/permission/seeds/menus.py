@@ -498,7 +498,7 @@ SYSTEM_MENUS = [
                 "order": 2,
                 "buttons": [
                     *_button_menus(
-                        "cmdb.worker_pool",
+                        "jobs.worker_pool",
                         [
                             {"code": "create", "title": "Worker池新增"},
                             {"code": "update", "title": "Worker池编辑"},

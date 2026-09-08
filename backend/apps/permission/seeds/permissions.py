@@ -593,12 +593,12 @@ SYSTEM_PERMISSIONS = [
         ],
     ),
     *_rest_permissions(
-        "cmdb.worker_pool",
+        "jobs.worker_pool",
         "Worker池",
-        "/api/v1/cmdb/worker-pools",
+        "/api/v1/jobs/worker-pools",
     ),
     *_button_permissions(
-        "cmdb.worker_pool",
+        "jobs.worker_pool",
         "Worker池",
         [
             {"code": "create", "name": "新增"},
@@ -1086,14 +1086,14 @@ SYSTEM_MENU_API_PERMISSIONS = {
         "jobs.workflow_run.validate",
         "automation.workflow_version.list",
         "cmdb.host.list",
-        "cmdb.worker_pool.list",
+        "jobs.worker_pool.list",
     ),
     "menu.task.run_create": (
         "jobs.workflow_run.create",
         "jobs.workflow_run.validate",
         "automation.workflow_version.list",
         "cmdb.host.list",
-        "cmdb.worker_pool.list",
+        "jobs.worker_pool.list",
     ),
     "menu.task.templates": (
         "automation.workflow.list",
@@ -1363,7 +1363,7 @@ SYSTEM_MENU_API_PERMISSIONS = {
         "cmdb.tag.detail",
         "cmdb.credential_ref.list",
         "jobs.gateway.list",
-        "cmdb.worker_pool.list",
+        "jobs.worker_pool.list",
         "cmdb.business.list",
         "cmdb.business.detail",
         "cmdb.service_tree_node.list",
@@ -1380,7 +1380,7 @@ SYSTEM_MENU_API_PERMISSIONS = {
         "cmdb.tag.list",
         "cmdb.credential_ref.list",
         "jobs.gateway.list",
-        "cmdb.worker_pool.list",
+        "jobs.worker_pool.list",
         "cmdb.host.relations",
     ),
     "cmdb.host:update": (
@@ -1390,7 +1390,7 @@ SYSTEM_MENU_API_PERMISSIONS = {
         "cmdb.tag.list",
         "cmdb.credential_ref.list",
         "jobs.gateway.list",
-        "cmdb.worker_pool.list",
+        "jobs.worker_pool.list",
         "cmdb.host.relations",
     ),
     "cmdb.host:delete": ("cmdb.host.delete",),
@@ -1439,15 +1439,15 @@ SYSTEM_MENU_API_PERMISSIONS = {
     ),
     "cmdb.tag:delete": ("cmdb.tag.delete",),
     "cmdb.execution:read": (
-        "cmdb.worker_pool.list",
-        "cmdb.worker_pool.detail",
+        "jobs.worker_pool.list",
+        "jobs.worker_pool.detail",
     ),
-    "cmdb.worker_pool:create": ("cmdb.worker_pool.create",),
-    "cmdb.worker_pool:update": (
-        "cmdb.worker_pool.update",
-        "cmdb.worker_pool.detail",
+    "jobs.worker_pool:create": ("jobs.worker_pool.create",),
+    "jobs.worker_pool:update": (
+        "jobs.worker_pool.update",
+        "jobs.worker_pool.detail",
     ),
-    "cmdb.worker_pool:delete": ("cmdb.worker_pool.delete",),
+    "jobs.worker_pool:delete": ("jobs.worker_pool.delete",),
     "cmdb.credential_ref:read": (
         "cmdb.credential_ref.list",
         "cmdb.credential_ref.detail",
@@ -1467,7 +1467,7 @@ SYSTEM_MENU_API_PERMISSIONS = {
         "cmdb.host_group.list",
         "cmdb.tag.list",
         "jobs.gateway.list",
-        "cmdb.worker_pool.list",
+        "jobs.worker_pool.list",
     ),
     "menu.ops.settings": (
         "jobs.gateway.list",
@@ -1540,7 +1540,7 @@ SYSTEM_MENU_API_PERMISSIONS = {
         "jobs.scheduled_job.create",
         "automation.workflow_version.list",
         "cmdb.host.list",
-        "cmdb.worker_pool.list",
+        "jobs.worker_pool.list",
     ),
     "jobs.scheduled_job:update": (
         "jobs.scheduled_job.update",

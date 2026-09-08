@@ -6,9 +6,10 @@ from django.utils import timezone
 
 from apps.automation.models import WorkflowNode
 from apps.automation.workflow_graph import serialize_graph
-from apps.cmdb.models import WorkerPool
+from apps.jobs.models import WorkerPool
 
 from .input_secrets import resolve_workflow_inputs
+from .worker_pools import queue_for_pool
 from .models import JobEventLog, NodeRun, NodeRunAttempt, WorkflowRun
 
 
@@ -42,7 +43,7 @@ ACTIVE_NODE_STATUSES = {
 
 def node_queue_name(node_type, worker_pool, run_domain=WorkflowRun.RunDomain.TASK):
     if node_type in ANSIBLE_NODE_TYPES:
-        return str(worker_pool.queue_name or "").strip() or "ansible"
+        return queue_for_pool(worker_pool)
     return "ops" if run_domain == WorkflowRun.RunDomain.OPS else "task"
 
 

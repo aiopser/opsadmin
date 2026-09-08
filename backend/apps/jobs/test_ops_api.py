@@ -10,7 +10,8 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.automation.models import CommandAtom, CommandVersion
 from apps.cmdb.crypto import encrypt_secret
-from apps.cmdb.models import AssetHost, WorkerPool
+from apps.cmdb.models import AssetHost
+from apps.jobs.models import WorkerPool
 
 from .models import (
     CommandIntercept,

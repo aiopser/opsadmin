@@ -11,7 +11,6 @@ from .models import (
     HostTag,
     HostTagBinding,
     ServiceTreeNode,
-    WorkerPool,
 )
 
 
@@ -52,17 +51,6 @@ class ServiceTreeNodeAdmin(admin.ModelAdmin):
     list_filter = ("node_type", "is_active", "business")
 
 
-@admin.register(WorkerPool)
-class WorkerPoolAdmin(admin.ModelAdmin):
-    list_display = (
-        "code",
-        "name",
-        "queue_name",
-        "is_default",
-        "is_active",
-    )
-    search_fields = ("code", "name", "queue_name")
-    list_filter = ("is_default", "is_active")
 
 
 @admin.register(CredentialRef)

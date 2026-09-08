@@ -488,7 +488,7 @@ class SeedSystemSettingsTests(TestCase):
         self.assertIn("cmdb.host:read", menu_codes)
         self.assertIn("cmdb.host.list", menu_codes)
         self.assertIn("cmdb.host.detail", menu_codes)
-        self.assertIn("cmdb.worker_pool.list", menu_codes)
+        self.assertIn("jobs.worker_pool.list", menu_codes)
         self.assertNotIn("cmdb.host.create", menu_codes)
         self.assertNotIn("cmdb.host.delete", menu_codes)
 

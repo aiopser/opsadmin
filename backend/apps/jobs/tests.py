@@ -18,7 +18,8 @@ from apps.automation.models import (
     WorkflowTemplate,
     WorkflowVersion,
 )
-from apps.cmdb.models import AssetHost, WorkerPool
+from apps.cmdb.models import AssetHost
+from apps.jobs.models import WorkerPool
 from apps.audit_center.models import DomainAuditEvent
 from apps.jobs.models import (
     HostRunResult,
@@ -751,6 +752,7 @@ class WorkflowRunServiceTests(TestCase):
         self.api_role = Role.objects.create(name="job_runner")
         self.user.role.add(self.api_role)
         self.api_role.permission.add(
+            Permission.objects.create(name="Use test pool", code="test.jobs.pool.detail", type="api", path="/api/v1/jobs/worker-pools/:id", method="GET"),
             Permission.objects.create(name="Use test asset", code="test.cmdb.host.detail", type="api", path="/api/v1/cmdb/hosts/:id", method="GET"),
             Permission.objects.create(
                 name="创建工作流执行",

@@ -1,11 +1,14 @@
+from django.db import transaction
 from types import SimpleNamespace
 
 from rest_framework import serializers
 
 from apps.automation.models import CommandAtom, CommandVersion, WorkflowVersion
 from apps.cmdb.crypto import encrypt_secret
-from apps.cmdb.models import AssetHost, HostTagBinding, WorkerPool
+from apps.cmdb.models import AssetHost, HostTagBinding
+from apps.jobs.models import WorkerPool
 from apps.cmdb.targets import resolve_targets
+from .worker_pools import resolve_worker_pool
 from apps.ops.workflow.events import normalize_runner_event
 from common.api.serializers import StandardModelSerializer
 
@@ -234,21 +237,10 @@ class WorkflowRunCreateSerializer(serializers.Serializer):
         )
         attrs["hostIds"] = [target["host_id"] for target in targets]
 
-        worker_pool_id = attrs.get("workerPoolId")
-        if worker_pool_id:
-            try:
-                worker_pool = WorkerPool.objects.get(id=worker_pool_id, is_active=True)
-            except WorkerPool.DoesNotExist as exc:
-                raise serializers.ValidationError(
-                    {"workerPoolId": "Worker 池不存在或未启用"}
-                ) from exc
-        else:
-            worker_pool = WorkerPool.objects.filter(
-                is_default=True,
-                is_active=True,
-            ).first()
-            if not worker_pool:
-                raise serializers.ValidationError({"workerPoolId": "未配置默认 Worker 池"})
+        worker_pool = resolve_worker_pool(
+            actor=getattr(self.context.get("request"), "user", None),
+            pool_id=attrs.get("workerPoolId"), execution_kind="workflow",
+        )
 
         attrs["workflow_version"] = workflow_version
         attrs["worker_pool"] = worker_pool
@@ -807,3 +799,46 @@ class ModuleRunCreateSerializer(_QuickShellRunCreateSerializer):
             raise serializers.ValidationError(
                 {"hostIds": "One or more target hosts are missing or inactive"}
             ) from exc
+
+
+class WorkerPoolSerializer(StandardModelSerializer):
+    class Meta:
+        model = WorkerPool
+        fields = "__all__"
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        queue_name = str(
+            attrs.get("queue_name", getattr(self.instance, "queue_name", "")) or ""
+        ).strip()
+        concurrency_limit = attrs.get(
+            "concurrency_limit",
+            getattr(self.instance, "concurrency_limit", 0),
+        )
+        if not queue_name:
+            raise serializers.ValidationError({"queue_name": "队列名称不能为空"})
+        if int(concurrency_limit or 0) <= 0:
+            raise serializers.ValidationError({"concurrency_limit": "并发限制必须大于 0"})
+        attrs["queue_name"] = queue_name
+        return attrs
+
+    @transaction.atomic
+    def create(self, validated_data):
+        if not WorkerPool.objects.filter(is_default=True, is_active=True).exists():
+            validated_data["is_default"] = True
+            validated_data["is_active"] = True
+        instance = super().create(validated_data)
+        if instance.is_default:
+            WorkerPool.objects.exclude(pk=instance.pk).update(is_default=False)
+        return instance
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        updated = super().update(instance, validated_data)
+        if updated.is_default:
+            WorkerPool.objects.exclude(pk=updated.pk).update(is_default=False)
+        elif not WorkerPool.objects.filter(is_default=True, is_active=True).exists():
+            updated.is_default = True
+            updated.is_active = True
+            updated.save(update_fields=("is_default", "is_active", "updated_at"))
+        return updated

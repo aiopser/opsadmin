@@ -14,7 +14,6 @@ from apps.cmdb.models import (
     CredentialRef,
     HostGroup,
     ServiceTreeNode,
-    WorkerPool,
 )
 from apps.audit_center.models import DomainAuditEvent
 from apps.jobs.models import Gateway
@@ -188,12 +187,6 @@ class CMDBModelTests(TestCase):
         self.assertIn("default_gateway", serializer.errors)
 
     def test_host_config_summary(self):
-        pool = WorkerPool.objects.create(
-            code="default",
-            name="Default Worker Pool",
-            queue_name="ansible.default",
-            is_default=True,
-        )
         credential = CredentialRef.objects.create(
             name="Test Credential Ref",
             type=CredentialRef.CredentialType.PASSWORD,
@@ -214,7 +207,6 @@ class CMDBModelTests(TestCase):
         )
 
         self.assertEqual(host.config_summary(), "2C / 4G / 40G / 200G")
-        self.assertEqual(pool.queue_name, "ansible.default")
         self.assertEqual(credential.secret_ref, "vault://ops/test")
 
 

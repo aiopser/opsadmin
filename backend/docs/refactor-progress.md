@@ -39,3 +39,11 @@ Poetry 锁定 Django 5.2.17、DRF 3.16.1、Channels 4.3.2、Daphne 4.2.3、djang
 删除：jobs.build_host_snapshot、jobs 内重复目标查询、旧 ip/connection_port/ansible_connection_vars 快照字段、旧 mock ORM 形状锁测试。其业务替代为目标状态重验、快照不变及权限测试；creation_governance_tests 改为真实模型持久化测试。网关执行和 inventory 旧测试仅更新输入/输出字段及显式授权 fixture，未降低业务断言。
 
 专项 10 passed；相关回归 155 passed / 3 原失败（该命令早于新增执行期停用用例）。最终全量 252 passed / 14 原失败 / 13 subtests passed（53.40 秒）；迁移差异检查通过，旧 build_host_snapshot 全库 Python 引用清零。新增 cmdb/0009 在 SQLite 测试新库执行；MySQL 锁语义和迁移未验证。前端资产主数据 API 未变，执行详情新快照展示统一在 T14 对齐。
+
+## P2 / T05 WorkerPool
+
+WorkerPool/serializer/view/admin 仅归 jobs，表 jobs_worker_pool，唯一 API /api/v1/jobs/worker-pools。jobs 外键、所有运行时 import、权限种子与测试同步。新增 worker_pools.py 的权限、停用、execution_kinds 与队列校验；作业创建和节点队列均接入。创建/更新/删除有显式审计，初始化命令 init_worker_pools 幂等且不重置已有配置。
+
+删除：CMDB WorkerPool 模型、serializer/view/admin、旧路由、init_cmdb_defaults；旧 CMDB 引用仅存在历史迁移（T09 统一重建）和断言旧路由 404 的负向测试。原 CMDB config_summary 测试中池断言移至 jobs 的 API/队列用例，资产配置断言保持。
+
+专项 worker pools + CMDB 17 passed，最终全量 258 passed / 14 原基线 failed / 13 subtests passed（54.97 秒），迁移差异检查通过。新增 jobs/0025、0026 与 cmdb/0010 仅测试空库执行，无历史池数据搬迁。未验证真实 Worker 在线/失联、真实凭据临时文件生命周期（T06/T07），未声称 SQLite 等价 MySQL。

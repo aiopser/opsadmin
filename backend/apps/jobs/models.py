@@ -4,6 +4,27 @@ from django.db import models
 from common.models import StandardModelMixin
 
 
+def worker_execution_kinds():
+    return ["workflow", "quick_command", "playbook", "module"]
+
+
+class WorkerPool(StandardModelMixin):
+    code = models.CharField(max_length=64, unique=True, db_index=True)
+    name = models.CharField(max_length=128)
+    queue_name = models.CharField(max_length=128)
+    is_default = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    concurrency_limit = models.IntegerField(default=5)
+    execution_kinds = models.JSONField(default=worker_execution_kinds)
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        db_table = "jobs_worker_pool"
+        ordering = ["code"]
+
+
 class WorkflowRun(StandardModelMixin):
     class RunDomain(models.TextChoices):
         TASK = "task", "Task system"
@@ -73,7 +94,7 @@ class WorkflowRun(StandardModelMixin):
     graph_snapshot = models.JSONField(default=dict, blank=True)
     target_snapshot = models.JSONField(default=list, blank=True)
     worker_pool = models.ForeignKey(
-        "cmdb.WorkerPool",
+        "jobs.WorkerPool",
         on_delete=models.PROTECT,
         related_name="workflow_runs",
     )
@@ -115,7 +136,7 @@ class ScheduledJob(StandardModelMixin):
         blank=True,
     )
     worker_pool = models.ForeignKey(
-        "cmdb.WorkerPool",
+        "jobs.WorkerPool",
         on_delete=models.PROTECT,
         related_name="scheduled_jobs",
     )

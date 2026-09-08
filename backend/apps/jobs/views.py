@@ -13,9 +13,38 @@ from rest_framework.views import APIView
 
 from .tasks import enqueue_workflow_run
 from .cron import next_cron_time
-from apps.cmdb.models import WorkerPool
+from apps.jobs.models import WorkerPool
 from common.api.responses import api_error_response, api_ok_response
 from common.api.viewsets import StandardModelViewSet
+from .serializers import WorkerPoolSerializer
+
+
+class WorkerPoolViewSet(StandardModelViewSet):
+    queryset = WorkerPool.objects.all()
+    serializer_class = WorkerPoolSerializer
+    ordering_fields = ("id", "code", "name")
+    filterset_fields = ("code", "is_default", "is_active")
+    search_fields = ("code", "name", "queue_name")
+
+    def perform_create(self, serializer, request=None):
+        instance = serializer.save()
+        create_domain_audit_event(self.request.user, "jobs.worker_pool.create", "worker_pool", instance.pk, after=serializer.data)
+
+    def perform_update(self, serializer, request=None):
+        before = self.get_serializer(serializer.instance).data
+        instance = serializer.save()
+        create_domain_audit_event(self.request.user, "jobs.worker_pool.update", "worker_pool", instance.pk, before=before, after=serializer.data)
+
+    def perform_destroy(self, instance):
+        before = self.get_serializer(instance).data
+        identifier = instance.pk
+        instance.delete()
+        create_domain_audit_event(self.request.user, "jobs.worker_pool.delete", "worker_pool", identifier, before=before)
+
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        self.perform_destroy(self.get_object())
+        return api_ok_response()
 
 from apps.audit_center.services import create_domain_audit_event
 from .recovery import recover_stale_execution, request_execution_cancel

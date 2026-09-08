@@ -1,5 +1,6 @@
 from django.urls import path
 from rest_framework.routers import SimpleRouter
+from .views import WorkerPoolViewSet
 
 from .views import (
     CommandInterceptViewSet,
@@ -23,6 +24,7 @@ from .views import (
 )
 
 router = SimpleRouter(trailing_slash=False)
+router.register(r"v1/jobs/worker-pools", WorkerPoolViewSet, basename="jobs-worker-pools")
 router.register(
     r"v1/tasks/runs",
     WorkflowRunViewSet,

@@ -10,7 +10,6 @@ from .views import (
     HostGroupViewSet,
     HostTagViewSet,
     ServiceTreeNodeViewSet,
-    WorkerPoolViewSet,
     CMDBSearchView,
 )
 
@@ -36,9 +35,6 @@ router.register(
     r"v1/cmdb/credential-refs",
     CredentialRefViewSet,
     basename="cmdb-credential-refs",
-)
-router.register(
-    r"v1/cmdb/worker-pools", WorkerPoolViewSet, basename="cmdb-worker-pools"
 )
 
 urlpatterns = [

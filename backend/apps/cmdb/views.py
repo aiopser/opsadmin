@@ -27,7 +27,6 @@ from .models import (
     HostTag,
     HostTagBinding,
     ServiceTreeNode,
-    WorkerPool,
 )
 from .serializers import (
     AssetHostSerializer,
@@ -38,7 +37,6 @@ from .serializers import (
     HostGroupSerializer,
     HostTagSerializer,
     ServiceTreeNodeSerializer,
-    WorkerPoolSerializer,
 )
 
 
@@ -545,14 +543,6 @@ class CredentialRefViewSet(CMDBAuditModelViewSet):
                 shutil.rmtree(private_data_dir, ignore_errors=True)
 
 
-class WorkerPoolViewSet(CMDBAuditModelViewSet):
-    audit_action_prefix = "cmdb.worker_pool"
-    audit_resource_type = "cmdb_worker_pool"
-    queryset = WorkerPool.objects.all()
-    serializer_class = WorkerPoolSerializer
-    ordering_fields = ("id", "code", "name")
-    filter_fields = ("code", "is_default", "is_active")
-    search_fields = ("code", "name", "queue_name")
 
 
 class BusinessViewSet(CMDBAuditModelViewSet):
