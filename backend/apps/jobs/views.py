@@ -10,6 +10,7 @@ from django.db import transaction
 from django.db.models import Avg, Count
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
+from rest_framework.exceptions import ValidationError
 from rest_framework.decorators import action
 from rest_framework.views import APIView
 
@@ -79,7 +80,6 @@ from .settings_service import (
     save_notify_settings,
 )
 from apps.jobs.application.runs import (
-    InvalidTargetHosts,
     create_workflow_run_from_host_ids,
     clone_workflow_run,
     scheduled_job_run_options,
@@ -146,13 +146,7 @@ class WorkflowRunViewSet(StandardModelViewSet):
     ).all()
     serializer_class = WorkflowRunSerializer
     ordering_fields = ("id", "status", "started_at", "finished_at", "updated_at")
-    filterset_fields = (
-        "status",
-        "trigger_type",
-        "execution_kind",
-        "workflow_version",
-        "worker_pool",
-    )
+    filterset_fields = ("status", "trigger_type", "execution_kind", "workflow_version", "worker_pool")
     search_fields = ("=id", "failure_reason", "workflow_version__workflow__name")
     run_domain = WorkflowRun.RunDomain.TASK
 
@@ -162,6 +156,16 @@ class WorkflowRunViewSet(StandardModelViewSet):
             return queryset.none()
         if not self.request.user.is_superuser:
             queryset = queryset.filter(triggered_by=self.request.user)
+        aliases = {
+            "triggerType": "trigger_type",
+            "executionKind": "execution_kind",
+            "workflowVersionId": "workflow_version_id",
+            "workerPoolId": "worker_pool_id",
+        }
+        for api_name, model_name in aliases.items():
+            value = self.request.query_params.get(api_name)
+            if value not in (None, ""):
+                queryset = queryset.filter(**{model_name: value})
         created_after = self.request.query_params.get("created_after")
         created_before = self.request.query_params.get("created_before")
         if created_after:
@@ -271,10 +275,9 @@ class WorkflowRunViewSet(StandardModelViewSet):
     def events(self, request, pk=None):
         run = self.get_object()
         params = request.query_params
-        if "after_id" in params:
-            return api_error_response(
-                message="after_id is no longer supported; use cursor"
-            )
+        unknown = set(params) - {"cursor", "limit"}
+        if unknown:
+            return api_error_response(message="Unsupported event query parameter")
         cursor_text, limit_text = params.get("cursor", "0"), params.get("limit", "200")
         if (
             not cursor_text.isascii()
@@ -299,8 +302,8 @@ class WorkflowRunViewSet(StandardModelViewSet):
         return api_ok_response(
             {
                 "events": JobEventLogSerializer(events, many=True).data,
-                "next_cursor": events[-1].sequence if events else cursor,
-                "has_more": len(rows) > limit,
+                "nextCursor": events[-1].sequence if events else cursor,
+                "hasMore": len(rows) > limit,
                 "terminal": run.status
                 in {
                     WorkflowRun.Status.SUCCESS,
@@ -308,7 +311,7 @@ class WorkflowRunViewSet(StandardModelViewSet):
                     WorkflowRun.Status.TIMEOUT,
                     WorkflowRun.Status.CANCELED,
                 },
-                "snapshot_version": run.event_sequence,
+                "snapshotVersion": run.event_sequence,
             }
         )
 
@@ -516,6 +519,7 @@ class WorkflowRunViewSet(StandardModelViewSet):
         transaction.on_commit(lambda: enqueue_workflow_run(rerun_run.id))
         return api_ok_response(self.get_serializer(rerun_run).data)
 
+
 class OpsWorkflowRunViewSet(WorkflowRunViewSet):
     """作业系统运行历史；与任务工作流共享执行引擎但不共享查询口径。"""
 
@@ -629,7 +633,7 @@ class ScheduledJobViewSet(StandardModelViewSet):
                 timeout_seconds=run_options["timeout_seconds"],
                 queue_timeout_seconds=run_options["queue_timeout_seconds"],
             )
-        except InvalidTargetHosts:
+        except ValidationError:
             return api_error_response("定时任务包含无效或未启用的目标主机")
         append_run_event(
             run_id=(run).id,

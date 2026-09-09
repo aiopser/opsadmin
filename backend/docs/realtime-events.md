@@ -1,6 +1,6 @@
 # 增量事件与实时通知
 
-唯一 REST 事件入口为 `/api/v1/tasks/runs/{id}/events`，ops 域为 `/api/v1/ops/runs/{id}/events`。参数 `cursor` 默认 0、非负；`limit` 默认 200、范围 1—1000；`after_id` 明确返回 400。响应沿用 code/data/msg envelope，data 为 events、next_cursor、has_more、terminal、snapshot_version。只返回当前快照序号以内的事件，消费者按 sequence 续读并去重。无 Channel Layer 时 REST 仍可用。
+唯一 REST 事件入口为 `/api/v1/tasks/runs/{id}/events`，ops 域为 `/api/v1/ops/runs/{id}/events`。参数 `cursor` 默认 0、非负；`limit` 默认 200、范围 1—1000；`after_id` 明确返回 400。响应沿用 code/data/msg envelope，data 为 events、nextCursor、hasMore、terminal、snapshotVersion。只返回当前快照序号以内的事件，消费者按 sequence 续读并去重。无 Channel Layer 时 REST 仍可用。
 
 WebSocket 唯一路径 `/ws/jobs/runs/`，不接受 query token。先通过已登录 HTTP 会话 POST 同一 run 的 `realtime-ticket` 子资源，获取 ticket 和 expires_in=60。随后向 WS 发送 `{ "type": "subscribe", "run_id": 123, "ticket": "..." }`。服务器返回 subscribed、events_available 或 error；通知只含 run_id/sequence，不携带事件数据，收到通知后使用 REST 补拉。普通用户只访问本人运行，超管按已有 RBAC 访问；票据消费后重新检查用户状态和资源权限。
 

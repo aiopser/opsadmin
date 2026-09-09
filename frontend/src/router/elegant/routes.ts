@@ -196,6 +196,26 @@ export const generatedRoutes: GeneratedRoute[] = [
     ]
   },
   {
+    name: 'ops',
+    path: '/ops',
+    component: 'layout.base',
+    meta: {
+      title: 'ops',
+      i18nKey: 'route.ops'
+    },
+    children: [
+      {
+        name: 'ops_quick-execute',
+        path: '/ops/quick-execute',
+        component: 'view.ops_quick-execute',
+        meta: {
+          title: 'ops_quick-execute',
+          i18nKey: 'route.ops_quick-execute'
+        }
+      }
+    ]
+  },
+  {
     name: 'plugin',
     path: '/plugin',
     component: 'layout.base',
@@ -439,6 +459,36 @@ export const generatedRoutes: GeneratedRoute[] = [
           title: 'plugin_video',
           i18nKey: 'route.plugin_video',
           icon: 'mdi:video'
+        }
+      }
+    ]
+  },
+  {
+    name: 'task',
+    path: '/task',
+    component: 'layout.base',
+    meta: {
+      title: 'task',
+      i18nKey: 'route.task'
+    },
+    children: [
+      {
+        name: 'task_run',
+        path: '/task/run',
+        component: 'view.task_run',
+        meta: {
+          title: 'task_run',
+          i18nKey: 'route.task_run'
+        }
+      },
+      {
+        name: 'task_run-detail',
+        path: '/task/run-detail/:id',
+        component: 'view.task_run-detail',
+        meta: {
+          title: 'task_run-detail',
+          i18nKey: 'route.task_run-detail',
+          hideInMenu: true
         }
       }
     ]

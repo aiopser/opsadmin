@@ -165,6 +165,11 @@ const local: App.I18n.Schema = {
     home: '首页',
     audit: '审计中心',
     audit_event: '审计日志',
+    ops: '作业系统',
+    'ops_quick-execute': '快速执行',
+    task: '任务系统',
+    task_run: '任务列表',
+    'task_run-detail': '运行详情',
     document: '文档',
     document_project: '项目文档',
     'document_project-link': '项目文档(外链)',
@@ -507,6 +512,99 @@ const local: App.I18n.Schema = {
           action: '请输入动作',
           resourceType: '请输入资源类型',
           keywords: '动作/资源/操作人/IP'
+        }
+      }
+    },
+    task: {
+      run: {
+        title: '任务运行列表',
+        id: '运行ID',
+        workflowName: '工作流',
+        statusLabel: '状态',
+        executionKind: '执行类型',
+        runDomain: '运行域',
+        targetCount: '目标数',
+        triggeredBy: '触发人',
+        startedAt: '开始时间',
+        finishedAt: '结束时间',
+        duration: '耗时',
+        failureReason: '失败原因',
+        workerPool: '执行池',
+        keyword: '关键词',
+        cancel: '取消',
+        retry: '重试',
+        rerun: '重跑',
+        log: '日志',
+        retryCreated: '已创建新运行',
+        status: {
+          pending: '等待调度',
+          queued: '已入队',
+          running: '运行中',
+          waiting: '等待中',
+          cancel_requested: '取消请求中',
+          success: '成功',
+          failed: '失败',
+          timeout: '超时',
+          canceled: '已取消'
+        },
+        kind: {
+          workflow: '工作流',
+          quick_command: '快速命令',
+          playbook: 'Playbook',
+          module: '模块'
+        },
+        domain: {
+          task: '任务',
+          ops: '作业'
+        }
+      },
+      detail: {
+        live: '实时',
+        fallback: '轮询',
+        node: {
+          title: '节点执行状态',
+          key: '节点',
+          type: '类型',
+          command: '命令',
+          attempts: '次数',
+          exitCode: '退出码',
+          hostResults: '主机结果',
+          status: {
+            pending: '等待中',
+            queued: '已入队',
+            running: '运行中',
+            success: '成功',
+            failed: '失败',
+            skipped: '跳过',
+            ignored: '忽略',
+            timeout: '超时',
+            canceled: '已取消'
+          }
+        },
+        event: {
+          title: '执行事件'
+        },
+        host: {
+          hostname: '主机名',
+          ip: 'IP地址'
+        }
+      }
+    },
+    ops: {
+      quickExecute: {
+        title: '快速执行',
+        commandType: '命令类型',
+        commandContent: '命令内容',
+        hosts: '目标主机',
+        workerPool: '执行池',
+        submit: '执行',
+        submitted: '已提交执行',
+        form: {
+          commandContentPlaceholder: '请输入要执行的命令内容',
+          commandContentRequired: '请输入命令内容',
+          hostIdsRequired: '请选择目标主机',
+          hostsPlaceholder: '请选择目标主机（可搜索）',
+          workerPoolPlaceholder: '默认使用系统默认执行池'
         }
       }
     }

@@ -185,6 +185,50 @@ class BuiltInProtectionTests(TestCase):
 
 
 class SeedSystemSettingsTests(TestCase):
+    def test_new_seed_does_not_create_removed_job_center_or_event_permissions(self):
+        seed_system_settings(bind_superusers=False)
+        self.assertFalse(Permission.objects.filter(code__startswith="menu.jobs.").exists())
+        self.assertFalse(Permission.objects.filter(path__startswith="/api/v1/jobs/events").exists())
+
+    def test_quick_execution_button_grants_creation_and_target_reads(self):
+        seed_system_settings(bind_superusers=False)
+        button = MenuButton.objects.get(code="jobs.quick_command:execute")
+        self.assertEqual(button.menu.component, "view.ops_quick-execute")
+        codes = set(button.permission.values_list("code", flat=True))
+        self.assertTrue({"jobs.quick_command.create", "cmdb.host.list", "jobs.worker_pool.list"} <= codes)
+
+    def test_run_read_buttons_bind_domain_specific_events_and_tickets(self):
+        seed_system_settings(bind_superusers=False)
+        for prefix, path in (("jobs", "tasks"), ("ops", "ops")):
+            button = MenuButton.objects.get(code=f"{prefix}.workflow_run:read")
+            codes = set(button.permission.values_list("code", flat=True))
+            for action in ("detail", "events", "log", "realtime_ticket"):
+                self.assertIn(f"{prefix}.workflow_run.{action}", codes)
+            event = Permission.objects.get(code=f"{prefix}.workflow_run.events")
+            self.assertEqual(event.path, f"/api/v1/{path}/runs/:id/events")
+            self.assertNotIn(f"{prefix}.workflow_run.cancel", codes)
+
+    def test_operator_role_expands_current_quick_execution_permissions(self):
+        seed_system_settings(bind_superusers=False)
+        role = Role.objects.create(name="current_quick_operator")
+        button = MenuButton.objects.get(code="jobs.quick_command:execute")
+        role.permission.add(*button.get_effective_permissions())
+        self.assertIn("jobs.quick_command.create", role.get_api_permissions().values_list("code", flat=True))
+        self.assertNotIn("audit.event.export", role.get_api_permissions().values_list("code", flat=True))
+
+    def test_flow_designer_uses_notification_templates(self):
+        seed_system_settings(bind_superusers=False)
+        menu = Menu.objects.get(permission__code="menu.task.flow_design")
+        codes = set(menu.permission.values_list("code", flat=True))
+        self.assertTrue({"automation.workflow_version.graph", "automation.node_resource.list", "automation.notification_template.list"} <= codes)
+
+    def test_task_list_uses_existing_soybean_run_component_and_retry_actions(self):
+        seed_system_settings(bind_superusers=False)
+        menu = Menu.objects.get(permission__code="menu.task.list")
+        self.assertEqual(menu.component, "view.task_run")
+        button = MenuButton.objects.get(code="jobs.workflow_run:retry", menu=menu)
+        self.assertTrue({"jobs.workflow_run.retry_failed", "jobs.workflow_run.rerun", "jobs.node_run.retry"} <= set(button.permission.values_list("code", flat=True)))
+
     def test_seed_converts_legacy_menu_permissions_to_buttons_in_place(self):
         role = Role.objects.create(name="legacy_operator")
         legacy_create = Permission.objects.create(
@@ -405,65 +449,6 @@ class SeedSystemSettingsTests(TestCase):
 
         self.assertEqual(first_counts, second_counts)
 
-    def test_reseed_migrates_legacy_job_menu_role_grants(self):
-        legacy_grants = {
-            "automation.command:read": (
-                "menu.jobs.command",
-                "/api/v1/automation/templates",
-            ),
-            "automation.workflow:read": (
-                "menu.jobs.workflow",
-                "/api/v1/automation/workflows",
-            ),
-            "jobs.workflow_run:read": (
-                "menu.jobs.run",
-                "/api/v1/tasks/runs",
-            ),
-            "jobs.event:read": (
-                "menu.jobs.run",
-                "/api/v1/jobs/audit",
-            ),
-        }
-        reused_button_codes = {
-            "automation.command:read",
-            "automation.workflow:read",
-            "jobs.workflow_run:read",
-        }
-        actors = {}
-        for index, legacy_code in enumerate(legacy_grants):
-            username = f"legacy_job_operator_{index}"
-            user = get_user_model().objects.create_user(username=username)
-            role = Role.objects.create(name=username)
-            user.role.add(role)
-            legacy_permission = Permission.objects.create(
-                name=legacy_code,
-                code=legacy_code,
-                type=Permission.PermissionType.MENU,
-                is_system=True,
-            )
-            role.permission.add(legacy_permission)
-            actors[legacy_code] = (user, role, legacy_permission.id)
-
-        seed_system_settings(bind_superusers=False)
-
-        for legacy_code, (replacement_code, path) in legacy_grants.items():
-            user, role, legacy_permission_id = actors[legacy_code]
-            role.refresh_from_db()
-            role_codes = set(role.permission.values_list("code", flat=True))
-            self.assertIn(replacement_code, role_codes)
-            if legacy_code in reused_button_codes:
-                self.assertIn(legacy_code, role_codes)
-                converted_permission = Permission.objects.get(code=legacy_code)
-                self.assertEqual(converted_permission.id, legacy_permission_id)
-                self.assertEqual(
-                    converted_permission.type,
-                    Permission.PermissionType.BUTTON,
-                )
-            else:
-                self.assertNotIn(legacy_code, role_codes)
-                self.assertFalse(Permission.objects.filter(code=legacy_code).exists())
-            allowed, reason = verify_permission(user, path, "GET")
-            self.assertTrue(allowed, reason)
 
     def test_system_log_menu_binds_related_api_permissions(self):
         seed_system_settings(bind_superusers=False)
@@ -502,173 +487,10 @@ class SeedSystemSettingsTests(TestCase):
         self.assertIn("cmdb.host:delete", delete_codes)
         self.assertIn("cmdb.host.delete", delete_codes)
 
-    def test_automation_and_jobs_menus_bind_expected_api_permissions(self):
-        seed_system_settings(bind_superusers=False)
 
-        command_menu = Menu.objects.get(permission__code="menu.jobs.command")
-        command_codes = set(command_menu.permission.values_list("code", flat=True))
-        self.assertIn("menu.jobs.command", command_codes)
-        self.assertIn("automation.command.list", command_codes)
-        self.assertIn("automation.command_version.list", command_codes)
-        self.assertNotIn("automation.command.create", command_codes)
 
-        command_publish = MenuButton.objects.get(code="automation.command:publish")
-        command_publish_codes = set(
-            command_publish.permission.values_list("code", flat=True)
-        )
-        self.assertIn("automation.command:publish", command_publish_codes)
-        self.assertIn("automation.command_version.publish", command_publish_codes)
 
-        workflow_menu = Menu.objects.get(permission__code="menu.jobs.workflow")
-        workflow_codes = set(workflow_menu.permission.values_list("code", flat=True))
-        self.assertIn("automation.workflow.list", workflow_codes)
-        self.assertIn("automation.workflow_node.list", workflow_codes)
-        self.assertNotIn("jobs.workflow_run.create", workflow_codes)
 
-        workflow_execute = MenuButton.objects.get(code="automation.workflow:execute")
-        workflow_execute_codes = set(
-            workflow_execute.permission.values_list("code", flat=True)
-        )
-        self.assertIn("automation.workflow:execute", workflow_execute_codes)
-        self.assertIn("jobs.workflow_run.create", workflow_execute_codes)
-        self.assertIn("automation.workflow_version.list", workflow_execute_codes)
-        self.assertIn("cmdb.host.list", workflow_execute_codes)
-
-        workflow_update = MenuButton.objects.get(code="automation.workflow:update")
-        workflow_update_codes = set(
-            workflow_update.permission.values_list("code", flat=True)
-        )
-        self.assertIn("automation.workflow_node.list", workflow_update_codes)
-        self.assertIn("automation.workflow_node.create", workflow_update_codes)
-        self.assertIn("automation.command_version.list", workflow_update_codes)
-
-        job_menu = Menu.objects.get(permission__code="menu.jobs.run")
-        job_codes = set(job_menu.permission.values_list("code", flat=True))
-        self.assertIn("menu.jobs.run", job_codes)
-        self.assertIn("jobs.workflow_run.list", job_codes)
-        self.assertIn("jobs.workflow_run.nodes", job_codes)
-        self.assertIn("jobs.workflow_run.log", job_codes)
-        self.assertNotIn("jobs.workflow_run.cancel", job_codes)
-
-        stream_permission = Permission.objects.get(code="jobs.workflow_run.log")
-        self.assertEqual(
-            stream_permission.path,
-            "/api/v1/tasks/runs/:id/log",
-        )
-        self.assertEqual(stream_permission.method, "GET")
-
-        self.assertIn("jobs.event.list", job_codes)
-        self.assertNotIn("audit.event.list", job_codes)
-
-        cancel_button = MenuButton.objects.get(code="jobs.workflow_run:cancel")
-        cancel_codes = set(cancel_button.permission.values_list("code", flat=True))
-        self.assertIn("jobs.workflow_run:cancel", cancel_codes)
-        self.assertIn("jobs.workflow_run.cancel", cancel_codes)
-
-    def test_job_center_menus_bind_template_and_execution_api_permissions(self):
-        seed_system_settings(bind_superusers=False)
-
-        expected_types = {
-            "menu.jobs.quick_command": Menu.MenuType.MENU,
-            "menu.jobs.command": Menu.MenuType.MENU,
-            "menu.jobs.workflow": Menu.MenuType.MENU,
-            "menu.jobs.run": Menu.MenuType.MENU,
-        }
-        menus = {}
-        for code, menu_type in expected_types.items():
-            menu = Menu.objects.get(permission__code=code)
-            self.assertEqual(menu.menu_type, menu_type)
-            self.assertEqual(menu.pid.menu_type, Menu.MenuType.CATALOG)
-            menus[code] = menu
-
-        quick_codes = set(
-            menus["menu.jobs.quick_command"].permission.values_list("code", flat=True)
-        )
-        self.assertIn("automation.template.list", quick_codes)
-        self.assertNotIn("jobs.quick_command.create", quick_codes)
-
-        workflow_codes = set(
-            menus["menu.jobs.workflow"].permission.values_list("code", flat=True)
-        )
-        self.assertIn("automation.workflow.list", workflow_codes)
-        self.assertNotIn("jobs.workflow_run.create", workflow_codes)
-
-        command_codes = set(
-            menus["menu.jobs.command"].permission.values_list("code", flat=True)
-        )
-        self.assertIn("automation.command.list", command_codes)
-        self.assertIn("automation.command_version.list", command_codes)
-
-        run_codes = set(
-            menus["menu.jobs.run"].permission.values_list("code", flat=True)
-        )
-        self.assertIn("jobs.workflow_run.list", run_codes)
-        self.assertIn("jobs.workflow_run.log", run_codes)
-
-        read_button = MenuButton.objects.get(code="jobs.workflow_run:read")
-        self.assertEqual(read_button.menu, menus["menu.jobs.run"])
-        self.assertIn(
-            "jobs.workflow_run.list",
-            read_button.permission.values_list("code", flat=True),
-        )
-
-        execute = MenuButton.objects.get(code="jobs.quick_command:execute")
-        self.assertEqual(execute.menu, menus["menu.jobs.quick_command"])
-        self.assertIn(
-            "jobs.quick_command.create",
-            execute.permission.values_list("code", flat=True),
-        )
-        self.assertIn(
-            "automation.command_version.detail",
-            execute.permission.values_list("code", flat=True),
-        )
-
-        for code, api_code in (
-            ("jobs.workflow_run:cancel", "jobs.workflow_run.cancel"),
-            ("jobs.workflow_run:retry", "jobs.workflow_run.retry_failed"),
-        ):
-            button = MenuButton.objects.get(code=code)
-            self.assertEqual(button.menu, menus["menu.jobs.run"])
-            self.assertIn(api_code, button.permission.values_list("code", flat=True))
-
-    def test_job_center_menu_permissions_expand_to_role_api_permissions(self):
-        seed_system_settings(bind_superusers=False)
-        role = Role.objects.create(name="job_center_operator")
-        role.permission.add(
-            Permission.objects.get(code="menu.jobs.quick_command"),
-            Permission.objects.get(code="jobs.quick_command:execute"),
-        )
-        execute_button = MenuButton.objects.get(code="jobs.quick_command:execute")
-        role.permission.add(*execute_button.get_effective_permissions())
-
-        api_codes = set(role.get_api_permissions().values_list("code", flat=True))
-        self.assertIn("automation.template.list", api_codes)
-        self.assertIn("jobs.quick_command.create", api_codes)
-        self.assertIn("automation.command_version.detail", api_codes)
-
-    def test_task_flow_designer_menu_binds_designer_and_resource_permissions(self):
-        seed_system_settings(bind_superusers=False)
-
-        flow_menu = Menu.objects.get(permission__code="menu.task.flow_design")
-        flow_codes = set(flow_menu.permission.values_list("code", flat=True))
-
-        self.assertIn("automation.workflow_version.list", flow_codes)
-        self.assertIn("automation.workflow_version.graph", flow_codes)
-        self.assertIn("automation.template.list", flow_codes)
-        self.assertIn("automation.api_endpoint.list", flow_codes)
-        self.assertIn("automation.jenkins_server.jobs", flow_codes)
-        self.assertIn("automation.notification_channel.list", flow_codes)
-
-        execution_menu = Menu.objects.get(permission__code="menu.task.execution")
-        execution_codes = set(execution_menu.permission.values_list("code", flat=True))
-        self.assertIn("automation.workflow_version.graph", execution_codes)
-
-    def test_job_workflow_menu_uses_existing_workflow_management_component(self):
-        seed_system_settings(bind_superusers=False)
-
-        workflow_menu = Menu.objects.get(permission__code="menu.jobs.workflow")
-
-        self.assertEqual(workflow_menu.component, "automation/workflow/index")
 
 
 class RoleMenuAssignmentTests(TestCase):
@@ -991,6 +813,14 @@ class DynamicRouteTests(TestCase):
         response = view(request)
         return response.data["data"]
 
+    def test_execution_detail_preserves_generated_name_and_identifier_path(self):
+        data = self._get_routes()
+        task = next(route for route in data["routes"] if route["path"] == "/task")
+        detail = next(route for route in task["children"] if route["component"] == "view.task_run-detail")
+        self.assertEqual(detail["name"], "task_run-detail")
+        self.assertEqual(detail["path"], "/task/run-detail/:id")
+        self.assertTrue(detail["meta"]["hideInMenu"])
+
     def test_routes_response_matches_soybean_user_route_shape(self):
         data = self._get_routes()
 
@@ -1000,7 +830,7 @@ class DynamicRouteTests(TestCase):
 
         # 种子根目录 route_name 为 "/system"
         system_route = next(
-            route for route in data["routes"] if route["name"] == "/system"
+            route for route in data["routes"] if route["name"] == "system"
         )
         # 旧数据 component="Layout" 归一化为 layout.base
         self.assertEqual(system_route["component"], "layout.base")
@@ -1041,7 +871,7 @@ class DynamicRouteTests(TestCase):
 
         data = self._get_routes()
         system_route = next(
-            route for route in data["routes"] if route["name"] == "/system"
+            route for route in data["routes"] if route["name"] == "system"
         )
         user_route = next(
             child for child in system_route["children"] if child["name"] == "manage_user"
@@ -1063,7 +893,7 @@ class DynamicRouteTests(TestCase):
 
         data = self._get_routes()
         system_route = next(
-            route for route in data["routes"] if route["name"] == "/system"
+            route for route in data["routes"] if route["name"] == "system"
         )
         user_route = next(
             child for child in system_route["children"] if child["name"] == "manage_user"

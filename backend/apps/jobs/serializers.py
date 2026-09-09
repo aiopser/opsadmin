@@ -30,14 +30,95 @@ from .quick_commands import (
     quick_command_risk_level,
 )
 from .security import CommandBlockedError, check_command
-from apps.jobs.application.runs import InvalidQuickCommand, InvalidTargetHosts, create_quick_command_run, create_workflow_run_from_host_ids
-from apps.jobs.execution.plan_builder import InvalidSourcePlaybook, build_source_playbook
+from apps.jobs.application.runs import (
+    InvalidQuickCommand,
+    create_quick_command_run,
+    create_workflow_run_from_host_ids,
+)
+from apps.jobs.execution.plan_builder import (
+    InvalidSourcePlaybook,
+    build_source_playbook,
+)
 
 
 class WorkflowRunSerializer(StandardModelSerializer):
+    workflowVersionId = serializers.IntegerField(
+        source="workflow_version_id", allow_null=True, read_only=True
+    )
+    runDomain = serializers.CharField(source="run_domain", read_only=True)
+    executionKind = serializers.CharField(source="execution_kind", read_only=True)
+    triggerType = serializers.CharField(source="trigger_type", read_only=True)
+    triggeredById = serializers.IntegerField(
+        source="triggered_by_id", allow_null=True, read_only=True
+    )
+    inputVars = serializers.JSONField(source="input_vars", read_only=True)
+    contextVars = serializers.JSONField(source="context_vars", read_only=True)
+    graphSnapshot = serializers.JSONField(source="graph_snapshot", read_only=True)
+    targetSnapshot = serializers.JSONField(source="target_snapshot", read_only=True)
+    eventSequence = serializers.IntegerField(source="event_sequence", read_only=True)
+    workerPoolId = serializers.IntegerField(source="worker_pool_id", read_only=True)
+    startedAt = serializers.DateTimeField(
+        source="started_at", allow_null=True, read_only=True
+    )
+    finishedAt = serializers.DateTimeField(
+        source="finished_at", allow_null=True, read_only=True
+    )
+    durationMs = serializers.IntegerField(
+        source="duration_ms", allow_null=True, read_only=True
+    )
+    failureReason = serializers.CharField(source="failure_reason", read_only=True)
+    celeryTaskId = serializers.CharField(source="celery_task_id", read_only=True)
+    workerName = serializers.CharField(source="worker_name", read_only=True)
+    heartbeatAt = serializers.DateTimeField(
+        source="heartbeat_at", allow_null=True, read_only=True
+    )
+    timeoutSeconds = serializers.IntegerField(source="timeout_seconds", read_only=True)
+    queueTimeoutSeconds = serializers.IntegerField(
+        source="queue_timeout_seconds", read_only=True
+    )
+    queueDeadlineAt = serializers.DateTimeField(
+        source="queue_deadline_at", allow_null=True, read_only=True
+    )
+    workflowDeadlineAt = serializers.DateTimeField(
+        source="workflow_deadline_at", allow_null=True, read_only=True
+    )
+    cancelRequestedAt = serializers.DateTimeField(
+        source="cancel_requested_at", allow_null=True, read_only=True
+    )
+    createdAt = serializers.DateTimeField(source="created_at", read_only=True)
+    updatedAt = serializers.DateTimeField(source="updated_at", read_only=True)
+
     class Meta:
         model = WorkflowRun
-        fields = "__all__"
+        fields = [
+            "id",
+            "workflowVersionId",
+            "runDomain",
+            "executionKind",
+            "status",
+            "triggerType",
+            "triggeredById",
+            "inputVars",
+            "contextVars",
+            "graphSnapshot",
+            "targetSnapshot",
+            "eventSequence",
+            "workerPoolId",
+            "startedAt",
+            "finishedAt",
+            "durationMs",
+            "failureReason",
+            "celeryTaskId",
+            "workerName",
+            "heartbeatAt",
+            "timeoutSeconds",
+            "queueTimeoutSeconds",
+            "queueDeadlineAt",
+            "workflowDeadlineAt",
+            "cancelRequestedAt",
+            "createdAt",
+            "updatedAt",
+        ]
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
@@ -227,13 +308,15 @@ class WorkflowRunCreateSerializer(serializers.Serializer):
             )
         targets = resolve_targets(
             actor=getattr(self.context.get("request"), "user", None),
-            host_ids=host_ids, group_ids=group_ids,
+            host_ids=host_ids,
+            group_ids=group_ids,
         )
         attrs["hostIds"] = [target["host_id"] for target in targets]
 
         worker_pool = resolve_worker_pool(
             actor=getattr(self.context.get("request"), "user", None),
-            pool_id=attrs.get("workerPoolId"), execution_kind="workflow",
+            pool_id=attrs.get("workerPoolId"),
+            execution_kind="workflow",
         )
 
         attrs["workflow_version"] = workflow_version
@@ -242,23 +325,18 @@ class WorkflowRunCreateSerializer(serializers.Serializer):
 
     def save(self, **kwargs):
         request = self.context.get("request")
-        try:
-            return create_workflow_run_from_host_ids(
-                workflow_version=self.validated_data["workflow_version"],
-                host_ids=self.validated_data["hostIds"],
-                input_vars={
-                    **(self.validated_data.get("inputVars") or {}),
-                    **self._execution_input_vars(),
-                },
-                worker_pool=self.validated_data["worker_pool"],
-                triggered_by=getattr(request, "user", None),
-                timeout_seconds=self.validated_data.get("timeoutSeconds"),
-                queue_timeout_seconds=self.validated_data.get("queueTimeoutSeconds"),
-            )
-        except InvalidTargetHosts as exc:
-            raise serializers.ValidationError(
-                {"hostIds": "One or more target hosts are missing or inactive"}
-            ) from exc
+        return create_workflow_run_from_host_ids(
+            workflow_version=self.validated_data["workflow_version"],
+            host_ids=self.validated_data["hostIds"],
+            input_vars={
+                **(self.validated_data.get("inputVars") or {}),
+                **self._execution_input_vars(),
+            },
+            worker_pool=self.validated_data["worker_pool"],
+            triggered_by=getattr(request, "user", None),
+            timeout_seconds=self.validated_data.get("timeoutSeconds"),
+            queue_timeout_seconds=self.validated_data.get("queueTimeoutSeconds"),
+        )
 
 
 class ScheduledJobSerializer(StandardModelSerializer):
@@ -303,7 +381,12 @@ class ScheduledJobSerializer(StandardModelSerializer):
         input_vars = attrs.get("input_vars", getattr(self.instance, "input_vars", {}))
         if not isinstance(input_vars, dict):
             raise serializers.ValidationError({"input_vars": "流程参数必须是 JSON 对象"})
-        for field in ("forks", "serial_batch", "timeout_seconds", "queue_timeout_seconds"):
+        for field in (
+            "forks",
+            "serial_batch",
+            "timeout_seconds",
+            "queue_timeout_seconds",
+        ):
             value = attrs.get(field, getattr(self.instance, field, None))
             if value is not None and int(value) <= 0:
                 raise serializers.ValidationError({field: "必须大于 0"})
@@ -312,9 +395,7 @@ class ScheduledJobSerializer(StandardModelSerializer):
             getattr(self.instance, "max_fail_percentage", 0),
         )
         if not 0 <= int(max_fail_percentage) <= 100:
-            raise serializers.ValidationError(
-                {"max_fail_percentage": "必须在 0 到 100 之间"}
-            )
+            raise serializers.ValidationError({"max_fail_percentage": "必须在 0 到 100 之间"})
         workflow_version = attrs.get(
             "workflow_version",
             getattr(self.instance, "workflow_version", None),
@@ -490,11 +571,8 @@ class QuickCommandRunCreateSerializer(WorkflowRunCreateSerializer):
                     "automation.command:execute_high_risk"
                 ),
                 extra_input_vars=extra_input_vars or None,
+                timeout_seconds=self.validated_data.get("timeoutSeconds"),
             )
-        except InvalidTargetHosts as exc:
-            raise serializers.ValidationError(
-                {"hostIds": "One or more target hosts are missing or inactive"}
-            ) from exc
         except InvalidQuickCommand as exc:
             raise serializers.ValidationError(
                 {"commandContent": "Command source or permission is no longer valid"}
@@ -502,9 +580,69 @@ class QuickCommandRunCreateSerializer(WorkflowRunCreateSerializer):
 
 
 class NodeRunSerializer(StandardModelSerializer):
+    createdAt = serializers.DateTimeField(source="created_at", read_only=True)
+    updatedAt = serializers.DateTimeField(source="updated_at", read_only=True)
+    workflowRun = serializers.IntegerField(source="workflow_run_id", read_only=True)
+    workflowNode = serializers.IntegerField(
+        source="workflow_node_id", allow_null=True, read_only=True
+    )
+    commandVersion = serializers.IntegerField(
+        source="command_version_id", allow_null=True, read_only=True
+    )
+    nodeKey = serializers.CharField(source="node_key", read_only=True)
+    nodeName = serializers.CharField(source="node_name", read_only=True)
+    nodeType = serializers.CharField(source="node_type", read_only=True)
+    configSnapshot = serializers.JSONField(source="config_snapshot", read_only=True)
+    inputVars = serializers.JSONField(source="input_vars", read_only=True)
+    outputVars = serializers.JSONField(source="output_vars", read_only=True)
+    attemptCount = serializers.IntegerField(source="attempt_count", read_only=True)
+    celeryTaskId = serializers.CharField(source="celery_task_id", read_only=True)
+    queuedAt = serializers.DateTimeField(
+        source="queued_at", allow_null=True, read_only=True
+    )
+    heartbeatAt = serializers.DateTimeField(
+        source="heartbeat_at", allow_null=True, read_only=True
+    )
+    startedAt = serializers.DateTimeField(
+        source="started_at", allow_null=True, read_only=True
+    )
+    finishedAt = serializers.DateTimeField(
+        source="finished_at", allow_null=True, read_only=True
+    )
+    durationMs = serializers.IntegerField(
+        source="duration_ms", allow_null=True, read_only=True
+    )
+    exitCode = serializers.IntegerField(
+        source="exit_code", allow_null=True, read_only=True
+    )
+    failureReason = serializers.CharField(source="failure_reason", read_only=True)
+
     class Meta:
         model = NodeRun
-        fields = "__all__"
+        fields = [
+            "id",
+            "workflowRun",
+            "workflowNode",
+            "commandVersion",
+            "nodeKey",
+            "nodeName",
+            "nodeType",
+            "configSnapshot",
+            "status",
+            "inputVars",
+            "outputVars",
+            "attemptCount",
+            "celeryTaskId",
+            "queuedAt",
+            "heartbeatAt",
+            "startedAt",
+            "finishedAt",
+            "durationMs",
+            "exitCode",
+            "failureReason",
+            "createdAt",
+            "updatedAt",
+        ]
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
@@ -528,15 +666,76 @@ class NodeRunAttemptSerializer(StandardModelSerializer):
 
 
 class HostRunResultSerializer(StandardModelSerializer):
+    createdAt = serializers.DateTimeField(source="created_at", read_only=True)
+    updatedAt = serializers.DateTimeField(source="updated_at", read_only=True)
+    nodeRun = serializers.IntegerField(source="node_run_id", read_only=True)
+    hostId = serializers.IntegerField(source="host_id", allow_null=True, read_only=True)
+    hostKey = serializers.CharField(source="host_key", read_only=True)
+    lastSequence = serializers.IntegerField(source="last_sequence", read_only=True)
+    attemptId = serializers.IntegerField(
+        source="attempt_id", allow_null=True, read_only=True
+    )
+    rawEventData = serializers.JSONField(source="raw_event_data", read_only=True)
+    exitCode = serializers.IntegerField(source="rc", read_only=True)
+    startedAt = serializers.DateTimeField(
+        source="started_at", allow_null=True, read_only=True
+    )
+    finishedAt = serializers.DateTimeField(
+        source="finished_at", allow_null=True, read_only=True
+    )
+
     class Meta:
         model = HostRunResult
-        fields = "__all__"
+        fields = [
+            "id",
+            "nodeRun",
+            "hostId",
+            "hostKey",
+            "lastSequence",
+            "attemptId",
+            "hostname",
+            "ip",
+            "status",
+            "stdout",
+            "stderr",
+            "rawEventData",
+            "changed",
+            "exitCode",
+            "startedAt",
+            "finishedAt",
+            "createdAt",
+            "updatedAt",
+        ]
 
 
 class JobEventLogSerializer(StandardModelSerializer):
+    eventKey = serializers.CharField(source="event_key", read_only=True)
+    attemptId = serializers.IntegerField(source="attempt_id", allow_null=True, read_only=True)
+    workflowRun = serializers.IntegerField(source="workflow_run_id", read_only=True)
+    nodeRun = serializers.IntegerField(
+        source="node_run_id", allow_null=True, read_only=True
+    )
+    hostId = serializers.IntegerField(source="host_id", allow_null=True, read_only=True)
+    eventType = serializers.CharField(source="event_type", read_only=True)
+    createdAt = serializers.DateTimeField(source="created_at", read_only=True)
+    updatedAt = serializers.DateTimeField(source="updated_at", read_only=True)
+
     class Meta:
         model = JobEventLog
-        fields = "__all__"
+        fields = [
+            "id",
+            "sequence",
+            "eventKey",
+            "attemptId",
+            "workflowRun",
+            "nodeRun",
+            "hostId",
+            "eventType",
+            "message",
+            "payload",
+            "createdAt",
+            "updatedAt",
+        ]
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
@@ -546,10 +745,10 @@ class JobEventLogSerializer(StandardModelSerializer):
             "event_data": payload.get("event_data") or {},
         }
         normalized = normalize_runner_event(raw_event)
-        representation["normalized_event_type"] = (
+        representation["normalizedEventType"] = (
             normalized.event_type if normalized else instance.event_type
         )
-        representation["runner_event"] = raw_event
+        representation["runnerEvent"] = raw_event
         return representation
 
 
@@ -688,29 +887,23 @@ class PlaybookRunCreateSerializer(_QuickShellRunCreateSerializer):
 
     def save(self, **kwargs):
         request = self.context.get("request")
-        try:
-            return create_quick_command_run(
-                command_type=CommandVersion.CommandType.LINUX_SHELL,
-                command_content="ansible-playbook playbook.yml",
-                host_ids=self.validated_data["hostIds"],
-                worker_pool=self.validated_data["worker_pool"],
-                triggered_by=getattr(request, "user", None),
-                can_execute_high_risk=self._user_has_permission(
-                    "automation.command:execute_high_risk"
-                ),
-                extra_input_vars={
-                    **(self.validated_data.get("inputVars") or {}),
-                    "execution_source": "playbook",
-                    "playbook_name": self.validated_data.get("playbookName")
-                    or "Playbook",
-                    "playbook_content": self.validated_data["playbookContent"],
-                    **self._gateway_extra_vars(),
-                },
-            )
-        except InvalidTargetHosts as exc:
-            raise serializers.ValidationError(
-                {"hostIds": "One or more target hosts are missing or inactive"}
-            ) from exc
+        return create_quick_command_run(
+            command_type=CommandVersion.CommandType.LINUX_SHELL,
+            command_content="ansible-playbook playbook.yml",
+            host_ids=self.validated_data["hostIds"],
+            worker_pool=self.validated_data["worker_pool"],
+            triggered_by=getattr(request, "user", None),
+            can_execute_high_risk=self._user_has_permission(
+                "automation.command:execute_high_risk"
+            ),
+            extra_input_vars={
+                **(self.validated_data.get("inputVars") or {}),
+                "execution_source": "playbook",
+                "playbook_name": self.validated_data.get("playbookName") or "Playbook",
+                "playbook_content": self.validated_data["playbookContent"],
+                **self._gateway_extra_vars(),
+            },
+        )
 
 
 class ModuleRunCreateSerializer(_QuickShellRunCreateSerializer):
@@ -771,34 +964,40 @@ class ModuleRunCreateSerializer(_QuickShellRunCreateSerializer):
             command_content = module_args
         else:
             command_content = f"ansible all -m {module} -a '{module_args}'"
-        try:
-            return create_quick_command_run(
-                command_type=CommandVersion.CommandType.LINUX_SHELL,
-                command_content=command_content,
-                host_ids=self.validated_data["hostIds"],
-                worker_pool=self.validated_data["worker_pool"],
-                triggered_by=getattr(request, "user", None),
-                can_execute_high_risk=self._user_has_permission(
-                    "automation.command:execute_high_risk"
-                ),
-                extra_input_vars={
-                    "execution_source": "module",
-                    "module": module,
-                    "module_args": module_args,
-                    "source_module_version_id": self.validated_data["module_version"].id,
-                    **self._gateway_extra_vars(),
-                },
-            )
-        except InvalidTargetHosts as exc:
-            raise serializers.ValidationError(
-                {"hostIds": "One or more target hosts are missing or inactive"}
-            ) from exc
+        return create_quick_command_run(
+            command_type=CommandVersion.CommandType.LINUX_SHELL,
+            command_content=command_content,
+            host_ids=self.validated_data["hostIds"],
+            worker_pool=self.validated_data["worker_pool"],
+            triggered_by=getattr(request, "user", None),
+            can_execute_high_risk=self._user_has_permission(
+                "automation.command:execute_high_risk"
+            ),
+            extra_input_vars={
+                "execution_source": "module",
+                "module": module,
+                "module_args": module_args,
+                "source_module_version_id": self.validated_data["module_version"].id,
+                **self._gateway_extra_vars(),
+            },
+        )
 
 
 class WorkerPoolSerializer(StandardModelSerializer):
+    queueName = serializers.CharField(source="queue_name")
+    isDefault = serializers.BooleanField(source="is_default", required=False)
+    isActive = serializers.BooleanField(source="is_active", required=False)
+    concurrencyLimit = serializers.IntegerField(source="concurrency_limit", required=False)
+    executionKinds = serializers.ListField(source="execution_kinds", required=False)
+    createdAt = serializers.DateTimeField(source="created_at", read_only=True)
+    updatedAt = serializers.DateTimeField(source="updated_at", read_only=True)
+
     class Meta:
         model = WorkerPool
-        fields = "__all__"
+        fields = [
+            "id", "code", "name", "queueName", "isDefault", "isActive",
+            "concurrencyLimit", "executionKinds", "createdAt", "updatedAt",
+        ]
 
     def validate(self, attrs):
         attrs = super().validate(attrs)

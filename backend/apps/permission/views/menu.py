@@ -192,6 +192,8 @@ class MenuViewSet(StandardModelViewSet):
                 or "root"
             )
             component = self.__normalize_route_component(component)
+            if component and component.startswith("view."):
+                route_name = component.removeprefix("view.")
         meta = {
             "title": menu.title or menu.name or route_path,
             "order": menu.order,

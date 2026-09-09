@@ -2,6 +2,7 @@ from common.workflow.node_types import ANSIBLE_NODE_TYPES
 from uuid import uuid4
 from apps.jobs.events import append_run_event
 import logging
+import time
 
 from celery import current_task, shared_task
 from billiard.exceptions import SoftTimeLimitExceeded
@@ -9,8 +10,9 @@ from billiard.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 from datetime import timedelta
 
-from django.db import transaction
+from django.db import OperationalError, transaction
 from django.utils import timezone
+from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.jobs.models import (
     JobEventLog,
@@ -28,7 +30,6 @@ from apps.jobs.application.dispatch import (
     recover_pending_dispatches,
 )
 from apps.jobs.application.runs import (
-    InvalidTargetHosts,
     create_workflow_run_from_host_ids,
     scheduled_job_run_options,
 )
@@ -117,6 +118,27 @@ def _mark_dispatch_failed(workflow_run_id, exc):
     )
 
 
+def _dispatch_with_deadlock_retry(workflow_run_id, attempts=3):
+    """按 events.py 同样的策略重试 MySQL 1205/1213；ensure_node_runs 幂等保证重试安全。"""
+    last_exc = None
+    for retry in range(attempts):
+        try:
+            node_run_ids = plan_dispatch(workflow_run_id)
+            for node_run_id in node_run_ids:
+                enqueue_node_run(node_run_id)
+            return node_run_ids
+        except OperationalError as exc:
+            if not exc.args or exc.args[0] not in {1205, 1213} or retry == attempts - 1:
+                raise
+            last_exc = exc
+            logger.warning(
+                "Workflow dispatch %s hit lock wait/deadlock (%s), retry %s/%s",
+                workflow_run_id, exc.args[0], retry + 1, attempts - 1,
+            )
+            time.sleep(0.2 * (retry + 1))
+    raise last_exc
+
+
 @shared_task(name="jobs.run_workflow")
 def run_workflow(workflow_run_id):
     WorkflowRun.objects.filter(
@@ -135,9 +157,7 @@ def run_workflow(workflow_run_id):
     )
     ExecutionLease.touch(workflow_run_id, worker=worker_name)
     try:
-        node_run_ids = plan_dispatch(workflow_run_id)
-        for node_run_id in node_run_ids:
-            enqueue_node_run(node_run_id)
+        node_run_ids = _dispatch_with_deadlock_retry(workflow_run_id)
     except Exception as exc:
         logger.exception("Workflow dispatch %s failed", workflow_run_id)
         _mark_dispatch_failed(workflow_run_id, exc)
@@ -312,7 +332,7 @@ def dispatch_scheduled_jobs():
                     timeout_seconds=run_options["timeout_seconds"],
                     queue_timeout_seconds=run_options["queue_timeout_seconds"],
                 )
-            except InvalidTargetHosts:
+            except (PermissionDenied, ValidationError):
                 skipped += 1
                 locked.next_run_at = next_cron_time(
                     locked.cron_expression, locked.timezone, now

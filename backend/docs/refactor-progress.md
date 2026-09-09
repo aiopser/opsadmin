@@ -121,3 +121,44 @@ WorkerPool/serializer/view/admin 仅归 jobs，表 jobs_worker_pool，唯一 API
 实际测试：入口契约专项 15 passed；最终全量 357 passed / 9 原基线 failed / 4 skipped / 17 subtests（76 秒）。manage.py check 与迁移差异检查通过；pytest 临时目录在沙箱下需项目内 basetemp，Black 在沙箱中挂起跳过（格式人工对齐）。
 
 未完成：真实 Jenkins/通知/外部 API 集成仅 mock 覆盖（按计划不真实外呼）；定时任务入口沿用 scheduled_job_run_options + 统一创建服务，未新增独立用例；T14 前端契约与页面改造、T07/MySQL/Redis/共享存储真实验收缺口不变。
+
+## T13 再检查（2026-09-09）
+
+再次检查发现并修复两项遗漏。其一，定时任务仍捕获不再抛出的 InvalidTargetHosts，目标失效会中断整轮调度；新增先失败后成功的两个到期任务回归，实际先得到 1 failed，再修复为捕获当前 ValidationError/PermissionDenied，更新下一次触发时间并继续处理。其二，HTTP 首跳检查后 urlopen 自动重定向未重新验证目标；新增 ValidatedRedirectHandler，每跳重新校验且拒绝跨源跳转，避免认证头跨站传递。响应使用上下文管理器关闭。新增 loopback 跳转拒绝、跨源拒绝及合法同源跳转测试，全部无真实外呼。
+
+删除：InvalidTargetHosts 类、导入及序列化器中的旧异常转换；旧 urlopen 自动重定向调用。创建入口扫描只剩 application/runs._persist_run 的 WorkflowRun.objects.create，旧 run_workflow_ansible、_claim_workflow_run、_mark_workflow_failed、_clone_run 无残留。
+
+实际测试：修复前原入口/ops 回归 71 passed；定时修复后扩大回归 146 passed / 15 subtests passed；最终完整后端 pytest --ds=devops.test_full_settings --basetemp=.pytest_cache/t13-full-redirect -q 为 370 passed / 4 skipped / 17 subtests passed（69.71 秒）。manage.py check、makemigrations --check --dry-run、git diff --check 通过；本轮执行器与入口测试 Black 通过。
+
+未完成：4 skipped 仍为真实 Runner 3 项与 MySQL 并发 1 项，真实多实例取消竞态未验证。跨源重定向现明确拒绝，依赖该行为的资源应配置最终地址。所有修复仍在工作区，未提交；没有连接生产资产或清空已有数据库。
+
+## P6 / T14 前端契约（进行中，2026-09-09）
+
+变更：新增 jobs API/types、运行列表和详情、任务创建抽屉、快速执行页及游标事件 composable；任务/运维域请求使用各自路由。补齐动态详情 ID 路由、菜单组件名、创建/读取/票据权限种子。事件同步支持连续补页、失败重试、切换/卸载取消和迟到响应隔离。主机退出码直接使用后端 rc；运行状态随事件序号刷新。
+
+删除：无整文件删除；移除演示请求头、旧 jobs.event 权限种子与旧分页兼容映射。旧菜单断言替换为当前业务权限和动态路由契约。
+
+实际验证：前次完整后端 367 passed / 4 skipped / 17 subtests passed；本轮权限 44 passed（15.38 秒），前端事件测试 4 passed；项目 vue-tsc --noEmit --skipLibCheck、修正文件 ESLint、vite build --mode test 通过。不带 skipLibCheck 的额外类型检查存在第三方声明错误。浏览器预览会话恢复失败，未宣称完整浏览器联调通过。
+
+未完成：完整浏览器业务链路、断线恢复及普通角色权限联调，实时列表长时内存验证。代码尚未提交；T14 不标记完成。
+
+补充验证：2026-09-09 在本机隔离 fixture 浏览器中打开任务列表，确认运行 41 展示、详情路由、节点/主机结果入口、事件列表；创建抽屉完成已发布流程、资产选择、动态输入必填校验，填入服务名称后提交并跳转运行 42 详情。fixture 仅绑定 127.0.0.1，不连接数据库、Worker 或外部资产。前端最终 `vue-tsc --noEmit --skipLibCheck`、目标页面 ESLint（`--max-warnings 0`）和 `vite build --mode test` 均通过。
+
+## P6 / T15 交付文档（进行中）
+
+新增 deployment.md、rollback.md、acceptance.md，记录新库/独立队列/共享归档要求、配套回退和实际验收缺口。删除清单：无。尚未执行部署、真实多实例集成或 10 分钟性能测试；未确认实际托管方式，不生成猜测性的部署配置。T07 和 MySQL/Redis/共享存储验收缺口仍保留。
+
+按用户指示，本阶段明确暂缓真实 Redis/MySQL、多实例 Worker/ASGI、断线恢复和性能压测；不以 SQLite、内存 Channel Layer 或 fixture 冒充通过。已执行并通过：backend manage.py check、makemigrations --check --dry-run、相关 Black --check、frontend 事件测试 4 passed、vue-tsc --noEmit --skipLibCheck、git diff --check。T15 仅完成文档和本地静态门槛，未执行部署或外部连接。
+
+补充本地回归：jobs 入口/ops API/权限测试 118 passed（34.71 秒）；前端 `vite build --mode test` 通过。验收文档测试数字已同步为最新 370 passed / 4 skipped / 17 subtests。
+
+收尾扫描删除 `frontend/src/service-alova/request/index.ts` 中遗留的静态 apifoxToken 演示头；该请求层现在只携带当前授权头。vue-tsc、该文件 ESLint 和 diff 检查通过。
+### 2026-09-09 API 契约收敛
+
+- 运行、节点运行、主机结果、事件日志改为显式 camelCase DTO；`exitCode` 统一映射数据库 `exit_code`/`rc`。
+- 事件分页固定返回 `nextCursor`、`hasMore`、`snapshotVersion`，生产接口拒绝未知查询参数（含 `after_id`）。
+- 运行列表筛选改为在 ViewSet 内显式映射 camelCase 查询参数，避免 django-filter 别名误用。
+- 定向后端测试：83 passed。
+- 前端日志下载 API 已支持 `AbortSignal`；页面级控制器接入尚未完成。
+- 前端主机/WorkerPool/流程版本选项仍有 snake_case DTO，待下一阶段补齐显式序列化器与联调。
+- 最终后端全量回归：370 passed / 4 skipped；Django check 与 git diff --check 通过。4 个 skipped 为真实外部基础设施验收，不在当前外网环境执行。

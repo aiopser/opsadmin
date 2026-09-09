@@ -336,7 +336,12 @@ class WorkflowVersionSerializer(StandardModelSerializer):
 
     class Meta:
         model = WorkflowVersion
-        exclude = ("editor_mode",)
+        fields = [
+            "id", "created_at", "updated_at", "workflow", "version", "status",
+            "input_schema", "global_vars", "target_selector_schema", "editorMode",
+            "graph_snapshot", "validation_report", "published_hash", "created_by",
+            "published_by", "published_at",
+        ]
         read_only_fields = (
             "status",
             "graph_snapshot",
@@ -348,6 +353,11 @@ class WorkflowVersionSerializer(StandardModelSerializer):
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
+        representation = {
+            key.split("_")[0] + "".join(part[:1].upper() + part[1:] for part in key.split("_")[1:])
+            if "_" in key else key: value
+            for key, value in representation.items()
+        }
         representation["workflowName"] = (
             instance.workflow.name if instance.workflow else ""
         )

@@ -711,6 +711,99 @@ declare namespace App {
             };
           };
         };
+        task: {
+          run: {
+            title: string;
+            id: string;
+            workflowName: string;
+            statusLabel: string;
+            executionKind: string;
+            runDomain: string;
+            targetCount: string;
+            triggeredBy: string;
+            startedAt: string;
+            finishedAt: string;
+            duration: string;
+            failureReason: string;
+            workerPool: string;
+            keyword: string;
+            cancel: string;
+            retry: string;
+            rerun: string;
+            log: string;
+            retryCreated: string;
+            status: {
+              pending: string;
+              queued: string;
+              running: string;
+              waiting: string;
+              cancel_requested: string;
+              success: string;
+              failed: string;
+              timeout: string;
+              canceled: string;
+            };
+            kind: {
+              workflow: string;
+              quick_command: string;
+              playbook: string;
+              module: string;
+            };
+            domain: {
+              task: string;
+              ops: string;
+            };
+          };
+          detail: {
+            live: string;
+            fallback: string;
+            node: {
+              title: string;
+              key: string;
+              type: string;
+              command: string;
+              attempts: string;
+              exitCode: string;
+              hostResults: string;
+              status: {
+                pending: string;
+                queued: string;
+                running: string;
+                success: string;
+                failed: string;
+                skipped: string;
+                ignored: string;
+                timeout: string;
+                canceled: string;
+              };
+            };
+            event: {
+              title: string;
+            };
+            host: {
+              hostname: string;
+              ip: string;
+            };
+          };
+        };
+        ops: {
+          quickExecute: {
+            title: string;
+            commandType: string;
+            commandContent: string;
+            hosts: string;
+            workerPool: string;
+            submit: string;
+            submitted: string;
+            form: {
+              commandContentPlaceholder: string;
+              commandContentRequired: string;
+              hostIdsRequired: string;
+              hostsPlaceholder: string;
+              workerPoolPlaceholder: string;
+            };
+          };
+        };
       };
       form: {
         required: string;

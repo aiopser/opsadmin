@@ -175,7 +175,7 @@ class AssetHostViewSet(CMDBAuditModelViewSet):
     )
     serializer_class = AssetHostSerializer
     ordering_fields = ("id", "hostname", "primary_ip", "updated_at")
-    filter_fields = (
+    filterset_fields = (
         "os_family",
         "environment",
         "service_node",
@@ -363,7 +363,7 @@ class HostGroupViewSet(CMDBAuditModelViewSet):
     queryset = HostGroup.objects.select_related("parent").all()
     serializer_class = HostGroupSerializer
     ordering_fields = ("id", "name", "updated_at")
-    filter_fields = ("id", "parent", "group_type", "is_active")
+    filterset_fields = ("id", "parent", "group_type", "is_active")
     search_fields = ("name", "description")
 
     @action(methods=["GET", "POST"], detail=True, url_path="members")
@@ -417,7 +417,7 @@ class HostTagViewSet(CMDBAuditModelViewSet):
     queryset = HostTag.objects.all()
     serializer_class = HostTagSerializer
     ordering_fields = ("id", "key", "value")
-    filter_fields = ("key", "value")
+    filterset_fields = ("key", "value")
     search_fields = ("key", "value")
 
 
@@ -427,7 +427,7 @@ class CredentialRefViewSet(CMDBAuditModelViewSet):
     queryset = CredentialRef.objects.all()
     serializer_class = CredentialRefSerializer
     ordering_fields = ("id", "name", "type", "scope", "updated_at")
-    filter_fields = ("type", "scope")
+    filterset_fields = ("type", "scope")
     search_fields = ("name", "secret_ref")
 
     def get_queryset(self):
@@ -489,7 +489,7 @@ class BusinessViewSet(CMDBAuditModelViewSet):
     queryset = Business.objects.all()
     serializer_class = BusinessSerializer
     ordering_fields = ("id", "code", "name", "updated_at")
-    filter_fields = ("code", "is_active")
+    filterset_fields = ("code", "is_active")
     search_fields = ("code", "name", "description")
 
 
@@ -499,7 +499,7 @@ class AssetSourceViewSet(CMDBAuditModelViewSet):
     queryset = AssetSource.objects.all()
     serializer_class = AssetSourceSerializer
     ordering_fields = ("id", "code", "name", "source_type", "updated_at")
-    filter_fields = ("source_type", "is_active")
+    filterset_fields = ("source_type", "is_active")
     search_fields = ("code", "name", "endpoint", "description")
 
     @action(methods=["POST"], detail=True, url_path="sync")
@@ -527,7 +527,7 @@ class AssetSyncRecordViewSet(CMDBAuditModelViewSet):
     serializer_class = AssetSyncRecordSerializer
     http_method_names = ("get", "head", "options")
     ordering_fields = ("id", "created_at", "status", "finished_at")
-    filter_fields = ("source", "status")
+    filterset_fields = ("source", "status")
     search_fields = ("task_id", "error_message")
 
 
@@ -577,5 +577,5 @@ class ServiceTreeNodeViewSet(CMDBAuditModelViewSet):
     queryset = ServiceTreeNode.objects.select_related("business", "parent").all()
     serializer_class = ServiceTreeNodeSerializer
     ordering_fields = ("id", "code", "name", "node_type", "sort_order", "updated_at")
-    filter_fields = ("business", "parent", "node_type", "is_active")
+    filterset_fields = ("business", "parent", "node_type", "is_active")
     search_fields = ("code", "name", "description")

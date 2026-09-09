@@ -1,9 +1,9 @@
 """Shared workflow vocabulary, independent of Django and runtime models."""
 
-from enum import StrEnum
+from enum import Enum
 
 
-class NodeType(StrEnum):
+class NodeType(str, Enum):
     START = "start"
     END = "end"
     COMMAND = "command"

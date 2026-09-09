@@ -27,6 +27,8 @@ export function setupElegantRouter() {
     routePathTransformer(routeName, routePath) {
       const key = routeName as RouteKey;
 
+      if (key === 'task_run-detail') return '/task/run-detail/:id';
+
       if (key === 'login') {
         const modules: UnionKey.LoginModule[] = ['pwd-login', 'reset-pwd'];
 
@@ -46,6 +48,8 @@ export function setupElegantRouter() {
         title: key,
         i18nKey: `route.${key}` as App.I18n.I18nKey
       };
+
+      if (key === 'task_run-detail') meta.hideInMenu = true;
 
       if (constantRoutes.includes(key)) {
         meta.constant = true;

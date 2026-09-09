@@ -1,0 +1,46 @@
+{
+  "section": 3,
+  "scenarios": {
+    "S1 Linux SSH 成功执行": {
+      "pass": true,
+      "detail": "run=38 status=success node=success rc=0 hosts=[('changed', 0)] marker_in_stdout=True"
+    },
+    "S2 命令失败落库且秘密不进日志": {
+      "pass": true,
+      "detail": "run=39 status=failed node_rc=2 host_rc=42 reason=Node execution failed secret_leak=False redacted=True"
+    },
+    "S3 运行中取消区分 cancel_requested 与 canceled": {
+      "pass": true,
+      "detail": "run=40 observed=['cancel_requested', 'canceled'] final=canceled cancel_requested_at=2026-09-09 14:48:34 node=canceled"
+    },
+    "S4 Worker 执行中终止恢复扫描记录失联且不重复执行": {
+      "pass": true,
+      "detail": "run=41 killed_at=14:48:42 recovered_at=14:49:19 scan=recovered: 1 status=timeout reason=Execution worker heartbeat expired. marker_lines=1 attempts=1 workers_restored=True"
+    },
+    "S5 Redis 短暂中断 REST 事件读取仍完成": {
+      "pass": true,
+      "detail": "run=42 rest_read_ok=True read_latency=0.10s pause=3s trigger_latency=3.21s status=success events=14 contiguous=True"
+    },
+    "S6 断开重连按 cursor 补齐所有事件": {
+      "pass": true,
+      "detail": "run=43 base=14 online=[15, 16] catchup=[17, 18, 19] expected=[17, 18, 19] resubscribed=[20]"
+    },
+    "S7 灰度队列隔离新旧 Worker 不消费同一队列": {
+      "pass": true,
+      "detail": "canary_run=44(success) by=['canary@acc'] old_run=45(success) by=['w2@acc'] queue_workers old=['w1@acc', 'w2@acc'] canary=['canary@acc']"
+    }
+  },
+  "notes": {
+    "target_host": "acc-target-local (127.0.0.1, authorized isolated asset)",
+    "runner": "ansible-runner (real SSH self-connection)"
+  },
+  "runs": {
+    "s1": 38,
+    "s2": 39,
+    "s3": 40,
+    "s4": 41,
+    "s5": 42,
+    "s6": 43,
+    "s7": 44
+  }
+}

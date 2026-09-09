@@ -9,7 +9,7 @@ from uuid import uuid4
 from django.conf import settings
 from django.core.exceptions import SuspiciousFileOperation
 from django.core.files.base import ContentFile
-from django.core.files.storage import storages
+from django.core.files.storage import default_storage
 from django.db import transaction
 from django.db.models import Sum
 
@@ -59,7 +59,7 @@ def archive_stdout(*, run_id: int, sequence: int, text: str):
         clipped = raw[:remaining].decode("utf-8", errors="ignore")
         clipped = re.sub(r"\x1b\[[0-?]*[ -/]*$", "", clipped)
         raw = clipped.encode("utf-8")
-    storage = storages["job_logs"]
+    storage = default_storage
     name = f"job-logs/run-{run_id}/{sequence}-{uuid4().hex}.log"
     name = storage.save(name, ContentFile(raw), max_length=256)
     _validate_name(storage, run_id, name)
@@ -95,7 +95,7 @@ def archive_event_stdout(run_id: int, sequence: int, event: dict) -> None:
 def iter_run_stdout(run_id: int, *, block_size: int = 65536) -> Iterator[bytes]:
     if not 1 <= block_size <= 65536:
         raise ValueError("Invalid log block size")
-    storage = storages["job_logs"]
+    storage = default_storage
     for chunk in (
         RunLogChunk.objects.filter(workflow_run_id=run_id)
         .order_by("sequence")

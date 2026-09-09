@@ -105,6 +105,42 @@ def published_workflow_version(command_content="echo entry"):
 
 
 class TestUnifiedEntrypoints:
+    def test_invalid_schedule_does_not_block_the_next_due_schedule(
+        self, actor, host, pool, monkeypatch
+    ):
+        from datetime import timedelta
+        from django.utils import timezone
+        from apps.jobs.models import ScheduledJob
+        from apps.jobs.tasks import dispatch_scheduled_jobs
+
+        version = published_workflow_version()
+        now = timezone.now()
+        invalid = ScheduledJob.objects.create(
+            name="invalid",
+            workflow_version=version,
+            worker_pool=pool,
+            host_ids=[host.id + 10000],
+            created_by=actor,
+            next_run_at=now - timedelta(minutes=2),
+        )
+        valid = ScheduledJob.objects.create(
+            name="valid",
+            workflow_version=version,
+            worker_pool=pool,
+            host_ids=[host.id],
+            created_by=actor,
+            next_run_at=now - timedelta(minutes=1),
+        )
+        monkeypatch.setattr("apps.jobs.tasks.enqueue_workflow_run", lambda run_id: None)
+        dispatch_scheduled_jobs()
+        invalid.refresh_from_db()
+        valid.refresh_from_db()
+        assert invalid.last_workflow_run_id is None
+        assert invalid.next_run_at > now
+        assert valid.last_workflow_run.trigger_type == WorkflowRun.TriggerType.SCHEDULED
+        assert valid.last_workflow_run.target_snapshot[0]["host_id"] == host.id
+        assert WorkflowRun.objects.count() == 1
+
     def test_all_entrypoints_produce_one_queryable_run_record(self, actor, host, pool):
         version = published_workflow_version()
 
@@ -245,9 +281,7 @@ class TestApiExecutor:
             )
 
         monkeypatch.setattr(node_executors, "_request", fake_request)
-        result = execute_api_endpoint(
-            node_executors.execution_resource(node_run), {}
-        )
+        result = execute_api_endpoint(node_executors.execution_resource(node_run), {})
         assert seen["url"] == "https://api.example.test/status"
         assert seen["authorization"] == "Bearer s3cr3t-token"
         assert result["status_code"] == 200
@@ -260,7 +294,13 @@ class TestApiExecutor:
         def fake_urlopen(*args, **kwargs):
             raise URLError("timed out")
 
-        monkeypatch.setattr(node_executors, "urlopen", fake_urlopen)
+        from types import SimpleNamespace
+
+        monkeypatch.setattr(
+            node_executors,
+            "build_opener",
+            lambda *args: SimpleNamespace(open=fake_urlopen),
+        )
         with pytest.raises(NodeExecutionError) as excinfo:
             execute_api_endpoint(node_executors.execution_resource(node_run), {})
         assert "s3cr3t-token" not in str(excinfo.value)
@@ -280,6 +320,36 @@ class TestApiExecutor:
 
 
 class TestOutboundTargetValidation:
+    def test_redirect_revalidates_target_before_following(self):
+        from urllib.request import Request
+
+        request = Request(
+            "https://api.example.test/start",
+            headers={"Authorization": "Bearer test-secret"},
+        )
+        with pytest.raises(NodeExecutionError, match="Blocked outbound address"):
+            node_executors.ValidatedRedirectHandler().redirect_request(
+                request, None, 302, "Found", {}, "http://127.0.0.1/private"
+            )
+
+    def test_redirect_refuses_cross_origin_credentials(self, monkeypatch):
+        from urllib.parse import urlparse
+        from urllib.request import Request
+
+        monkeypatch.setattr(node_executors, "_validate_outbound_url", urlparse)
+        request = Request(
+            "https://api.example.test/start",
+            headers={"Authorization": "Bearer test-secret"},
+        )
+        with pytest.raises(NodeExecutionError, match="Cross-origin"):
+            node_executors.ValidatedRedirectHandler().redirect_request(
+                request, None, 302, "Found", {}, "https://other.example.test/end"
+            )
+        redirected = node_executors.ValidatedRedirectHandler().redirect_request(
+            request, None, 302, "Found", {}, "https://api.example.test/end"
+        )
+        assert redirected.full_url == "https://api.example.test/end"
+
     @pytest.mark.parametrize(
         "url",
         [
@@ -321,7 +391,7 @@ class TestOutboundTargetValidation:
         def fail_urlopen(*args, **kwargs):
             raise AssertionError("transport must not be reached for blocked targets")
 
-        monkeypatch.setattr(node_executors, "urlopen", fail_urlopen)
+        monkeypatch.setattr(node_executors, "build_opener", fail_urlopen)
         with pytest.raises(NodeExecutionError, match="Blocked outbound address"):
             execute_api_endpoint(node_executors.execution_resource(node_run), {})
 
@@ -435,9 +505,7 @@ def notify_run(actor, host, pool):
         body_template="Job {{ inputs.name }} finished",
     )
     workflow_template = WorkflowTemplate.objects.create(name="notify", code="notify")
-    version = WorkflowVersion.objects.create(
-        workflow=workflow_template, version=1
-    )
+    version = WorkflowVersion.objects.create(workflow=workflow_template, version=1)
     graph = valid_graph()
     graph["nodes"][1].update(type="notify", resourceId=template.pk)
     assert replace_graph(version, graph) == []

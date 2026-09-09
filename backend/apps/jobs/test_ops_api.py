@@ -506,7 +506,7 @@ class GatewayExecutionTests(OpsExtensionApiTests):
         )
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(response.data["data"]["total"], 1)
-        self.assertEqual(response.data["data"]["list"][0]["run_domain"], "task")
+        self.assertEqual(response.data["data"]["list"][0]["runDomain"], "task")
 
         response = self._request(
             "get",
@@ -516,8 +516,8 @@ class GatewayExecutionTests(OpsExtensionApiTests):
         self.assertEqual(response.status_code, 200, response.data)
         items = response.data["data"]["list"]
         self.assertEqual(len(items), 1)
-        self.assertEqual(items[0]["run_domain"], "ops")
-        self.assertEqual(items[0]["execution_kind"], "quick_command")
+        self.assertEqual(items[0]["runDomain"], "ops")
+        self.assertEqual(items[0]["executionKind"], "quick_command")
 
         task_response = self._request(
             "get",

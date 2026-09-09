@@ -52,14 +52,14 @@ def test_event_pages_have_monotonic_cursor_and_no_duplicates(event_client, run):
     assert response.status_code == 200
     data = response.data["data"]
     assert [event["sequence"] for event in data["events"]] == [1, 2]
-    assert data["next_cursor"] == 2
-    assert data["has_more"] is True
-    assert data["snapshot_version"] == 3
+    assert data["nextCursor"] == 2
+    assert data["hasMore"] is True
+    assert data["snapshotVersion"] == 3
     second = event_client.get(
         f"/api/v1/tasks/runs/{run.id}/events?cursor=2&limit=2"
     ).data["data"]
     assert [event["sequence"] for event in second["events"]] == [3]
-    assert second["has_more"] is False
+    assert second["hasMore"] is False
 
 
 @pytest.mark.django_db
@@ -88,5 +88,5 @@ def test_terminal_empty_page_and_removed_global_endpoint(event_client, run):
     data = event_client.get(f"/api/v1/tasks/runs/{run.id}/events").data["data"]
     assert data["terminal"] is True
     assert data["events"] == []
-    assert data["next_cursor"] == 0
+    assert data["nextCursor"] == 0
     assert event_client.get("/api/v1/jobs/events").status_code == 404

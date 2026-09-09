@@ -12,10 +12,6 @@ from apps.jobs.models import WorkflowRun
 from apps.jobs.settings_service import get_engine_settings
 
 
-class InvalidTargetHosts(ValueError):
-    pass
-
-
 class InvalidQuickCommand(ValueError):
     pass
 
@@ -41,7 +37,9 @@ def create_workflow_run(
     timeout_seconds=None,
     queue_timeout_seconds=None,
 ):
-    workflow_version = WorkflowVersion.objects.select_for_update().get(pk=workflow_version.pk)
+    workflow_version = WorkflowVersion.objects.select_for_update().get(
+        pk=workflow_version.pk
+    )
     if workflow_version.status != WorkflowVersion.Status.PUBLISHED:
         raise ValueError("Only published workflow versions can run")
     errors = validate_graph(workflow_version.graph_snapshot)
@@ -49,11 +47,17 @@ def create_workflow_run(
         raise ValueError("Published workflow snapshot is invalid: " + "; ".join(errors))
     safe_input_vars, encrypted = protect_workflow_inputs(workflow_version, input_vars)
     return _persist_run(
-        workflow_version=workflow_version, target_hosts=target_hosts,
-        safe_input_vars=safe_input_vars, encrypted=encrypted,
-        graph_snapshot=workflow_version.graph_snapshot, worker_pool=worker_pool,
-        triggered_by=triggered_by, trigger_type=trigger_type, run_domain=run_domain,
-        execution_kind=execution_kind, timeout_seconds=timeout_seconds,
+        workflow_version=workflow_version,
+        target_hosts=target_hosts,
+        safe_input_vars=safe_input_vars,
+        encrypted=encrypted,
+        graph_snapshot=workflow_version.graph_snapshot,
+        worker_pool=worker_pool,
+        triggered_by=triggered_by,
+        trigger_type=trigger_type,
+        run_domain=run_domain,
+        execution_kind=execution_kind,
+        timeout_seconds=timeout_seconds,
         queue_timeout_seconds=queue_timeout_seconds,
     )
 
@@ -61,20 +65,42 @@ def create_workflow_run(
 @transaction.atomic
 def clone_workflow_run(run, actor):
     return _persist_run(
-        workflow_version=run.workflow_version, target_hosts=run.target_snapshot,
-        safe_input_vars=deepcopy(run.input_vars), encrypted=run.secret_input_vars_encrypted,
-        graph_snapshot=run.graph_snapshot, worker_pool=run.worker_pool,
-        triggered_by=actor, trigger_type=WorkflowRun.TriggerType.MANUAL,
-        run_domain=run.run_domain, execution_kind=run.execution_kind,
-        timeout_seconds=run.timeout_seconds, queue_timeout_seconds=run.queue_timeout_seconds,
+        workflow_version=run.workflow_version,
+        target_hosts=run.target_snapshot,
+        safe_input_vars=deepcopy(run.input_vars),
+        encrypted=run.secret_input_vars_encrypted,
+        graph_snapshot=run.graph_snapshot,
+        worker_pool=run.worker_pool,
+        triggered_by=actor,
+        trigger_type=WorkflowRun.TriggerType.MANUAL,
+        run_domain=run.run_domain,
+        execution_kind=run.execution_kind,
+        timeout_seconds=run.timeout_seconds,
+        queue_timeout_seconds=run.queue_timeout_seconds,
     )
 
 
-def _persist_run(*, workflow_version, target_hosts, safe_input_vars, encrypted, graph_snapshot, worker_pool, triggered_by, trigger_type, run_domain, execution_kind, timeout_seconds, queue_timeout_seconds):
+def _persist_run(
+    *,
+    workflow_version,
+    target_hosts,
+    safe_input_vars,
+    encrypted,
+    graph_snapshot,
+    worker_pool,
+    triggered_by,
+    trigger_type,
+    run_domain,
+    execution_kind,
+    timeout_seconds,
+    queue_timeout_seconds,
+):
     errors = validate_graph(graph_snapshot)
     if errors:
         raise ValueError("Invalid execution graph: " + "; ".join(errors))
-    worker_pool = resolve_worker_pool(actor=triggered_by, pool_id=worker_pool.pk, execution_kind=execution_kind)
+    worker_pool = resolve_worker_pool(
+        actor=triggered_by, pool_id=worker_pool.pk, execution_kind=execution_kind
+    )
     target_snapshot = snapshot_targets(actor=triggered_by, targets=target_hosts)
     timeout_seconds = max(
         int(timeout_seconds or get_execution_timeout_seconds()),
@@ -164,6 +190,7 @@ def create_quick_command_run(
     source_command_version_id=None,
     can_execute_high_risk=False,
     extra_input_vars=None,
+    timeout_seconds=None,
 ):
     from apps.jobs.quick_commands import (
         ensure_quick_command_workflows,
@@ -218,4 +245,5 @@ def create_quick_command_run(
         trigger_type=WorkflowRun.TriggerType.MANUAL,
         run_domain=WorkflowRun.RunDomain.OPS,
         execution_kind=execution_kind,
+        timeout_seconds=timeout_seconds,
     )

@@ -159,7 +159,7 @@ class CredentialRefSerializer(StandardModelSerializer):
 class AssetHostSerializer(StandardModelSerializer):
     class Meta:
         model = AssetHost
-        fields = "__all__"
+        fields = [f.name for f in AssetHost._meta.fields]
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
@@ -192,6 +192,7 @@ class AssetHostSerializer(StandardModelSerializer):
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
+        representation = {self._camel(key): value for key, value in representation.items()}
         representation["configSummary"] = instance.config_summary()
         representation["credentialRefName"] = (
             instance.credential_ref.name if instance.credential_ref else ""
@@ -209,6 +210,11 @@ class AssetHostSerializer(StandardModelSerializer):
             str(membership.group_id) for membership in instance.group_memberships.all()
         ]
         return representation
+
+    @staticmethod
+    def _camel(value):
+        head, *tail = value.split("_")
+        return head + "".join(part[:1].upper() + part[1:] for part in tail)
 
 
 class HostGroupSerializer(StandardModelSerializer):

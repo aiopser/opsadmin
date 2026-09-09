@@ -30,6 +30,7 @@ export const views: Record<LastLevelRouteKey, RouteComponent | (() => Promise<Ro
   manage_role: () => import("@/views/manage/role/index.vue"),
   "manage_user-detail": () => import("@/views/manage/user-detail/[id].vue"),
   manage_user: () => import("@/views/manage/user/index.vue"),
+  "ops_quick-execute": () => import("@/views/ops/quick-execute/index.vue"),
   plugin_barcode: () => import("@/views/plugin/barcode/index.vue"),
   plugin_charts_antv: () => import("@/views/plugin/charts/antv/index.vue"),
   plugin_charts_echarts: () => import("@/views/plugin/charts/echarts/index.vue"),
@@ -49,5 +50,7 @@ export const views: Record<LastLevelRouteKey, RouteComponent | (() => Promise<Ro
   plugin_tables_vtable: () => import("@/views/plugin/tables/vtable/index.vue"),
   plugin_typeit: () => import("@/views/plugin/typeit/index.vue"),
   plugin_video: () => import("@/views/plugin/video/index.vue"),
+  "task_run-detail": () => import("@/views/task/run-detail/index.vue"),
+  task_run: () => import("@/views/task/run/index.vue"),
   "user-center": () => import("@/views/user-center/index.vue"),
 };

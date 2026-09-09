@@ -22,7 +22,7 @@ def test_worker_pool_jobs_api_creates_pool(api_client, user):
     user.is_superuser = True
     user.save()
     api_client.force_authenticate(user)
-    response = api_client.post("/api/v1/jobs/worker-pools", {"name": "Test", "code": "test", "queue_name": "devops.test", "concurrency_limit": 2}, format="json")
+    response = api_client.post("/api/v1/jobs/worker-pools", {"name": "Test", "code": "test", "queueName": "devops.test", "concurrencyLimit": 2}, format="json")
     assert response.status_code == 200
     assert WorkerPool.objects.get(code="test").queue_name == "devops.test"
 

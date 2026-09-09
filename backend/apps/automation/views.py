@@ -160,7 +160,7 @@ class CommandAtomViewSet(AutomationAuditModelViewSet):
     queryset = CommandAtom.objects.select_related("created_by", "updated_by").all()
     serializer_class = CommandAtomSerializer
     ordering_fields = ("id", "name", "code", "updated_at")
-    filter_fields = ("status", "risk_level", "category", "resource_kind")
+    filterset_fields = ("status", "risk_level", "category", "resource_kind")
     search_fields = ("name", "code", "category", "description")
 
     def destroy(self, request, *args, **kwargs):
@@ -295,7 +295,7 @@ class WorkflowTemplateViewSet(AutomationAuditModelViewSet):
     )
     serializer_class = WorkflowTemplateSerializer
     ordering_fields = ("id", "name", "code", "updated_at")
-    filter_fields = ("status", "owner_team")
+    filterset_fields = ("status", "owner_team")
     search_fields = ("name", "code", "description", "owner_team")
 
     def destroy(self, request, *args, **kwargs):
@@ -384,7 +384,7 @@ class WorkflowVersionViewSet(AutomationAuditModelViewSet):
     ).all()
     serializer_class = WorkflowVersionSerializer
     ordering_fields = ("id", "version", "published_at", "updated_at")
-    filter_fields = ("workflow", "status")
+    filterset_fields = ("workflow", "status")
     search_fields = ("workflow__name", "workflow__code")
 
     def update(self, request, *args, **kwargs):
@@ -556,7 +556,7 @@ class WorkflowNodeViewSet(AutomationAuditModelViewSet):
     ).all()
     serializer_class = WorkflowNodeSerializer
     ordering_fields = ("id", "workflow_version", "order_index")
-    filter_fields = ("workflow_version", "command_version", "condition_policy")
+    filterset_fields = ("workflow_version", "command_version", "condition_policy")
     search_fields = ("node_key", "name")
 
     def _is_immutable_version(self, workflow_version):
@@ -595,7 +595,7 @@ class WorkflowEdgeViewSet(AutomationAuditModelViewSet):
     ).all()
     serializer_class = WorkflowEdgeSerializer
     ordering_fields = ("id", "workflow_version", "order_index")
-    filter_fields = ("workflow_version", "source_node", "target_node")
+    filterset_fields = ("workflow_version", "source_node", "target_node")
     search_fields = ("edge_key", "condition_expression")
 
     def _is_immutable_version(self, workflow_version):
@@ -649,7 +649,7 @@ class ApiEndpointViewSet(WorkflowResourceProtectionMixin, AutomationAuditModelVi
     queryset = ApiEndpoint.objects.select_related("created_by", "updated_by").all()
     serializer_class = ApiEndpointSerializer
     ordering_fields = ("id", "name", "method", "updated_at")
-    filter_fields = ("method", "auth_type", "is_active")
+    filterset_fields = ("method", "auth_type", "is_active")
     search_fields = ("name", "description", "url")
 
     @action(methods=["POST"], detail=True, url_path="test")
@@ -679,7 +679,7 @@ class JenkinsServerViewSet(AutomationAuditModelViewSet):
     queryset = JenkinsServer.objects.select_related("created_by", "updated_by").all()
     serializer_class = JenkinsServerSerializer
     ordering_fields = ("id", "name", "updated_at")
-    filter_fields = ("is_active",)
+    filterset_fields = ("is_active",)
     search_fields = ("name", "base_url", "username")
 
     def destroy(self, request, *args, **kwargs):
@@ -818,7 +818,7 @@ class JenkinsJobViewSet(WorkflowResourceProtectionMixin, StandardModelViewSet):
     queryset = JenkinsJob.objects.select_related("server").all()
     serializer_class = JenkinsJobSerializer
     ordering_fields = ("id", "name", "last_synced_at", "updated_at")
-    filter_fields = ("server", "is_active")
+    filterset_fields = ("server", "is_active")
     search_fields = ("name", "server__name")
 
     @action(methods=["POST"], detail=True, url_path="run")
@@ -845,7 +845,7 @@ class JenkinsBuildViewSet(StandardModelViewSet):
     ).all()
     serializer_class = JenkinsBuildSerializer
     ordering_fields = ("id", "status", "started_at", "finished_at", "created_at")
-    filter_fields = ("job", "job__server", "status", "workflow_run", "node_run")
+    filterset_fields = ("job", "job__server", "status", "workflow_run", "node_run")
     search_fields = ("job__name", "job__server__name", "result")
 
     @action(methods=["POST"], detail=True, url_path="refresh")
@@ -942,7 +942,7 @@ class NotificationChannelViewSet(
     ).all()
     serializer_class = NotificationChannelSerializer
     ordering_fields = ("id", "name", "channel_type", "updated_at")
-    filter_fields = ("channel_type", "is_active")
+    filterset_fields = ("channel_type", "is_active")
     search_fields = ("name",)
 
     def destroy(self, request, *args, **kwargs):
@@ -964,7 +964,7 @@ class NotificationTemplateViewSet(
     ).all()
     serializer_class = NotificationTemplateSerializer
     ordering_fields = ("id", "name", "code", "updated_at")
-    filter_fields = ("channel", "is_active")
+    filterset_fields = ("channel", "is_active")
     search_fields = ("name", "code", "description")
 
     @action(methods=["POST"], detail=True, url_path="test-send")
@@ -996,7 +996,7 @@ class NotificationRecordViewSet(StandardModelViewSet):
     ).all()
     serializer_class = NotificationRecordSerializer
     ordering_fields = ("id", "status", "sent_at", "created_at")
-    filter_fields = ("status", "template", "channel", "workflow_run", "node_run")
+    filterset_fields = ("status", "template", "channel", "workflow_run", "node_run")
     search_fields = ("subject", "body", "failure_reason")
 
 

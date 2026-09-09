@@ -194,6 +194,8 @@ const routeMap: RouteMap = {
   "manage_role": "/manage/role",
   "manage_user": "/manage/user",
   "manage_user-detail": "/manage/user-detail/:id",
+  "ops": "/ops",
+  "ops_quick-execute": "/ops/quick-execute",
   "plugin": "/plugin",
   "plugin_barcode": "/plugin/barcode",
   "plugin_charts": "/plugin/charts",
@@ -218,6 +220,9 @@ const routeMap: RouteMap = {
   "plugin_tables_vtable": "/plugin/tables/vtable",
   "plugin_typeit": "/plugin/typeit",
   "plugin_video": "/plugin/video",
+  "task": "/task",
+  "task_run": "/task/run",
+  "task_run-detail": "/task/run-detail/:id",
   "user-center": "/user-center"
 };
 

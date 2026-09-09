@@ -10,7 +10,7 @@ import ssl
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
 from django.utils import timezone
 from jinja2 import StrictUndefined
@@ -115,17 +115,35 @@ def _pairs_to_dict(items):
     return result
 
 
+class ValidatedRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = _validate_outbound_url(newurl)
+        source = urlparse(req.full_url)
+
+        def origin(parsed):
+            return (
+                parsed.scheme,
+                parsed.hostname,
+                parsed.port or (443 if parsed.scheme == "https" else 80),
+            )
+
+        if origin(source) != origin(target):
+            raise NodeExecutionError("Cross-origin redirects are not allowed")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _request(method, url, headers=None, body=None, timeout=30, verify_ssl=True):
     _validate_outbound_url(url)
     request = Request(url=url, data=body, headers=headers or {}, method=method)
     try:
         context = None if verify_ssl else ssl._create_unverified_context()
-        response = urlopen(request, timeout=timeout, context=context)
-        return (
-            response.status,
-            dict(response.headers),
-            response.read().decode("utf-8", errors="replace"),
-        )
+        opener = build_opener(ValidatedRedirectHandler(), HTTPSHandler(context=context))
+        with opener.open(request, timeout=timeout) as response:
+            return (
+                response.status,
+                dict(response.headers),
+                response.read().decode("utf-8", errors="replace"),
+            )
     except HTTPError as exc:
         return exc.code, dict(exc.headers), exc.read().decode("utf-8", errors="replace")
     except URLError as exc:

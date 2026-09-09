@@ -165,6 +165,11 @@ const local: App.I18n.Schema = {
     home: 'Home',
     audit: 'Audit Center',
     audit_event: 'Audit Log',
+    ops: 'Ops',
+    'ops_quick-execute': 'Quick Execute',
+    task: 'Task',
+    task_run: 'Task Runs',
+    'task_run-detail': 'Run Detail',
     document: 'Document',
     document_project: 'Project Document',
     'document_project-link': 'Project Document(External Link)',
@@ -509,6 +514,99 @@ const local: App.I18n.Schema = {
           action: 'Please enter action',
           resourceType: 'Please enter resource type',
           keywords: 'Action/Resource/Operator/IP'
+        }
+      }
+    },
+    task: {
+      run: {
+        title: 'Task Run List',
+        id: 'Run ID',
+        workflowName: 'Workflow',
+        statusLabel: 'Status',
+        executionKind: 'Execution Kind',
+        runDomain: 'Run Domain',
+        targetCount: 'Targets',
+        triggeredBy: 'Triggered By',
+        startedAt: 'Started At',
+        finishedAt: 'Finished At',
+        duration: 'Duration',
+        failureReason: 'Failure Reason',
+        workerPool: 'Worker Pool',
+        keyword: 'Keyword',
+        cancel: 'Cancel',
+        retry: 'Retry',
+        rerun: 'Rerun',
+        log: 'Log',
+        retryCreated: 'New run created',
+        status: {
+          pending: 'Pending',
+          queued: 'Queued',
+          running: 'Running',
+          waiting: 'Waiting',
+          cancel_requested: 'Cancel Requested',
+          success: 'Success',
+          failed: 'Failed',
+          timeout: 'Timeout',
+          canceled: 'Canceled'
+        },
+        kind: {
+          workflow: 'Workflow',
+          quick_command: 'Quick Command',
+          playbook: 'Playbook',
+          module: 'Module'
+        },
+        domain: {
+          task: 'Task',
+          ops: 'Ops'
+        }
+      },
+      detail: {
+        live: 'Live',
+        fallback: 'Polling',
+        node: {
+          title: 'Node Execution Status',
+          key: 'Node',
+          type: 'Type',
+          command: 'Command',
+          attempts: 'Attempts',
+          exitCode: 'Exit Code',
+          hostResults: 'Host Results',
+          status: {
+            pending: 'Pending',
+            queued: 'Queued',
+            running: 'Running',
+            success: 'Success',
+            failed: 'Failed',
+            skipped: 'Skipped',
+            ignored: 'Ignored',
+            timeout: 'Timeout',
+            canceled: 'Canceled'
+          }
+        },
+        event: {
+          title: 'Execution Events'
+        },
+        host: {
+          hostname: 'Hostname',
+          ip: 'IP Address'
+        }
+      }
+    },
+    ops: {
+      quickExecute: {
+        title: 'Quick Execute',
+        commandType: 'Command Type',
+        commandContent: 'Command Content',
+        hosts: 'Target Hosts',
+        workerPool: 'Worker Pool',
+        submit: 'Execute',
+        submitted: 'Execution submitted',
+        form: {
+          commandContentPlaceholder: 'Enter the command content to execute',
+          commandContentRequired: 'Please enter command content',
+          hostIdsRequired: 'Please select target hosts',
+          hostsPlaceholder: 'Select target hosts (searchable)',
+          workerPoolPlaceholder: 'Use system default worker pool'
         }
       }
     }
