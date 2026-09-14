@@ -823,19 +823,32 @@ class JenkinsJobViewSet(WorkflowResourceProtectionMixin, StandardModelViewSet):
 
     @action(methods=["POST"], detail=True, url_path="run")
     def run_job(self, request, pk=None):
-        from apps.jobs.node_executors import trigger_jenkins_job
+        from apps.jobs.application.runs import create_trial_run
 
         job = self.get_object()
         parameters = request.data.get("parameters") or {}
         try:
-            queue_url = trigger_jenkins_job(job.server, job.name, parameters)
+            run = create_trial_run(
+                node_type=NodeType.JENKINS,
+                resource_id=job.id,
+                node_name=f"Jenkins job trial: {job.name}",
+                config={"parameters": parameters},
+                input_vars={},
+                triggered_by=request.user,
+            )
         except Exception as exc:
             logger.exception("Jenkins Job %s trial run failed", job.id)
             return api_error_response(str(exc) or exc.__class__.__name__)
-        build = JenkinsBuild.objects.create(
-            job=job, queue_url=queue_url, parameters=parameters
+        create_domain_audit_event(
+            actor=request.user,
+            action="automation.jenkins_job.run",
+            resource_type="jenkins_job",
+            resource_id=job.id,
+            before={},
+            after={"workflowRunId": run.id, "parameters": parameters},
+            request=request,
         )
-        return api_ok_response(JenkinsBuildSerializer(build).data)
+        return api_ok_response({"workflowRunId": run.id, "status": run.status})
 
 
 class JenkinsBuildViewSet(StandardModelViewSet):
@@ -969,24 +982,32 @@ class NotificationTemplateViewSet(
 
     @action(methods=["POST"], detail=True, url_path="test-send")
     def test_send(self, request, pk=None):
-        from apps.jobs.node_executors import send_notification
+        from apps.jobs.application.runs import create_trial_run
 
         template = self.get_object()
+        receivers = request.data.get("receivers") or []
         try:
-            result = send_notification(
-                template,
-                {
-                    "inputs": request.data.get("inputVars") or {},
-                    "global": {},
-                    "system": {"test": True},
-                    "nodes": {},
-                },
-                overrides={"receivers": request.data.get("receivers") or []},
+            run = create_trial_run(
+                node_type=NodeType.NOTIFY,
+                resource_id=template.id,
+                node_name=f"Notification test: {template.name}",
+                config={"receivers": receivers},
+                input_vars=request.data.get("inputVars") or {},
+                triggered_by=request.user,
             )
         except Exception as exc:
             logger.exception("Notification template test %s failed", template.id)
             return api_error_response(str(exc) or exc.__class__.__name__)
-        return api_ok_response(result)
+        create_domain_audit_event(
+            actor=request.user,
+            action="automation.notification_template.test_send",
+            resource_type="notification_template",
+            resource_id=template.id,
+            before={},
+            after={"workflowRunId": run.id, "receivers": receivers},
+            request=request,
+        )
+        return api_ok_response({"workflowRunId": run.id, "status": run.status})
 
 
 class NotificationRecordViewSet(StandardModelViewSet):

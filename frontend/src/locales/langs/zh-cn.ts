@@ -165,6 +165,31 @@ const local: App.I18n.Schema = {
     home: '首页',
     audit: '审计中心',
     audit_event: '审计日志',
+    cmdb: '资产管理',
+    cmdb_host: '主机资产',
+    cmdb_credential: '凭据引用',
+    cmdb_execution: '执行器管理',
+    cmdb_group: '主机组',
+    cmdb_resource: '资源视图',
+    automation: '自动化配置',
+    automation_resource: '工作流版本',
+    automation_resources: '自动化配置',
+    automation_resources_script: '脚本资源',
+    automation_resources_playbook: 'Playbook 资源',
+    automation_resources_module: 'Module 资源',
+    automation_resources_api: 'API 资源',
+    automation_resources_jenkins: 'Jenkins 资源',
+    automation_resources_notification: '通知模板',
+    automation_resources_gateway: '网关代理',
+    ops_dashboard: '作业概览',
+    ops_history: '作业历史',
+    ops_settings: '作业设置',
+    task_dashboard: '任务概览',
+    'task_run-create': '发起任务',
+    task_templates: '模板管理',
+    'task_flow-design': '流程编排',
+    task_schedule: '定时任务',
+    'task_worker-pool': 'Worker 池管理',
     ops: '作业系统',
     'ops_quick-execute': '快速执行',
     task: '任务系统',
@@ -515,6 +540,33 @@ const local: App.I18n.Schema = {
         }
       }
     },
+    cmdb: {
+      host: {
+        title: '主机资产列表',
+        id: 'ID',
+        hostname: '主机名',
+        primaryIp: 'IP地址',
+        assetType: '资产类型',
+        osFamily: 'OS 类型',
+        osType: '系统版本',
+        statusLabel: '状态',
+        environment: '环境',
+        region: '地域',
+        spec: '规格',
+        appCode: '应用',
+        ownerTeam: '负责团队',
+        credential: '凭据',
+        serviceNode: '服务节点',
+        updatedAt: '更新时间',
+        keyword: '关键词',
+        keywordPlaceholder: '主机名/IP/镜像/应用/团队',
+        status: {
+          active: '在线',
+          inactive: '离线',
+          retired: '已退役'
+        }
+      }
+    },
     task: {
       run: {
         title: '任务运行列表',
@@ -586,7 +638,10 @@ const local: App.I18n.Schema = {
         },
         host: {
           hostname: '主机名',
-          ip: 'IP地址'
+          ip: 'IP地址',
+          viewOutput: '输出',
+          stdout: '标准输出',
+          stderr: '错误输出'
         }
       }
     },

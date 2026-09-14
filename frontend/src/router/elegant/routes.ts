@@ -60,13 +60,227 @@ export const generatedRoutes: GeneratedRoute[] = [
     ]
   },
   {
+    name: 'automation',
+    path: '/automation',
+    component: 'layout.base',
+    meta: {
+      title: 'automation',
+      i18nKey: 'route.automation'
+    },
+    children: [
+      {
+        name: 'automation_resource',
+        path: '/automation/resource',
+        component: 'view.automation_resource',
+        meta: {
+          title: 'automation_resource',
+          i18nKey: 'route.automation_resource'
+        },
+        children: [
+          {
+            name: 'automation_resources_api',
+            path: '/automation/resources/api',
+            component: 'view.automation_resources_api',
+            meta: {
+              title: 'automation_resources_api',
+              i18nKey: 'route.automation_resources_api'
+            }
+          },
+          {
+            name: 'automation_resources_gateway',
+            path: '/automation/resources/gateway',
+            component: 'view.automation_resources_gateway',
+            meta: {
+              title: 'automation_resources_gateway',
+              i18nKey: 'route.automation_resources_gateway'
+            }
+          },
+          {
+            name: 'automation_resources_jenkins',
+            path: '/automation/resources/jenkins',
+            component: 'view.automation_resources_jenkins',
+            meta: {
+              title: 'automation_resources_jenkins',
+              i18nKey: 'route.automation_resources_jenkins'
+            }
+          },
+          {
+            name: 'automation_resources_module',
+            path: '/automation/resources/module',
+            component: 'view.automation_resources_module',
+            meta: {
+              title: 'automation_resources_module',
+              i18nKey: 'route.automation_resources_module'
+            }
+          },
+          {
+            name: 'automation_resources_notification',
+            path: '/automation/resources/notification',
+            component: 'view.automation_resources_notification',
+            meta: {
+              title: 'automation_resources_notification',
+              i18nKey: 'route.automation_resources_notification'
+            }
+          },
+          {
+            name: 'automation_resources_playbook',
+            path: '/automation/resources/playbook',
+            component: 'view.automation_resources_playbook',
+            meta: {
+              title: 'automation_resources_playbook',
+              i18nKey: 'route.automation_resources_playbook'
+            }
+          },
+          {
+            name: 'automation_resources_script',
+            path: '/automation/resources/script',
+            component: 'view.automation_resources_script',
+            meta: {
+              title: 'automation_resources_script',
+              i18nKey: 'route.automation_resources_script'
+            }
+          }
+        ]
+      },
+      {
+        name: 'automation_resources',
+        path: '/automation/resources',
+        meta: {
+          title: 'automation_resources',
+          i18nKey: 'route.automation_resources'
+        },
+        children: [
+          {
+            name: 'automation_resources_api',
+            path: '/automation/resources/api',
+            component: 'view.automation_resources_api',
+            meta: {
+              title: 'automation_resources_api',
+              i18nKey: 'route.automation_resources_api'
+            }
+          },
+          {
+            name: 'automation_resources_gateway',
+            path: '/automation/resources/gateway',
+            component: 'view.automation_resources_gateway',
+            meta: {
+              title: 'automation_resources_gateway',
+              i18nKey: 'route.automation_resources_gateway'
+            }
+          },
+          {
+            name: 'automation_resources_jenkins',
+            path: '/automation/resources/jenkins',
+            component: 'view.automation_resources_jenkins',
+            meta: {
+              title: 'automation_resources_jenkins',
+              i18nKey: 'route.automation_resources_jenkins'
+            }
+          },
+          {
+            name: 'automation_resources_module',
+            path: '/automation/resources/module',
+            component: 'view.automation_resources_module',
+            meta: {
+              title: 'automation_resources_module',
+              i18nKey: 'route.automation_resources_module'
+            }
+          },
+          {
+            name: 'automation_resources_notification',
+            path: '/automation/resources/notification',
+            component: 'view.automation_resources_notification',
+            meta: {
+              title: 'automation_resources_notification',
+              i18nKey: 'route.automation_resources_notification'
+            }
+          },
+          {
+            name: 'automation_resources_playbook',
+            path: '/automation/resources/playbook',
+            component: 'view.automation_resources_playbook',
+            meta: {
+              title: 'automation_resources_playbook',
+              i18nKey: 'route.automation_resources_playbook'
+            }
+          },
+          {
+            name: 'automation_resources_script',
+            path: '/automation/resources/script',
+            component: 'view.automation_resources_script',
+            meta: {
+              title: 'automation_resources_script',
+              i18nKey: 'route.automation_resources_script'
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    name: 'cmdb',
+    path: '/cmdb',
+    component: 'layout.base',
+    meta: {
+      title: 'cmdb',
+      i18nKey: 'route.cmdb'
+    },
+    children: [
+      {
+        name: 'cmdb_credential',
+        path: '/cmdb/credential',
+        component: 'view.cmdb_credential',
+        meta: {
+          title: 'cmdb_credential',
+          i18nKey: 'route.cmdb_credential'
+        }
+      },
+      {
+        name: 'cmdb_execution',
+        path: '/cmdb/execution',
+        component: 'view.cmdb_execution',
+        meta: {
+          title: 'cmdb_execution',
+          i18nKey: 'route.cmdb_execution'
+        }
+      },
+      {
+        name: 'cmdb_group',
+        path: '/cmdb/group',
+        component: 'view.cmdb_group',
+        meta: {
+          title: 'cmdb_group',
+          i18nKey: 'route.cmdb_group'
+        }
+      },
+      {
+        name: 'cmdb_host',
+        path: '/cmdb/host',
+        component: 'view.cmdb_host',
+        meta: {
+          title: 'cmdb_host',
+          i18nKey: 'route.cmdb_host'
+        }
+      },
+      {
+        name: 'cmdb_resource',
+        path: '/cmdb/resource',
+        component: 'view.cmdb_resource',
+        meta: {
+          title: 'cmdb_resource',
+          i18nKey: 'route.cmdb_resource'
+        }
+      }
+    ]
+  },
+  {
     name: 'home',
     path: '/home',
     component: 'layout.base$view.home',
     meta: {
       title: 'home',
       i18nKey: 'route.home',
-      icon: 'mdi:monitor-dashboard',
+      icon: 'carbon:home',
       order: 1
     }
   },
@@ -205,12 +419,39 @@ export const generatedRoutes: GeneratedRoute[] = [
     },
     children: [
       {
+        name: 'ops_dashboard',
+        path: '/ops/dashboard',
+        component: 'view.ops_dashboard',
+        meta: {
+          title: 'ops_dashboard',
+          i18nKey: 'route.ops_dashboard'
+        }
+      },
+      {
+        name: 'ops_history',
+        path: '/ops/history',
+        component: 'view.ops_history',
+        meta: {
+          title: 'ops_history',
+          i18nKey: 'route.ops_history'
+        }
+      },
+      {
         name: 'ops_quick-execute',
         path: '/ops/quick-execute',
         component: 'view.ops_quick-execute',
         meta: {
           title: 'ops_quick-execute',
           i18nKey: 'route.ops_quick-execute'
+        }
+      },
+      {
+        name: 'ops_settings',
+        path: '/ops/settings',
+        component: 'view.ops_settings',
+        meta: {
+          title: 'ops_settings',
+          i18nKey: 'route.ops_settings'
         }
       }
     ]
@@ -473,12 +714,39 @@ export const generatedRoutes: GeneratedRoute[] = [
     },
     children: [
       {
+        name: 'task_dashboard',
+        path: '/task/dashboard',
+        component: 'view.task_dashboard',
+        meta: {
+          title: 'task_dashboard',
+          i18nKey: 'route.task_dashboard'
+        }
+      },
+      {
+        name: 'task_flow-design',
+        path: '/task/flow-design',
+        component: 'view.task_flow-design',
+        meta: {
+          title: 'task_flow-design',
+          i18nKey: 'route.task_flow-design'
+        }
+      },
+      {
         name: 'task_run',
         path: '/task/run',
         component: 'view.task_run',
         meta: {
           title: 'task_run',
           i18nKey: 'route.task_run'
+        }
+      },
+      {
+        name: 'task_run-create',
+        path: '/task/run-create',
+        component: 'view.task_run-create',
+        meta: {
+          title: 'task_run-create',
+          i18nKey: 'route.task_run-create'
         }
       },
       {
@@ -489,6 +757,33 @@ export const generatedRoutes: GeneratedRoute[] = [
           title: 'task_run-detail',
           i18nKey: 'route.task_run-detail',
           hideInMenu: true
+        }
+      },
+      {
+        name: 'task_schedule',
+        path: '/task/schedule',
+        component: 'view.task_schedule',
+        meta: {
+          title: 'task_schedule',
+          i18nKey: 'route.task_schedule'
+        }
+      },
+      {
+        name: 'task_templates',
+        path: '/task/templates',
+        component: 'view.task_templates',
+        meta: {
+          title: 'task_templates',
+          i18nKey: 'route.task_templates'
+        }
+      },
+      {
+        name: 'task_worker-pool',
+        path: '/task/worker-pool',
+        component: 'view.task_worker-pool',
+        meta: {
+          title: 'task_worker-pool',
+          i18nKey: 'route.task_worker-pool'
         }
       }
     ]

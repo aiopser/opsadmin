@@ -169,7 +169,7 @@ class Menu(StandardModelMixin):
         null=True,
     )
     name = models.CharField(
-        verbose_name="Route name", max_length=32, blank=True, null=True
+        verbose_name="Route name", max_length=64, blank=True, null=True
     )
     title = models.CharField(verbose_name="Title", max_length=32, blank=True, null=True)
     icon = models.CharField(verbose_name="Icon", max_length=32, blank=True, null=True)

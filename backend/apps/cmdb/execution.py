@@ -6,6 +6,7 @@ import tempfile
 from apps.ops.contracts import ExecutionPlan
 from apps.ops.executor import AnsibleExecutor
 from apps.ops.workflow.inventory import build_inventory
+from .credentials import DatabaseCredentialProvider
 from .targets import resolve_targets
 
 
@@ -18,7 +19,12 @@ def execute_asset_module(*, actor, host_id, module, module_args="", timeout=60, 
     try:
         plan = ExecutionPlan(
             run_id=0, node_run_id=0, command_type="module", target_hosts=targets,
-            inventory=build_inventory(hosts, group_vars, key_directory=gateway_directory), playbook=[], extra_vars={},
+            inventory=build_inventory(
+                hosts,
+                group_vars,
+                credential_provider=DatabaseCredentialProvider(gateway_directory),
+            ),
+            playbook=[], extra_vars={},
             env_vars={}, private_data_dir=gateway_directory, timeout_seconds=timeout,
             module=module, module_args=module_args,
         )

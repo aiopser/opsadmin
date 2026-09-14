@@ -50,6 +50,7 @@ def _snapshot(actor, host: AssetHost) -> dict:
         raise ValidationError("Invalid connection port")
     return {"host_id": host.pk, "hostname": host.hostname, "address": host.primary_ip,
             "port": host.connection_port, "connection_type": host.connection_type,
+            "region": host.region,
             "credential_ref_id": host.credential_ref_id, "variables": variables}
 
 

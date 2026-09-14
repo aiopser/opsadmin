@@ -188,15 +188,32 @@ declare namespace Api {
 
     /** 快速执行提交参数（QuickCommandRunCreateSerializer） */
     interface QuickCommandRunPayload {
-      commandType: 'linux_shell' | 'windows_powershell';
+      commandType: 'linux_shell' | 'windows_powershell' | 'python';
       commandContent: string;
       hostIds: number[];
-      workerPoolId?: number | null;
+      workerPoolId: number | null;
       sourceCommandVersionId?: number | null;
       gatewayId?: number | null;
     }
 
-    /** 运行创建提交参数（WorkflowRunCreateSerializer） */
+    interface PlaybookRunPayload {
+      playbookContent: string;
+      playbookName?: string;
+      inputVars?: Record<string, unknown>;
+      hostIds: number[];
+      workerPoolId: number | null;
+      gatewayId?: number | null;
+    }
+
+    interface ModuleRunPayload {
+      moduleVersionId: number;
+      moduleArgs?: string;
+      hostIds: number[];
+      workerPoolId: number | null;
+      gatewayId?: number | null;
+    }
+
+    /** 运行创建提交参数（WorkflowRunCreateSerializer，全部 camelCase） */
     interface WorkflowRunPayload {
       workflowVersionId: number;
       hostIds?: number[];
@@ -204,14 +221,30 @@ declare namespace Api {
       tagIds?: number[];
       inputVars?: Record<string, unknown>;
       workerPoolId?: number | null;
+      /** parallel / serial / rolling（host_strategy 的驼峰字段名） */
+      hostStrategy?: 'parallel' | 'serial' | 'rolling';
+      forks?: number;
+      /** serial 策略批次大小（serial_batch） */
+      serialBatch?: number;
+      maxFailPercentage?: number;
+      timeoutSeconds?: number;
+      queueTimeoutSeconds?: number;
+      bypassHostGateway?: boolean;
+    }
+
+    interface WorkflowInputFieldOption {
+      label?: string;
+      value: string | number;
     }
 
     interface WorkflowInputField {
       name: string;
       label?: string;
-      type: 'string' | 'number' | 'integer' | 'boolean' | 'secret';
+      type: 'string' | 'text' | 'secret' | 'number' | 'integer' | 'boolean' | 'select' | 'multiselect' | 'host';
       required?: boolean;
-      default?: string | number | boolean;
+      default?: string | number | boolean | Array<string | number>;
+      /** select / multiselect 可选项 */
+      options?: (string | number | WorkflowInputFieldOption)[];
     }
 
     interface WorkflowVersionOption {
@@ -238,9 +271,121 @@ declare namespace Api {
       code: string;
       name: string;
       queueName: string;
+      /** 部署地域，如 cn-east-1 / us-west-2；空表示未指定（不参与地域路由） */
+      region: string;
       isActive: boolean;
       isDefault: boolean;
       executionKinds: string[];
+    }
+
+    /** Worker 池完整记录（WorkerPoolSerializer 输出，camelCase） */
+    interface WorkerPoolRecord extends WorkerPoolOption {
+      concurrencyLimit: number;
+      createdAt: string;
+      updatedAt: string;
+    }
+
+    /** Worker 池创建/更新载荷（serializer 字段名，source 映射到 snake_case 模型列） */
+    interface WorkerPoolPayload {
+      code: string;
+      name: string;
+      queueName: string;
+      /** 部署地域，与主机 region 匹配时调度就近执行 */
+      region?: string;
+      isDefault?: boolean;
+      isActive?: boolean;
+      concurrencyLimit?: number;
+      executionKinds?: string[];
+    }
+
+    /** 网关代理（jobs.Gateway，GatewaySerializer 输出 snake_case） */
+    interface GatewayRecord {
+      id: number;
+      name: string;
+      address: string;
+      cloud: string;
+      /** CIDR 网段列表（逗号分隔，如 10.0.0.0/8,172.16.0.0/12），目标地址命中时自动经该网关代理 */
+      network: string;
+      auth_type: 'password' | 'key';
+      username: string;
+      status: 'normal' | 'abnormal';
+      last_tested_at: string | null;
+      created_at: string;
+      updated_at: string;
+    }
+
+    /** 网关创建/更新载荷（secret 为明文，服务端加密存储；编辑留空表示不修改） */
+    interface GatewayPayload {
+      name: string;
+      address: string;
+      cloud?: string;
+      network?: string;
+      auth_type?: 'password' | 'key';
+      username?: string;
+      secret?: string;
+    }
+
+    /** 定时任务记录（ScheduledJobSerializer：fields="__all__" 蛇形 + 附加驼峰只读） */
+    interface ScheduledJobRecord {
+      id: number;
+      name: string;
+      workflow_version: number | null;
+      worker_pool: number;
+      host_ids: number[];
+      cron_expression: string;
+      timezone: string;
+      input_vars: Record<string, unknown>;
+      host_strategy: 'parallel' | 'serial' | 'rolling';
+      forks: number;
+      serial_batch: number;
+      max_fail_percentage: number;
+      timeout_seconds: number;
+      queue_timeout_seconds: number;
+      bypass_host_gateway: boolean;
+      enabled: boolean;
+      next_run_at: string | null;
+      last_run_at: string | null;
+      /** serializer 附加只读字段 */
+      workflowName: string;
+      workflowVersion: number | null;
+      workerPoolName: string;
+      lastRunId: number | null;
+      lastRunStatus: RunStatus | null;
+    }
+
+    /** 定时任务创建/更新载荷 */
+    interface ScheduledJobPayload {
+      name: string;
+      workflow_version: number;
+      worker_pool?: number | null;
+      host_ids: number[];
+      cron_expression: string;
+      timezone?: string;
+      input_vars?: Record<string, unknown>;
+      host_strategy?: 'parallel' | 'serial' | 'rolling';
+      forks?: number;
+      serial_batch?: number;
+      max_fail_percentage?: number;
+      timeout_seconds?: number;
+      queue_timeout_seconds?: number;
+      bypass_host_gateway?: boolean;
+      enabled?: boolean;
+    }
+
+    /** 定时任务列表查询参数 */
+    interface ScheduledJobSearchParams {
+      current: number;
+      size: number;
+      search?: string | null;
+      enabled?: boolean | null;
+    }
+
+    /** 运行概览统计（GET /api/v1/jobs/dashboard/stats，固定统计 ops 域当日数据） */
+    interface DashboardStats {
+      todayExecutions: number;
+      successRate: number;
+      avgResponseSeconds: number;
+      blockedCommands: number;
     }
   }
 }

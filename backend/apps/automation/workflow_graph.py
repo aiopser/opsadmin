@@ -37,13 +37,35 @@ def publish_version(workflow_version, user):
         setattr(workflow_version, field, getattr(locked, field))
 
 
+def _command_version_info(command_version):
+    """节点携带的命令版本摘要；commandId/commandName 供前端还原资源绑定。"""
+    data = {
+        field: deepcopy(getattr(command_version, field))
+        for field in (
+            "id",
+            "version",
+            "command_type",
+            "content",
+            "default_vars",
+            "argument_schema",
+            "timeout_seconds",
+            "become_enabled",
+            "check_mode_supported",
+            "output_extractors",
+        )
+    }
+    data["commandId"] = command_version.command_id
+    data["commandName"] = command_version.command.name
+    return data
+
+
 def serialize_graph(workflow_version, *, freeze_resources=False):
     from .resource_snapshots import resource_snapshot
 
     nodes = list(
-        workflow_version.nodes.select_related("command_version").order_by(
-            "order_index", "id"
-        )
+        workflow_version.nodes.select_related(
+            "command_version", "command_version__command"
+        ).order_by("order_index", "id")
     )
     edges = list(
         workflow_version.edges.select_related("source_node", "target_node").order_by(
@@ -64,21 +86,7 @@ def serialize_graph(workflow_version, *, freeze_resources=False):
                 if freeze_resources
                 else None,
                 "commandVersionId": node.command_version_id,
-                "commandVersion": {
-                    field: deepcopy(getattr(node.command_version, field))
-                    for field in (
-                        "id",
-                        "version",
-                        "command_type",
-                        "content",
-                        "default_vars",
-                        "argument_schema",
-                        "timeout_seconds",
-                        "become_enabled",
-                        "check_mode_supported",
-                        "output_extractors",
-                    )
-                }
+                "commandVersion": _command_version_info(node.command_version)
                 if node.command_version
                 else None,
                 "config": node.config or {},

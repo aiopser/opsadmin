@@ -87,7 +87,7 @@ export async function fetchGetRunEvents(
   });
 }
 
-/** 取消运行（请求 cancel_requested，由 Runner 确认退出） */
+/** 取消运行（请求 cancel_requested，由 Worker 进程确认退出） */
 export function fetchCancelRun(id: number, domain: Api.Jobs.RunDomain = 'task', signal?: AbortSignal) {
   return request<Api.Jobs.RunRecord>({
     signal,
@@ -127,6 +127,22 @@ export function fetchRealtimeTicket(id: number, domain: Api.Jobs.RunDomain = 'ta
 export function fetchCreateQuickCommandRun(data: Api.Jobs.QuickCommandRunPayload) {
   return request<Api.Jobs.RunRecord>({
     url: '/api/v1/jobs/quick-commands/runs',
+    method: 'post',
+    data
+  });
+}
+
+export function fetchCreatePlaybookRun(data: Api.Jobs.PlaybookRunPayload) {
+  return request<Api.Jobs.RunRecord>({
+    url: '/api/v1/jobs/playbook-runs',
+    method: 'post',
+    data
+  });
+}
+
+export function fetchCreateModuleRun(data: Api.Jobs.ModuleRunPayload) {
+  return request<Api.Jobs.RunRecord>({
+    url: '/api/v1/jobs/module-runs',
     method: 'post',
     data
   });
@@ -193,4 +209,184 @@ export function runEventWebSocketUrl() {
   const url = new URL('/ws/jobs/runs/', new URL(baseURL || '/', window.location.origin));
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   return url.toString();
+}
+
+/** ============ Worker 池管理 ============ */
+
+/** Worker 池分页列表 */
+export async function fetchGetWorkerPoolList(params?: { current: number; size: number; search?: string | null }) {
+  const query: Record<string, string | number> = {};
+  if (params?.current) query.pageNum = params.current;
+  if (params?.size) query.pageSize = params.size;
+  if (params?.search) query.search = params.search;
+  const res = await request<BackendPaginated<Api.Jobs.WorkerPoolRecord>>({
+    url: '/api/v1/jobs/worker-pools',
+    method: 'get',
+    params: query
+  });
+
+  if (res.error) return res;
+  return {
+    ...res,
+    data: { records: res.data.list, current: res.data.page, size: res.data.size, total: res.data.total }
+  };
+}
+
+/** 新增 Worker 池 */
+export function fetchAddWorkerPool(data: Api.Jobs.WorkerPoolPayload) {
+  return request<Api.Jobs.WorkerPoolRecord>({
+    url: '/api/v1/jobs/worker-pools',
+    method: 'post',
+    data
+  });
+}
+
+/** 更新 Worker 池 */
+export function fetchUpdateWorkerPool(id: number, data: Partial<Api.Jobs.WorkerPoolPayload>) {
+  return request<Api.Jobs.WorkerPoolRecord>({
+    url: `/api/v1/jobs/worker-pools/${id}`,
+    method: 'put',
+    data
+  });
+}
+
+/** 删除 Worker 池 */
+export function fetchDeleteWorkerPool(id: number) {
+  return request<null>({ url: `/api/v1/jobs/worker-pools/${id}`, method: 'delete' });
+}
+
+/** ============ 网关代理 ============ */
+
+/** 网关分页列表 */
+export async function fetchGetGatewayList(params?: { current: number; size: number; search?: string | null }) {
+  const query: Record<string, string | number> = {};
+  if (params?.current) query.pageNum = params.current;
+  if (params?.size) query.pageSize = params.size;
+  if (params?.search) query.search = params.search;
+  const res = await request<BackendPaginated<Api.Jobs.GatewayRecord>>({
+    url: '/api/v1/jobs/gateways',
+    method: 'get',
+    params: query
+  });
+
+  if (res.error) return res;
+  return {
+    ...res,
+    data: { records: res.data.list, current: res.data.page, size: res.data.size, total: res.data.total }
+  };
+}
+
+/** 新增网关 */
+export function fetchAddGateway(data: Api.Jobs.GatewayPayload) {
+  return request<Api.Jobs.GatewayRecord>({
+    url: '/api/v1/jobs/gateways',
+    method: 'post',
+    data
+  });
+}
+
+/** 更新网关 */
+export function fetchUpdateGateway(id: number, data: Partial<Api.Jobs.GatewayPayload>) {
+  return request<Api.Jobs.GatewayRecord>({
+    url: `/api/v1/jobs/gateways/${id}`,
+    method: 'put',
+    data
+  });
+}
+
+/** 删除网关 */
+export function fetchDeleteGateway(id: number) {
+  return request<null>({ url: `/api/v1/jobs/gateways/${id}`, method: 'delete' });
+}
+
+/** 测试网关连通性（探测 SSH 端口，后端同步更新状态） */
+export function fetchTestGateway(id: number) {
+  return request<Api.Jobs.GatewayRecord>({
+    url: `/api/v1/jobs/gateways/${id}/test`,
+    method: 'post'
+  });
+}
+
+/** ============ 定时任务调度 ============ */
+
+/** 定时任务分页列表 */
+export async function fetchGetScheduledJobList(params?: Api.Jobs.ScheduledJobSearchParams) {
+  const query: Record<string, string | number | boolean> = {};
+  if (params?.current) query.pageNum = params.current;
+  if (params?.size) query.pageSize = params.size;
+  if (params?.search) query.search = params.search;
+  if (params?.enabled !== undefined && params?.enabled !== null) query.enabled = params.enabled;
+  const res = await request<BackendPaginated<Api.Jobs.ScheduledJobRecord>>({
+    url: '/api/v1/jobs/scheduled-jobs',
+    method: 'get',
+    params: query
+  });
+
+  if (res.error) return res;
+  return {
+    ...res,
+    data: { records: res.data.list, current: res.data.page, size: res.data.size, total: res.data.total }
+  };
+}
+
+/** 新增定时任务 */
+export function fetchAddScheduledJob(data: Api.Jobs.ScheduledJobPayload) {
+  return request<Api.Jobs.ScheduledJobRecord>({
+    url: '/api/v1/jobs/scheduled-jobs',
+    method: 'post',
+    data
+  });
+}
+
+/** 更新定时任务 */
+export function fetchUpdateScheduledJob(id: number, data: Partial<Api.Jobs.ScheduledJobPayload>) {
+  return request<Api.Jobs.ScheduledJobRecord>({
+    url: `/api/v1/jobs/scheduled-jobs/${id}`,
+    method: 'put',
+    data
+  });
+}
+
+/** 删除定时任务 */
+export function fetchDeleteScheduledJob(id: number) {
+  return request<null>({ url: `/api/v1/jobs/scheduled-jobs/${id}`, method: 'delete' });
+}
+
+/** ============ 仪表盘（stats/recent/health） ============ */
+
+/** 运行概览统计（固定统计 ops 域当日数据） */
+export function fetchGetDashboardStats() {
+  return request<Api.Jobs.DashboardStats>({ url: '/api/v1/jobs/dashboard/stats', method: 'get' });
+}
+
+/** 最近运行（{ items: [{id,name,type,target,status,executor,time}] }） */
+export function fetchGetDashboardRecent() {
+  return request<{ items: Array<Record<string, unknown>> }>({ url: '/api/v1/jobs/dashboard/recent', method: 'get' });
+}
+
+/** 健康检查（redis/workers/queues/websocket/sevenDay/checkedAt） */
+export function fetchGetDashboardHealth() {
+  return request<Record<string, unknown>>({ url: '/api/v1/jobs/dashboard/health', method: 'get' });
+}
+
+/** ============ 作业设置（engine/notify） ============ */
+
+/** 读取引擎设置 */
+export function fetchGetEngineSettings() {
+  return request<Record<string, unknown>>({ url: '/api/v1/jobs/settings/engine', method: 'get' });
+}
+
+/** 保存引擎设置 */
+export function fetchSaveEngineSettings(data: Record<string, unknown>) {
+  return request<Record<string, unknown>>({ url: '/api/v1/jobs/settings/engine', method: 'put', data });
+}
+
+/** 读取通知设置 */
+export function fetchGetNotifySettings() {
+  return request<Record<string, unknown>>({ url: '/api/v1/jobs/settings/notify', method: 'get' });
+}
+
+/** 保存通知设置 */
+export function fetchSaveNotifySettings(data: Record<string, unknown>) {
+  return request<Record<string, unknown>>({ url: '/api/v1/jobs/settings/notify', method: 'put', data });
 }

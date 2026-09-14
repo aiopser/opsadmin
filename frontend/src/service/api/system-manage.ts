@@ -11,12 +11,9 @@ import { request } from '../request';
 /** 后端分页响应（common.pagination.StandardResultSetPagination） */
 interface BackendPaginated<T> {
   list?: T[];
-  result?: T[];
   total?: number;
-  count?: number;
   page?: number;
   size?: number;
-  num_pages?: number;
 }
 
 /** 后端用户记录（UserProfileSerializer 输出） */
@@ -139,7 +136,7 @@ function mapFlatResponse<T, R>(res: FlatResponseData<any, T>, mapper: (data: T) 
 /** 提取后端列表数据（兼容分页结构与全量数组） */
 function extractList<T>(raw: BackendPaginated<T> | T[]): T[] {
   if (Array.isArray(raw)) return raw;
-  return raw.result ?? raw.list ?? [];
+  return raw.list ?? [];
 }
 
 /** 后端分页结构/全量数组 → 前端 PaginatingQueryRecord */
@@ -154,7 +151,7 @@ function transformPaginated<T, R>(
     records,
     current: meta.page ?? 1,
     size: meta.size ?? records.length,
-    total: meta.total ?? meta.count ?? records.length
+    total: meta.total ?? records.length
   };
 }
 

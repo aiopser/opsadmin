@@ -635,6 +635,8 @@ class ScheduledJobViewSet(StandardModelViewSet):
             )
         except ValidationError:
             return api_error_response("定时任务包含无效或未启用的目标主机")
+        except ValueError as exc:
+            return api_error_response(f"无法立即执行定时任务：{exc}")
         append_run_event(
             run_id=(run).id,
             node_run_id=None,

@@ -16,6 +16,7 @@ class WorkerPool(StandardModelMixin):
     is_active = models.BooleanField(default=True)
     concurrency_limit = models.IntegerField(default=5)
     execution_kinds = models.JSONField(default=worker_execution_kinds)
+    region = models.CharField(max_length=64, blank=True, default="", db_index=True)
 
     def __str__(self):
         return self.name
@@ -484,7 +485,8 @@ class Gateway(StandardModelMixin):
     name = models.CharField(max_length=128)
     address = models.CharField(max_length=255)
     cloud = models.CharField(max_length=64, blank=True, default="")
-    network = models.CharField(max_length=64, blank=True, default="")
+    # 逗号分隔的 CIDR 网段列表（如 10.0.0.0/8,172.16.0.0/12），目标地址命中时自动经该网关代理
+    network = models.CharField(max_length=512, blank=True, default="")
     auth_type = models.CharField(
         max_length=16,
         choices=AuthType.choices,

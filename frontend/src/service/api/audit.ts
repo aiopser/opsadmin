@@ -45,9 +45,7 @@ export interface AuditEventSearchParams {
 /** 后端分页响应（common.pagination.StandardResultSetPagination） */
 interface BackendPaginated<T> {
   list?: T[];
-  result?: T[];
   total?: number;
-  count?: number;
   page?: number;
   size?: number;
 }
@@ -81,14 +79,14 @@ function mapFlatResponse<R>(
 
 /** 后端分页结构/全量数组 → 前端 PaginatingQueryRecord */
 function transformPaginated(raw: BackendPaginated<AuditEvent>): Api.Common.PaginatingQueryRecord<AuditEvent> {
-  const records = Array.isArray(raw) ? raw : (raw.result ?? raw.list ?? []);
+  const records = Array.isArray(raw) ? raw : (raw.list ?? []);
   const meta: BackendPaginated<AuditEvent> = Array.isArray(raw) ? ({} as BackendPaginated<AuditEvent>) : raw;
 
   return {
     records,
     current: meta.page ?? 1,
     size: meta.size ?? records.length,
-    total: meta.total ?? meta.count ?? records.length
+    total: meta.total ?? records.length
   };
 }
 

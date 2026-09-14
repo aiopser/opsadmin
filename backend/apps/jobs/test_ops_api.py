@@ -636,23 +636,14 @@ class GatewayExecutionTests(OpsExtensionApiTests):
         with self.assertRaises(InvalidGateway):
             prepare_gateway_execution({"gateway_id": gateway.id})
 
-    def test_prepare_host_gateways_writes_per_host_proxy_vars(self):
-        first = self._create_gateway(address="10.0.0.1:22")
-        second = self._create_gateway(address="10.0.1.1:22")
+    def test_prepare_host_gateway_explicit_applies_to_all_ssh_hosts(self):
+        gateway = self._create_gateway(address="10.0.0.1:22")
         hosts, group_vars, private_dir = prepare_host_gateway_execution(
             [
-                {
-                    "hostname": "china",
-                    "connection_type": "ssh",
-                    "variables": {"gateway_ref_id": first.id},
-                },
-                {
-                    "hostname": "sea",
-                    "connection_type": "ssh",
-                    "variables": {"gateway_ref_id": second.id},
-                },
-                {"hostname": "local", "connection_type": "ssh"},
-            ]
+                {"hostname": "one", "connection_type": "ssh"},
+                {"hostname": "two", "connection_type": "ssh"},
+            ],
+            {"gateway_id": gateway.id},
         )
         self.assertEqual(group_vars, {})
         self.assertEqual(private_dir, "")
@@ -660,26 +651,34 @@ class GatewayExecutionTests(OpsExtensionApiTests):
             "10.0.0.1", hosts[0]["variables"]["ansible_ssh_common_args"]
         )
         self.assertIn(
-            "10.0.1.1", hosts[1]["variables"]["ansible_ssh_common_args"]
+            "10.0.0.1", hosts[1]["variables"]["ansible_ssh_common_args"]
         )
-        self.assertNotIn("ansible_ssh_common_args", hosts[2].get("variables", {}))
 
-    def test_run_gateway_overrides_host_default_gateway(self):
-        host_gateway = self._create_gateway(address="10.0.0.1:22")
-        override_gateway = self._create_gateway(address="10.0.9.1:22")
-        hosts, _, _ = prepare_host_gateway_execution(
+    def test_prepare_host_gateway_without_gateway_keeps_direct(self):
+        # 未选网关时一律直连：不做 CIDR 自动匹配，也不读主机默认网关
+        self._create_gateway(network="10.60.0.0/16")
+        hosts, group_vars, private_dir = prepare_host_gateway_execution(
             [
+                {"hostname": "inner", "address": "10.60.1.5", "connection_type": "ssh"},
                 {
-                    "hostname": "web",
+                    "hostname": "with-default",
                     "connection_type": "ssh",
-                    "variables": {"gateway_ref_id": host_gateway.id},
-                }
-            ],
-            {"gateway_id": override_gateway.id},
+                    "variables": {"gateway_ref_id": 999},
+                },
+            ]
         )
-        args = hosts[0]["variables"]["ansible_ssh_common_args"]
-        self.assertIn("10.0.9.1", args)
-        self.assertNotIn("10.0.0.1", args)
+        self.assertEqual(group_vars, {})
+        self.assertEqual(private_dir, "")
+        self.assertNotIn("ansible_ssh_common_args", hosts[0].get("variables", {}))
+        self.assertNotIn("ansible_ssh_common_args", hosts[1].get("variables", {}))
+
+    def test_prepare_host_gateway_rejects_non_ssh_host(self):
+        gateway = self._create_gateway(address="10.0.0.1:22")
+        with self.assertRaises(InvalidGateway):
+            prepare_host_gateway_execution(
+                [{"hostname": "win", "connection_type": "winrm"}],
+                {"gateway_id": gateway.id},
+            )
 
     def test_direct_mode_bypasses_host_default_gateway(self):
         host_gateway = self._create_gateway()
@@ -696,43 +695,6 @@ class GatewayExecutionTests(OpsExtensionApiTests):
         self.assertEqual(group_vars, {})
         self.assertEqual(private_dir, "")
         self.assertNotIn("ansible_ssh_common_args", hosts[0].get("variables", {}))
-
-    def test_prepare_multiple_key_gateways_uses_one_runner_directory(self):
-        first = self._create_gateway(auth_type=Gateway.AuthType.KEY)
-        second = self._create_gateway(
-            auth_type=Gateway.AuthType.KEY, address="10.0.1.1:22"
-        )
-        hosts, _, private_dir = prepare_host_gateway_execution(
-            [
-                {
-                    "hostname": "one",
-                    "connection_type": "ssh",
-                    "variables": {"gateway_ref_id": first.id},
-                },
-                {
-                    "hostname": "two",
-                    "connection_type": "ssh",
-                    "variables": {"gateway_ref_id": second.id},
-                },
-            ]
-        )
-        try:
-            self.assertTrue(
-                os.path.exists(os.path.join(private_dir, f"gateway_{first.id}_key"))
-            )
-            self.assertTrue(
-                os.path.exists(os.path.join(private_dir, f"gateway_{second.id}_key"))
-            )
-            self.assertIn(
-                private_dir,
-                hosts[0]["variables"]["ansible_ssh_common_args"],
-            )
-            self.assertIn(
-                private_dir,
-                hosts[1]["variables"]["ansible_ssh_common_args"],
-            )
-        finally:
-            shutil.rmtree(private_dir, ignore_errors=True)
 
     def test_module_run_with_gateway_sets_input_vars(self):
         gateway = self._create_gateway()

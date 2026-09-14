@@ -190,6 +190,17 @@ class AssetHostViewSet(CMDBAuditModelViewSet):
         if group_id:
             host_ids = resolve_group_host_ids([group_id])
             queryset = queryset.filter(id__in=host_ids)
+        business_id = self.request.query_params.get("business")
+        if business_id:
+            queryset = queryset.filter(service_node__business_id=business_id)
+        node_ids_in = self.request.query_params.get("service_node__in", "")
+        if node_ids_in:
+            node_ids = [nid for nid in node_ids_in.split(",") if nid.strip().isdigit()]
+            queryset = (
+                queryset.filter(service_node_id__in=[int(nid) for nid in node_ids])
+                if node_ids
+                else queryset.none()
+            )
         return queryset.distinct()
 
     @action(methods=["POST"], detail=False, url_path="bulk-import")
@@ -492,6 +503,13 @@ class BusinessViewSet(CMDBAuditModelViewSet):
     filterset_fields = ("code", "is_active")
     search_fields = ("code", "name", "description")
 
+    def get_queryset(self):
+        return (
+            super()
+            .get_queryset()
+            .annotate(host_count=models.Count("service_tree_nodes__hosts", distinct=True))
+        )
+
 
 class AssetSourceViewSet(CMDBAuditModelViewSet):
     audit_action_prefix = "cmdb.asset_source"
@@ -579,3 +597,10 @@ class ServiceTreeNodeViewSet(CMDBAuditModelViewSet):
     ordering_fields = ("id", "code", "name", "node_type", "sort_order", "updated_at")
     filterset_fields = ("business", "parent", "node_type", "is_active")
     search_fields = ("code", "name", "description")
+
+    def get_queryset(self):
+        return (
+            super()
+            .get_queryset()
+            .annotate(host_count=models.Count("hosts", distinct=True))
+        )

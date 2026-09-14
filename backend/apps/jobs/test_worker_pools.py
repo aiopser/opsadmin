@@ -1,6 +1,6 @@
 import pytest
 from apps.jobs.models import WorkerPool
-from apps.jobs.worker_pools import resolve_worker_pool, queue_for_pool
+from apps.jobs.worker_pools import region_for_targets, resolve_worker_pool, queue_for_pool
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 
@@ -62,3 +62,80 @@ def test_worker_pool_deletion_is_audited(api_client, user):
     identifier = pool.pk
     assert api_client.delete(f"/api/v1/jobs/worker-pools/{identifier}").status_code == 200
     assert DomainAuditEvent.objects.filter(action="jobs.worker_pool.delete", resource_id=str(identifier)).exists()
+
+
+def test_region_for_targets_single_region_wins():
+    targets = [{"host_id": 1, "region": "us-west-1"}, {"host_id": 2, "region": "us-west-1"}]
+    assert region_for_targets(targets) == "us-west-1"
+
+
+def test_region_for_targets_blank_on_mixed_or_empty_regions():
+    assert region_for_targets([{"region": "us-west-1"}, {"region": "cn-east-1"}]) == ""
+    assert region_for_targets([]) == ""
+    assert region_for_targets(None) == ""
+
+
+def test_region_for_targets_ignores_regionless_targets():
+    # 存量无地域目标不阻塞已知地域的就近路由。
+    assert region_for_targets([{"region": ""}, {"region": "cn-east-1"}]) == "cn-east-1"
+    assert region_for_targets([{"region": " "}, {"region": "cn-east-1"}]) == "cn-east-1"
+
+
+@pytest.mark.django_db
+def test_resolve_worker_pool_routes_by_target_region(user):
+    user.is_superuser = True
+    user.save()
+    WorkerPool.objects.create(code="default", name="Default", queue_name="q.default", is_default=True)
+    region_pool = WorkerPool.objects.create(
+        code="us-west", name="US West", queue_name="q.us-west", region="us-west-1"
+    )
+    resolved = resolve_worker_pool(
+        actor=user, pool_id=None, execution_kind="module", target_region="us-west-1"
+    )
+    assert resolved == region_pool
+
+
+@pytest.mark.django_db
+def test_resolve_worker_pool_falls_back_to_default_without_region_pool(user):
+    user.is_superuser = True
+    user.save()
+    default = WorkerPool.objects.create(code="default", name="Default", queue_name="q.default", is_default=True)
+    WorkerPool.objects.create(
+        code="us-west", name="US West", queue_name="q.us-west", region="us-west-1", is_active=False
+    )
+    resolved = resolve_worker_pool(
+        actor=user, pool_id=None, execution_kind="module", target_region="us-west-1"
+    )
+    assert resolved == default
+
+
+@pytest.mark.django_db
+def test_resolve_worker_pool_region_candidate_must_support_execution_kind(user):
+    user.is_superuser = True
+    user.save()
+    default = WorkerPool.objects.create(code="default", name="Default", queue_name="q.default", is_default=True)
+    WorkerPool.objects.create(
+        code="us-west", name="US West", queue_name="q.us-west", region="us-west-1",
+        execution_kinds=["workflow"],
+    )
+    resolved = resolve_worker_pool(
+        actor=user, pool_id=None, execution_kind="module", target_region="us-west-1"
+    )
+    assert resolved == default
+
+
+@pytest.mark.django_db
+def test_resolve_worker_pool_explicit_pool_overrides_region(user):
+    user.is_superuser = True
+    user.save()
+    WorkerPool.objects.create(code="default", name="Default", queue_name="q.default", is_default=True)
+    WorkerPool.objects.create(
+        code="us-west", name="US West", queue_name="q.us-west", region="us-west-1"
+    )
+    explicit = WorkerPool.objects.create(
+        code="cn-east", name="CN East", queue_name="q.cn-east", region="cn-east-1"
+    )
+    resolved = resolve_worker_pool(
+        actor=user, pool_id=explicit.pk, execution_kind="module", target_region="us-west-1"
+    )
+    assert resolved == explicit

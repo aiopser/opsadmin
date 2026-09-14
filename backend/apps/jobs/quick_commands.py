@@ -12,6 +12,12 @@ from apps.automation.models import (
 QUICK_WORKFLOWS = {
     CommandVersion.CommandType.LINUX_SHELL: "__quick_linux_shell",
     CommandVersion.CommandType.WINDOWS_POWERSHELL: "__quick_windows_powershell",
+    CommandVersion.CommandType.PYTHON: "__quick_python",
+}
+QUICK_WORKFLOW_DISPLAY_NAMES = {
+    CommandVersion.CommandType.LINUX_SHELL: "Quick Linux Shell",
+    CommandVersion.CommandType.WINDOWS_POWERSHELL: "Quick Windows PowerShell",
+    CommandVersion.CommandType.PYTHON: "Quick Python",
 }
 QUICK_WORKFLOW_CODES = frozenset(QUICK_WORKFLOWS.values())
 
@@ -30,11 +36,7 @@ def quick_command_risk_level(source_command_version):
 def ensure_quick_command_workflows() -> dict[str, WorkflowVersion]:
     versions = {}
     for command_type, workflow_code in QUICK_WORKFLOWS.items():
-        display_name = (
-            "Quick Linux Shell"
-            if command_type == CommandVersion.CommandType.LINUX_SHELL
-            else "Quick Windows PowerShell"
-        )
+        display_name = QUICK_WORKFLOW_DISPLAY_NAMES[command_type]
         command, _ = CommandAtom.objects.update_or_create(
             code=f"{workflow_code}_command",
             defaults={

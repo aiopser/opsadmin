@@ -1,0 +1,16 @@
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+
+    dependencies = [
+        ('jobs', '0004_workerpool_region'),
+    ]
+
+    operations = [
+        migrations.AlterField(
+            model_name='gateway',
+            name='network',
+            field=models.CharField(blank=True, default='', max_length=512),
+        ),
+    ]

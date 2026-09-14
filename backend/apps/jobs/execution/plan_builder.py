@@ -8,6 +8,7 @@ import tempfile
 from types import SimpleNamespace
 import yaml
 from apps.automation.models import CommandVersion, WorkflowNode
+from apps.cmdb.credentials import DatabaseCredentialProvider
 from apps.cmdb.crypto import decrypt_secret
 from apps.ops.workflow.inventory import build_inventory
 from apps.ops.workflow.playbooks import build_playbook
@@ -185,42 +186,34 @@ def prepare_gateway_execution(input_vars):
 
 
 def prepare_host_gateway_execution(host_snapshots, input_vars=None):
-    """Apply a run-level gateway override or each host's default gateway.
+    """按运行级 gateway_id 为全部 SSH 主机统一应用网关代理；未选网关则全部直连。
 
-    Returns ``(prepared_hosts, group_vars, private_data_dir)``. Gateway proxy
-    variables are written per host so one inventory may safely contain hosts
-    from multiple network regions.
+    网关仅在运行参数中显式指定时启用，不做主机默认网关或 CIDR 自动匹配——
+    网关是低频需求，留空即代表不经任何跳板直连目标主机。
+
+    Returns ``(prepared_hosts, group_vars, private_data_dir)``。代理变量按主机
+    注入，一台清单里混布多网段主机时互不影响；非 SSH 主机不支持网关代理。
     """
     snapshots = [dict(host) for host in (host_snapshots or [])]
     if (input_vars or {}).get("bypass_host_gateway"):
         return snapshots, {}, ""
-    override_gateway_id = (input_vars or {}).get("gateway_id")
-    gateway_ids = {
-        override_gateway_id or (host.get("variables") or {}).get("gateway_ref_id")
-        for host in snapshots
-        if override_gateway_id or (host.get("variables") or {}).get("gateway_ref_id")
-    }
-    if not gateway_ids:
+
+    gateway_id = (input_vars or {}).get("gateway_id")
+    if not gateway_id:
         return snapshots, {}, ""
 
-    gateways = {gateway_id: _load_gateway(gateway_id) for gateway_id in gateway_ids}
-    key_gateways = [
-        gateway
-        for gateway in gateways.values()
-        if gateway.auth_type == Gateway.AuthType.KEY
-    ]
+    for host in snapshots:
+        if str(host.get("connection_type") or "ssh").lower() != "ssh":
+            raise InvalidGateway("Gateway proxy is only supported for SSH hosts")
+
+    gateway = _load_gateway(gateway_id)
     private_data_dir = (
-        tempfile.mkdtemp(prefix="devops-gateway-") if key_gateways else ""
+        tempfile.mkdtemp(prefix="devops-gateway-")
+        if gateway.auth_type == Gateway.AuthType.KEY
+        else ""
     )
     try:
-        proxy_vars = {
-            gateway_id: _gateway_proxy_vars(
-                gateway,
-                private_data_dir,
-                key_filename=f"gateway_{gateway_id}_key",
-            )
-            for gateway_id, gateway in gateways.items()
-        }
+        proxy_vars = _gateway_proxy_vars(gateway, private_data_dir)
     except Exception:
         if private_data_dir:
             shutil.rmtree(private_data_dir, ignore_errors=True)
@@ -228,16 +221,8 @@ def prepare_host_gateway_execution(host_snapshots, input_vars=None):
 
     prepared_hosts = []
     for host in snapshots:
-        gateway_id = override_gateway_id or (host.get("variables") or {}).get(
-            "gateway_ref_id"
-        )
-        if not gateway_id:
-            prepared_hosts.append(host)
-            continue
-        if str(host.get("connection_type") or "ssh").lower() != "ssh":
-            raise InvalidGateway("Gateway proxy is only supported for SSH hosts")
         variables = dict(host.get("variables") or {})
-        variables.update(proxy_vars[gateway_id])
+        variables.update(proxy_vars)
         host["variables"] = variables
         prepared_hosts.append(host)
     return prepared_hosts, {}, private_data_dir
@@ -251,7 +236,11 @@ def build_gateway_inventory(host_snapshots, input_vars=None):
     private_data_dir = private_data_dir or tempfile.mkdtemp(prefix="devops-inventory-")
     try:
         return (
-            build_inventory(prepared_hosts, group_vars, key_directory=private_data_dir),
+            build_inventory(
+                prepared_hosts,
+                group_vars,
+                credential_provider=DatabaseCredentialProvider(private_data_dir),
+            ),
             private_data_dir,
         )
     except Exception:

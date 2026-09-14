@@ -467,7 +467,7 @@ class SeedSystemSettingsTests(TestCase):
 
     def test_cmdb_host_menu_binds_read_apis_and_buttons_bind_write_apis(self):
         seed_system_settings(bind_superusers=False)
-        host_menu = Menu.objects.get(name="CmdbHost")
+        host_menu = Menu.objects.get(name="cmdb_host")
         menu_codes = set(host_menu.permission.values_list("code", flat=True))
 
         self.assertIn("cmdb.host:read", menu_codes)
@@ -908,9 +908,10 @@ class DynamicRouteTests(TestCase):
             route for route in data["routes"] if route["name"] == "Cmdb"
         )
         host_route = next(
-            child for child in cmdb_route["children"] if child["name"] == "CmdbHost"
+            child for child in cmdb_route["children"] if child["name"] == "cmdb_host"
         )
-        self.assertIsNone(host_route["component"])
+        # 主机资产组件已归一为可映射的 view.cmdb_host，应保留
+        self.assertEqual(host_route["component"], "view.cmdb_host")
         # 根目录 Layout 仍归一化为 layout.base
         self.assertEqual(cmdb_route["component"], "layout.base")
 

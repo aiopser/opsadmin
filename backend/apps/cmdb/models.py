@@ -202,6 +202,7 @@ class AssetHost(StandardModelMixin):
     data_disk_gb = models.IntegerField(default=0)
     disk_summary = models.JSONField(default=dict, blank=True)
     environment = models.CharField(max_length=64, blank=True, default="")
+    region = models.CharField(max_length=64, blank=True, default="", db_index=True)
     status = models.CharField(
         max_length=16,
         choices=HostStatus.choices,

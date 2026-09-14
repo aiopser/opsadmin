@@ -12,11 +12,34 @@ from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.db import transaction
 from django.db.models import Sum
+from django.utils.module_loading import import_string
 
 from common.redaction import redact_text
 from .models import RunLogChunk, WorkflowRun
 
 logger = logging.getLogger(__name__)
+
+
+def job_log_storage():
+    """Return the dedicated run-log storage from STORAGES["job_logs"].
+
+    Works on Django 3.2 (where STORAGES is a project setting) and stays
+    compatible once the framework adopts STORAGES natively (4.2+).
+    """
+    config = (getattr(settings, "STORAGES", None) or {}).get("job_logs")
+    if not config:
+        return default_storage
+    return import_string(config["BACKEND"])(**(config.get("OPTIONS") or {}))
+
+
+def _chunk_storage(name):
+    """Pick the storage holding a chunk; fall back for pre-dedication files."""
+    storage = job_log_storage()
+    if storage.exists(name):
+        return storage
+    if default_storage.exists(name):
+        return default_storage
+    return storage
 
 
 def _validate_name(storage, run_id: int, name: str) -> str:
@@ -59,7 +82,7 @@ def archive_stdout(*, run_id: int, sequence: int, text: str):
         clipped = raw[:remaining].decode("utf-8", errors="ignore")
         clipped = re.sub(r"\x1b\[[0-?]*[ -/]*$", "", clipped)
         raw = clipped.encode("utf-8")
-    storage = default_storage
+    storage = job_log_storage()
     name = f"job-logs/run-{run_id}/{sequence}-{uuid4().hex}.log"
     name = storage.save(name, ContentFile(raw), max_length=256)
     _validate_name(storage, run_id, name)
@@ -95,12 +118,12 @@ def archive_event_stdout(run_id: int, sequence: int, event: dict) -> None:
 def iter_run_stdout(run_id: int, *, block_size: int = 65536) -> Iterator[bytes]:
     if not 1 <= block_size <= 65536:
         raise ValueError("Invalid log block size")
-    storage = default_storage
     for chunk in (
         RunLogChunk.objects.filter(workflow_run_id=run_id)
         .order_by("sequence")
         .iterator(chunk_size=100)
     ):
+        storage = _chunk_storage(chunk.storage_name)
         name = _validate_name(storage, run_id, chunk.storage_name)
         with storage.open(name, "rb") as stream:
             while data := stream.read(block_size):

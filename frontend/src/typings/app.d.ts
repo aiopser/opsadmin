@@ -711,6 +711,33 @@ declare namespace App {
             };
           };
         };
+        cmdb: {
+          host: {
+            title: string;
+            id: string;
+            hostname: string;
+            primaryIp: string;
+            assetType: string;
+            osFamily: string;
+            osType: string;
+            statusLabel: string;
+            environment: string;
+            region: string;
+            spec: string;
+            appCode: string;
+            ownerTeam: string;
+            credential: string;
+            serviceNode: string;
+            updatedAt: string;
+            keyword: string;
+            keywordPlaceholder: string;
+            status: {
+              active: string;
+              inactive: string;
+              retired: string;
+            };
+          };
+        };
         task: {
           run: {
             title: string;
@@ -783,6 +810,9 @@ declare namespace App {
             host: {
               hostname: string;
               ip: string;
+              viewOutput: string;
+              stdout: string;
+              stderr: string;
             };
           };
         };

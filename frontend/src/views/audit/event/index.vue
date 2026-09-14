@@ -11,7 +11,7 @@ defineOptions({ name: 'AuditEvent' });
 const domainOptions = [
   { value: 'ops', label: '运维操作', tag: 'primary' },
   { value: 'task', label: '任务系统', tag: 'success' },
-  { value: 'automation', label: '自动化资源', tag: 'warning' },
+  { value: 'automation', label: '自动化配置', tag: 'warning' },
   { value: 'cmdb', label: '资产管理', tag: 'info' },
   { value: 'security', label: '安全', tag: 'danger' },
   { value: 'system', label: '系统', tag: 'info' }

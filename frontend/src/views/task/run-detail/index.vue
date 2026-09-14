@@ -125,10 +125,12 @@ const hostResultsVisible = ref(false);
 const hostResultsLoading = ref(false);
 const hostResults = shallowRef<Api.Jobs.HostResultRecord[]>([]);
 const hostResultNode = shallowRef<Api.Jobs.NodeRunRecord | null>(null);
+const selectedHostResult = shallowRef<Api.Jobs.HostResultRecord | null>(null);
 
 async function showHostResults(node: Api.Jobs.NodeRunRecord) {
   const scope = requestScope;
   hostResults.value = [];
+  selectedHostResult.value = null;
   hostResultNode.value = node;
   hostResultsVisible.value = true;
   hostResultsLoading.value = true;
@@ -140,6 +142,10 @@ async function showHostResults(node: Api.Jobs.NodeRunRecord) {
   } finally {
     if (scope === requestScope && hostResultNode.value?.id === node.id) hostResultsLoading.value = false;
   }
+}
+
+function showHostOutput(row: Api.Jobs.HostResultRecord) {
+  selectedHostResult.value = row;
 }
 
 const hostResultTagType: Record<Api.Jobs.HostResultStatus, UI.ThemeColor> = {
@@ -428,13 +434,39 @@ onScopeDispose(() => requestScope.abort());
               </ElTag>
             </template>
           </ElTableColumn>
-          <ElTableColumn prop="rc" :label="$t('page.task.detail.node.exitCode')" width="80" align="center">
-            <template #default="{ row }">{{ row.rc ?? '-' }}</template>
+          <ElTableColumn prop="exitCode" :label="$t('page.task.detail.node.exitCode')" width="80" align="center">
+            <template #default="{ row }">{{ row.exitCode ?? '-' }}</template>
           </ElTableColumn>
           <ElTableColumn prop="finishedAt" :label="$t('page.task.run.finishedAt')" width="170">
             <template #default="{ row }">{{ row.finishedAt || '-' }}</template>
           </ElTableColumn>
+          <ElTableColumn :label="$t('common.action')" width="90" align="center" fixed="right">
+            <template #default="{ row }">
+              <ElButton link type="primary" size="small" @click="showHostOutput(row)">
+                {{ $t('page.task.detail.host.viewOutput') }}
+              </ElButton>
+            </template>
+          </ElTableColumn>
         </ElTable>
+
+        <template v-if="selectedHostResult">
+          <div class="mb-8px mt-16px flex items-center gap-8px">
+            <span class="text-14px font-600">{{ selectedHostResult.hostname }}</span>
+            <ElTag :type="hostTagType(selectedHostResult.status)" size="small">{{ selectedHostResult.status }}</ElTag>
+          </div>
+          <div class="mb-8px">
+            <p class="mb-4px text-12px text-gray-500">{{ $t('page.task.detail.host.stdout') }}</p>
+            <pre class="max-h-360px overflow-auto rounded-4px bg-gray-100 p-8px text-12px dark:bg-gray-800">{{
+              selectedHostResult.stdout || '-'
+            }}</pre>
+          </div>
+          <div v-if="selectedHostResult.stderr">
+            <p class="mb-4px text-12px text-gray-500">{{ $t('page.task.detail.host.stderr') }}</p>
+            <pre class="max-h-240px overflow-auto rounded-4px bg-gray-100 p-8px text-12px dark:bg-gray-800">{{
+              selectedHostResult.stderr
+            }}</pre>
+          </div>
+        </template>
       </template>
     </ElDrawer>
   </div>

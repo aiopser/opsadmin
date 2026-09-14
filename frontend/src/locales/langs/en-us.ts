@@ -165,6 +165,31 @@ const local: App.I18n.Schema = {
     home: 'Home',
     audit: 'Audit Center',
     audit_event: 'Audit Log',
+    cmdb: 'Asset Management',
+    cmdb_host: 'Host Assets',
+    cmdb_credential: 'Credential Refs',
+    cmdb_execution: 'Executors',
+    cmdb_group: 'Host Groups',
+    cmdb_resource: 'Resource View',
+    automation: 'Automation Config',
+    automation_resource: 'Workflow Versions',
+    automation_resources: 'Automation Config',
+    automation_resources_script: 'Scripts',
+    automation_resources_playbook: 'Playbooks',
+    automation_resources_module: 'Modules',
+    automation_resources_api: 'API Endpoints',
+    automation_resources_jenkins: 'Jenkins',
+    automation_resources_notification: 'Notification Templates',
+    automation_resources_gateway: 'Gateway Proxy',
+    ops_dashboard: 'Ops Dashboard',
+    ops_history: 'Run History',
+    ops_settings: 'Ops Settings',
+    task_dashboard: 'Task Dashboard',
+    'task_run-create': 'Create Run',
+    task_templates: 'Templates',
+    'task_flow-design': 'Flow Design',
+    task_schedule: 'Schedules',
+    'task_worker-pool': 'Worker Pools',
     ops: 'Ops',
     'ops_quick-execute': 'Quick Execute',
     task: 'Task',
@@ -517,6 +542,33 @@ const local: App.I18n.Schema = {
         }
       }
     },
+    cmdb: {
+      host: {
+        title: 'Host Asset List',
+        id: 'ID',
+        hostname: 'Hostname',
+        primaryIp: 'Primary IP',
+        assetType: 'Asset Type',
+        osFamily: 'OS Family',
+        osType: 'OS Version',
+        statusLabel: 'Status',
+        environment: 'Environment',
+        region: 'Region',
+        spec: 'Spec',
+        appCode: 'App',
+        ownerTeam: 'Owner Team',
+        credential: 'Credential',
+        serviceNode: 'Service Node',
+        updatedAt: 'Updated At',
+        keyword: 'Keyword',
+        keywordPlaceholder: 'Hostname/IP/Image/App/Team',
+        status: {
+          active: 'Active',
+          inactive: 'Inactive',
+          retired: 'Retired'
+        }
+      }
+    },
     task: {
       run: {
         title: 'Task Run List',
@@ -588,7 +640,10 @@ const local: App.I18n.Schema = {
         },
         host: {
           hostname: 'Hostname',
-          ip: 'IP Address'
+          ip: 'IP Address',
+          viewOutput: 'Output',
+          stdout: 'Stdout',
+          stderr: 'Stderr'
         }
       }
     },

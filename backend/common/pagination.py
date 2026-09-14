@@ -1,4 +1,4 @@
-﻿from common.api.responses import api_ok_response
+from common.api.responses import api_ok_response
 
 from collections import OrderedDict
 from rest_framework import pagination
@@ -31,11 +31,8 @@ class StandardResultSetPagination(pagination.PageNumberPagination):
                 [
                     ("list", data),
                     ("total", self.page.paginator.count),
-                    ("count", self.page.paginator.count),
                     ("page", self.page.number),
                     ("size", self.page.paginator.per_page),
-                    ("num_pages", self.page.paginator.num_pages),
-                    ("result", data),
                 ]
             )
         )
@@ -44,7 +41,8 @@ class StandardResultSetPagination(pagination.PageNumberPagination):
         return {
             "type": "object",
             "properties": {
-                "count": {
+                "list": schema,
+                "total": {
                     "type": "integer",
                     "example": 123,
                 },
@@ -56,10 +54,5 @@ class StandardResultSetPagination(pagination.PageNumberPagination):
                     "type": "integer",
                     "example": 10,
                 },
-                "num_pages": {
-                    "type": "integer",
-                    "example": 123,
-                },
-                "results": schema,
             },
         }

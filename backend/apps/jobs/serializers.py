@@ -313,10 +313,16 @@ class WorkflowRunCreateSerializer(serializers.Serializer):
         )
         attrs["hostIds"] = [target["host_id"] for target in targets]
 
-        worker_pool = resolve_worker_pool(
-            actor=getattr(self.context.get("request"), "user", None),
-            pool_id=attrs.get("workerPoolId"),
-            execution_kind="workflow",
+        worker_pool_id = attrs.get("workerPoolId")
+        # 仅显式选择池时提前校验；未选时传 None，由 _persist_run 按目标地域自动路由。
+        worker_pool = (
+            resolve_worker_pool(
+                actor=getattr(self.context.get("request"), "user", None),
+                pool_id=worker_pool_id,
+                execution_kind="workflow",
+            )
+            if worker_pool_id is not None
+            else None
         )
 
         attrs["workflow_version"] = workflow_version
@@ -996,7 +1002,8 @@ class WorkerPoolSerializer(StandardModelSerializer):
         model = WorkerPool
         fields = [
             "id", "code", "name", "queueName", "isDefault", "isActive",
-            "concurrencyLimit", "executionKinds", "createdAt", "updatedAt",
+            "concurrencyLimit", "executionKinds", "region",
+            "createdAt", "updatedAt",
         ]
 
     def validate(self, attrs):

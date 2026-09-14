@@ -312,7 +312,9 @@ export const useRouteStore = defineStore(SetupStoreId.Route, () => {
   }
 
   async function onRouteSwitchWhenLoggedIn() {
-    await authStore.initUserInfo();
+    // 主流做法：用户信息仅在登录/首次初始化时拉取（initAuthRoute 已覆盖）。
+    // 会话中账号状态变更由请求层统一处理（401/过期码 → onBackendFail 登出），
+    // 路由切换只读本地 store，不发起网络请求。
   }
 
   async function onRouteSwitchWhenNotLoggedIn() {

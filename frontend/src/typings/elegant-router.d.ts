@@ -36,6 +36,22 @@ declare module "@elegant-router/types" {
     "500": "/500";
     "audit": "/audit";
     "audit_event": "/audit/event";
+    "automation": "/automation";
+    "automation_resource": "/automation/resource";
+    "automation_resources": "/automation/resources";
+    "automation_resources_api": "/automation/resources/api";
+    "automation_resources_gateway": "/automation/resources/gateway";
+    "automation_resources_jenkins": "/automation/resources/jenkins";
+    "automation_resources_module": "/automation/resources/module";
+    "automation_resources_notification": "/automation/resources/notification";
+    "automation_resources_playbook": "/automation/resources/playbook";
+    "automation_resources_script": "/automation/resources/script";
+    "cmdb": "/cmdb";
+    "cmdb_credential": "/cmdb/credential";
+    "cmdb_execution": "/cmdb/execution";
+    "cmdb_group": "/cmdb/group";
+    "cmdb_host": "/cmdb/host";
+    "cmdb_resource": "/cmdb/resource";
     "home": "/home";
     "iframe-page": "/iframe-page/:url";
     "login": "/login/:module(pwd-login|reset-pwd)?";
@@ -49,7 +65,10 @@ declare module "@elegant-router/types" {
     "manage_user": "/manage/user";
     "manage_user-detail": "/manage/user-detail/:id";
     "ops": "/ops";
+    "ops_dashboard": "/ops/dashboard";
+    "ops_history": "/ops/history";
     "ops_quick-execute": "/ops/quick-execute";
+    "ops_settings": "/ops/settings";
     "plugin": "/plugin";
     "plugin_barcode": "/plugin/barcode";
     "plugin_charts": "/plugin/charts";
@@ -75,8 +94,14 @@ declare module "@elegant-router/types" {
     "plugin_typeit": "/plugin/typeit";
     "plugin_video": "/plugin/video";
     "task": "/task";
+    "task_dashboard": "/task/dashboard";
+    "task_flow-design": "/task/flow-design";
     "task_run": "/task/run";
+    "task_run-create": "/task/run-create";
     "task_run-detail": "/task/run-detail/:id";
+    "task_schedule": "/task/schedule";
+    "task_templates": "/task/templates";
+    "task_worker-pool": "/task/worker-pool";
     "user-center": "/user-center";
   };
 
@@ -127,6 +152,8 @@ declare module "@elegant-router/types" {
     | "404"
     | "500"
     | "audit"
+    | "automation"
+    | "cmdb"
     | "home"
     | "iframe-page"
     | "login"
@@ -159,6 +186,19 @@ declare module "@elegant-router/types" {
     | "iframe-page"
     | "login"
     | "audit_event"
+    | "automation_resource"
+    | "automation_resources_api"
+    | "automation_resources_gateway"
+    | "automation_resources_jenkins"
+    | "automation_resources_module"
+    | "automation_resources_notification"
+    | "automation_resources_playbook"
+    | "automation_resources_script"
+    | "cmdb_credential"
+    | "cmdb_execution"
+    | "cmdb_group"
+    | "cmdb_host"
+    | "cmdb_resource"
     | "home"
     | "manage_config"
     | "manage_dept"
@@ -168,7 +208,10 @@ declare module "@elegant-router/types" {
     | "manage_role"
     | "manage_user-detail"
     | "manage_user"
+    | "ops_dashboard"
+    | "ops_history"
     | "ops_quick-execute"
+    | "ops_settings"
     | "plugin_barcode"
     | "plugin_charts_antv"
     | "plugin_charts_echarts"
@@ -188,8 +231,14 @@ declare module "@elegant-router/types" {
     | "plugin_tables_vtable"
     | "plugin_typeit"
     | "plugin_video"
+    | "task_dashboard"
+    | "task_flow-design"
+    | "task_run-create"
     | "task_run-detail"
     | "task_run"
+    | "task_schedule"
+    | "task_templates"
+    | "task_worker-pool"
     | "user-center"
   >;
 

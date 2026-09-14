@@ -319,13 +319,40 @@ class WorkflowTemplateSerializer(StandardModelSerializer):
             .values_list("version", flat=True)
             .first()
         )
+        representation["publishedVersion"] = (
+            instance.versions.filter(status=WorkflowVersion.Status.PUBLISHED)
+            .order_by("-version")
+            .values_list("version", flat=True)
+            .first()
+        )
+        representation["draftVersion"] = (
+            instance.versions.filter(status=WorkflowVersion.Status.DRAFT)
+            .order_by("-version")
+            .values_list("version", flat=True)
+            .first()
+        )
         return representation
 
 
 class WorkflowVersionSerializer(StandardModelSerializer):
+    """Full camelCase contract: input and output both use camelCase keys."""
+
     editorMode = serializers.ChoiceField(
         source="editor_mode", choices=WorkflowVersion.EditorMode.choices, required=False
     )
+    inputSchema = serializers.JSONField(source="input_schema", required=False)
+    globalVars = serializers.JSONField(source="global_vars", required=False)
+    targetSelectorSchema = serializers.JSONField(
+        source="target_selector_schema", required=False
+    )
+    createdAt = serializers.DateTimeField(source="created_at", read_only=True)
+    updatedAt = serializers.DateTimeField(source="updated_at", read_only=True)
+    graphSnapshot = serializers.JSONField(source="graph_snapshot", read_only=True)
+    validationReport = serializers.JSONField(source="validation_report", read_only=True)
+    publishedHash = serializers.CharField(source="published_hash", read_only=True)
+    createdBy = serializers.PrimaryKeyRelatedField(source="created_by", read_only=True)
+    publishedBy = serializers.PrimaryKeyRelatedField(source="published_by", read_only=True)
+    publishedAt = serializers.DateTimeField(source="published_at", read_only=True)
 
     def validate(self, attrs):
         if any(key in self.initial_data for key in ("bpmnXml", "bpmn_xml")):
@@ -337,27 +364,23 @@ class WorkflowVersionSerializer(StandardModelSerializer):
     class Meta:
         model = WorkflowVersion
         fields = [
-            "id", "created_at", "updated_at", "workflow", "version", "status",
-            "input_schema", "global_vars", "target_selector_schema", "editorMode",
-            "graph_snapshot", "validation_report", "published_hash", "created_by",
-            "published_by", "published_at",
+            "id", "createdAt", "updatedAt", "workflow", "version", "status",
+            "inputSchema", "globalVars", "targetSelectorSchema", "editorMode",
+            "graphSnapshot", "validationReport", "publishedHash", "createdBy",
+            "publishedBy", "publishedAt",
         ]
         read_only_fields = (
             "status",
-            "graph_snapshot",
-            "published_hash",
-            "validation_report",
-            "published_by",
-            "published_at",
+            "graphSnapshot",
+            "validationReport",
+            "publishedHash",
+            "createdBy",
+            "publishedBy",
+            "publishedAt",
         )
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
-        representation = {
-            key.split("_")[0] + "".join(part[:1].upper() + part[1:] for part in key.split("_")[1:])
-            if "_" in key else key: value
-            for key, value in representation.items()
-        }
         representation["workflowName"] = (
             instance.workflow.name if instance.workflow else ""
         )

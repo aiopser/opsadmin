@@ -1,19 +1,27 @@
 from copy import deepcopy
+from types import SimpleNamespace
+
 from common.workflow.schema import validate_graph
 from apps.automation.models import WorkflowVersion
 from django.db import transaction
 from django.utils import timezone
 from datetime import timedelta
-from apps.automation.models import CommandAtom, CommandVersion
+from apps.automation.models import CommandAtom, CommandVersion, WorkflowNode
 from apps.cmdb.targets import snapshot_targets
-from apps.jobs.worker_pools import resolve_worker_pool
+from apps.jobs.worker_pools import region_for_targets, resolve_worker_pool
 from apps.jobs.input_secrets import protect_workflow_inputs
 from apps.jobs.models import WorkflowRun
 from apps.jobs.settings_service import get_engine_settings
+from common.workflow.node_types import NodeType
+
+from .dispatch import enqueue_workflow_run
 
 
 class InvalidQuickCommand(ValueError):
     pass
+
+
+TRIAL_NODE_TIMEOUT_SECONDS = 600
 
 
 def get_execution_timeout_seconds():
@@ -98,10 +106,18 @@ def _persist_run(
     errors = validate_graph(graph_snapshot)
     if errors:
         raise ValueError("Invalid execution graph: " + "; ".join(errors))
-    worker_pool = resolve_worker_pool(
-        actor=triggered_by, pool_id=worker_pool.pk, execution_kind=execution_kind
+    # Host-less runs (resource trials) have no target snapshot.
+    target_snapshot = (
+        snapshot_targets(actor=triggered_by, targets=target_hosts)
+        if target_hosts
+        else []
     )
-    target_snapshot = snapshot_targets(actor=triggered_by, targets=target_hosts)
+    worker_pool = resolve_worker_pool(
+        actor=triggered_by,
+        pool_id=getattr(worker_pool, "pk", None),
+        execution_kind=execution_kind,
+        target_region=region_for_targets(target_snapshot),
+    )
     timeout_seconds = max(
         int(timeout_seconds or get_execution_timeout_seconds()),
         1,
@@ -247,3 +263,80 @@ def create_quick_command_run(
         execution_kind=execution_kind,
         timeout_seconds=timeout_seconds,
     )
+
+
+@transaction.atomic
+def create_trial_run(
+    *,
+    node_type,
+    resource_id,
+    node_name,
+    config=None,
+    input_vars=None,
+    triggered_by,
+    timeout_seconds=None,
+    run_domain=WorkflowRun.RunDomain.TASK,
+):
+    """Run a resource trial (Jenkins trigger / notification test) under unified run governance.
+
+    Builds a synthetic single-node graph so state, cancel, timeout and audit
+    follow the same WorkflowRun lifecycle as normal workflow executions.
+    """
+    from apps.automation.resource_snapshots import resource_snapshot
+
+    snapshot = resource_snapshot(
+        SimpleNamespace(node_type=node_type, resource_id=resource_id)
+    )
+    if not snapshot:
+        raise ValueError("Resource does not support trial execution")
+    node_timeout = max(int(timeout_seconds or TRIAL_NODE_TIMEOUT_SECONDS), 1)
+    graph = {
+        "globalVars": {},
+        "inputSchema": {},
+        "nodes": [
+            {"id": "start", "name": "开始", "type": NodeType.START},
+            {
+                "id": "trial",
+                "name": node_name,
+                "type": node_type,
+                "resourceType": node_type,
+                "resourceId": str(resource_id),
+                "resourceSnapshot": snapshot,
+                "commandVersionId": None,
+                "commandVersion": None,
+                "config": dict(config or {}),
+                "inputMapping": {},
+                "inputSchema": [],
+                "outputSchema": [],
+                "retryPolicy": {},
+                "failurePolicy": WorkflowNode.FailurePolicy.STOP,
+                "continueOnError": False,
+                "timeoutSeconds": node_timeout,
+                "position": {},
+            },
+            {"id": "end", "name": "结束", "type": NodeType.END},
+        ],
+        "edges": [
+            {"id": "start-trial", "source": "start", "target": "trial"},
+            {"id": "trial-end", "source": "trial", "target": "end"},
+        ],
+    }
+    errors = validate_graph(graph)
+    if errors:
+        raise ValueError("Invalid trial graph: " + "; ".join(errors))
+    run = _persist_run(
+        workflow_version=None,
+        target_hosts=[],
+        safe_input_vars=dict(input_vars or {}),
+        encrypted="",
+        graph_snapshot=graph,
+        worker_pool=None,
+        triggered_by=triggered_by,
+        trigger_type=WorkflowRun.TriggerType.MANUAL,
+        run_domain=run_domain,
+        execution_kind=WorkflowRun.ExecutionKind.WORKFLOW,
+        timeout_seconds=node_timeout,
+        queue_timeout_seconds=None,
+    )
+    transaction.on_commit(lambda run_id=run.id: enqueue_workflow_run(run_id))
+    return run

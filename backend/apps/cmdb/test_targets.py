@@ -13,7 +13,7 @@ def test_snapshot_uses_non_sensitive_target_contract(user):
     user.save()
     host = AssetHost.objects.create(hostname="test-host", primary_ip="192.0.2.10", os_family="linux", connection_type="ssh")
     snapshot = snapshot_targets(actor=user, targets=[host])[0]
-    assert set(snapshot) == {"host_id", "hostname", "address", "port", "connection_type", "credential_ref_id", "variables"}
+    assert set(snapshot) == {"host_id", "hostname", "address", "port", "connection_type", "region", "credential_ref_id", "variables"}
     assert snapshot["address"] == "192.0.2.10"
 
 
@@ -84,7 +84,18 @@ def test_disabled_credential_and_secret_variables_are_rejected(actor, host):
 
 @pytest.mark.django_db
 def test_execution_rejects_credential_disabled_after_snapshot():
-    from apps.ops.adapters import DatabaseCredentialProvider
+    from apps.cmdb.credentials import DatabaseCredentialProvider
     credential = CredentialRef.objects.create(name="disabled-at-execution", type="password", scope="global", is_active=False)
     with pytest.raises(ValueError, match="disabled"):
+        DatabaseCredentialProvider().resolve(credential.pk)
+
+
+@pytest.mark.django_db
+def test_missing_credential_environment_variable_is_explicit(monkeypatch):
+    from apps.cmdb.credentials import DatabaseCredentialProvider
+    monkeypatch.delenv("MISSING_PASSWORD", raising=False)
+    credential = CredentialRef.objects.create(
+        name="env-ref", type="password", scope="global", secret_ref="env:MISSING_PASSWORD"
+    )
+    with pytest.raises(ValueError, match="is not configured"):
         DatabaseCredentialProvider().resolve(credential.pk)

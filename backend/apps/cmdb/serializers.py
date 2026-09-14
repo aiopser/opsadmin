@@ -21,6 +21,11 @@ class BusinessSerializer(StandardModelSerializer):
         model = Business
         fields = "__all__"
 
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        representation["hostCount"] = getattr(instance, "host_count", 0)
+        return representation
+
 
 class AssetSourceSerializer(StandardModelSerializer):
     class Meta:
@@ -82,6 +87,7 @@ class ServiceTreeNodeSerializer(StandardModelSerializer):
         representation = super().to_representation(instance)
         representation["businessName"] = instance.business.name
         representation["parentName"] = instance.parent.name if instance.parent else ""
+        representation["hostCount"] = getattr(instance, "host_count", 0)
         return representation
 
 
@@ -159,7 +165,40 @@ class CredentialRefSerializer(StandardModelSerializer):
 class AssetHostSerializer(StandardModelSerializer):
     class Meta:
         model = AssetHost
-        fields = [f.name for f in AssetHost._meta.fields]
+        # Explicit whitelist: new model fields must be added here deliberately.
+        fields = [
+            "id",
+            "hostname",
+            "primary_ip",
+            "asset_type",
+            "os_family",
+            "os_type",
+            "image_name",
+            "cpu_cores",
+            "memory_mb",
+            "system_disk_gb",
+            "data_disk_gb",
+            "disk_summary",
+            "environment",
+            "region",
+            "status",
+            "service_node",
+            "asset_source",
+            "owner_team",
+            "app_code",
+            "connection_type",
+            "connection_port",
+            "credential_ref",
+            "default_gateway",
+            "ansible_connection_vars",
+            "metadata",
+            "source_type",
+            "source_id",
+            "last_synced_at",
+            "last_discovered_at",
+            "created_at",
+            "updated_at",
+        ]
 
     def validate(self, attrs):
         attrs = super().validate(attrs)

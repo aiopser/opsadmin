@@ -93,7 +93,10 @@ async function submit() {
 watch(selected, () => {
   values.value = {};
   fields.value.forEach(field => {
-    if (field.default !== undefined) values.value[field.name] = field.default;
+    // multiselect 的数组默认值在此抽屉无对应控件，跳过
+    if (field.default !== undefined && typeof field.default !== 'object') {
+      values.value[field.name] = field.default;
+    }
   });
 });
 watch(visible, open => {

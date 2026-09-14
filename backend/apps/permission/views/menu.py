@@ -24,6 +24,28 @@ LEGACY_COMPONENT_TO_VIEW = {
     "system/dict/index": ("manage_dict", "/manage/dict", "view.manage_dict"),
     "system/log/index": ("manage_log", "/manage/log", "view.manage_log"),
     "system/config/index": ("manage_config", "/manage/config", "view.manage_config"),
+    # cmdb 主机资产（数据库中旧菜单数据仍是 cmdb/host/index，无需重播种即可解析）
+    "cmdb/host/index": ("cmdb_host", "/cmdb/hosts", "view.cmdb_host"),
+    # 凭据引用；Worker 池管理已挪至「自动化配置」目录
+    "cmdb/execution/index": ("cmdb_execution", "/automation-resources/worker-pool", "view.cmdb_execution"),
+    "cmdb/credential/index": ("cmdb_credential", "/cmdb/credentials", "view.cmdb_credential"),
+    # ops 作业系统
+    "ops/dashboard/index": ("ops_dashboard", "/ops/dashboard", "view.ops_dashboard"),
+    "ops/history/index": ("ops_history", "/ops/history", "view.ops_history"),
+    "ops/settings/index": ("ops_settings", "/ops/settings", "view.ops_settings"),
+    # task 任务系统
+    "task/dashboard/index": ("task_dashboard", "/task/dashboard", "view.task_dashboard"),
+    "task/run-create/index": ("task_run-create", "/task/run-create", "view.task_run-create"),
+    "task/templates/index": ("task_templates", "/task/templates", "view.task_templates"),
+    "task/flow-design/index": ("task_flow-design", "/task/flow-design", "view.task_flow-design"),
+    "task/schedule/index": ("task_schedule", "/task/schedule", "view.task_schedule"),
+    # automation 自动化资源（三级目录：执行资源/集成资源）
+    "automation/resources/script/index": ("automation_resources_script", "/automation-resources/execution/script", "view.automation_resources_script"),
+    "automation/resources/playbook/index": ("automation_resources_playbook", "/automation-resources/execution/playbook", "view.automation_resources_playbook"),
+    "automation/resources/module/index": ("automation_resources_module", "/automation-resources/execution/module", "view.automation_resources_module"),
+    "automation/resources/api/index": ("automation_resources_api", "/automation-resources/integration/api", "view.automation_resources_api"),
+    "automation/resources/jenkins/index": ("automation_resources_jenkins", "/automation-resources/integration/jenkins", "view.automation_resources_jenkins"),
+    "automation/resources/notification/index": ("automation_resources_notification", "/automation-resources/integration/notification", "view.automation_resources_notification"),
 }
 
 

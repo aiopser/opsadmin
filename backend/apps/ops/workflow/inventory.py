@@ -1,7 +1,7 @@
 import json
 import re
 
-from apps.ops.adapters import DatabaseCredentialProvider
+from apps.ops.adapters import CredentialProvider
 
 
 def inventory_hostname(host):
@@ -41,8 +41,8 @@ def _host_line(host, credential_provider):
     return " ".join(parts)
 
 
-def build_inventory(host_snapshots, group_vars=None, *, key_directory=None):
-    credential_provider = DatabaseCredentialProvider(key_directory)
+def build_inventory(host_snapshots, group_vars=None, *, credential_provider: CredentialProvider):
+    """Build an INI inventory; credential resolution is injected by the caller."""
     linux_hosts = []
     windows_hosts = []
     for host in host_snapshots:
