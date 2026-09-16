@@ -6,7 +6,7 @@ import pytest
 from django.db import transaction
 from django.utils import timezone
 
-from apps.jobs.application.dispatch import dispatch_after_commit, enqueue_workflow_run, recover_pending_dispatches
+from apps.jobs.application.dispatch import deliver_pending_dispatches, dispatch_after_commit, enqueue_workflow_run
 from apps.jobs.models import JobEventLog, NodeRun, NodeRunAttempt, WorkerPool, WorkflowRun
 from apps.jobs.tasks import _claim_node_run, execute_node
 from apps.jobs.workflow_engine import plan_dispatch
@@ -47,8 +47,9 @@ def test_broker_failure_is_durable_and_recoverable(run):
     assert event.event_type == "dispatch_failed"
     assert "never-store" not in str(event.payload)
     with patch("apps.jobs.tasks.run_workflow.apply_async", return_value=SimpleNamespace(id="task")):
-        assert recover_pending_dispatches() == 1
-        assert recover_pending_dispatches() == 0
+        future = timezone.now() + timedelta(seconds=60)
+        assert deliver_pending_dispatches(now=future) == 1
+        assert deliver_pending_dispatches(now=future) == 0
 
 
 @pytest.mark.django_db

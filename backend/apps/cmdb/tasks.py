@@ -221,3 +221,74 @@ def discover_host_facts(host_id, actor_id):
     finally:
         if private_data_dir:
             shutil.rmtree(private_data_dir, ignore_errors=True)
+
+
+@shared_task(name="cmdb.execute_asset_probe")
+def execute_asset_probe(probe_id, attempt):
+    """Claim and run a queued AssetProbe on this worker.
+
+    The compare-and-set claim fences duplicate deliveries (republished
+    messages racing the original). Probe failures are business results and
+    are recorded on the row instead of raising, so the queue does not retry
+    them.
+    """
+    from .models import AssetProbe
+
+    claimed = AssetProbe.objects.filter(
+        pk=probe_id,
+        attempt=attempt,
+        status=AssetProbe.Status.PENDING,
+    ).update(status=AssetProbe.Status.RUNNING, updated_at=timezone.now())
+    if not claimed:
+        return {"probeId": probe_id, "claimed": False}
+    probe = AssetProbe.objects.select_related("triggered_by").get(pk=probe_id)
+    if probe.triggered_by_id is None:
+        _finish_probe(probe, AssetProbe.Status.FAILED, error="probe owner was removed")
+        return {"probeId": probe_id, "status": AssetProbe.Status.FAILED}
+    try:
+        from .execution import execute_asset_module
+
+        result = execute_asset_module(
+            actor=probe.triggered_by,
+            host_id=probe.host_id,
+            module=probe.module,
+            module_args=probe.module_args,
+            timeout=probe.timeout_seconds,
+            on_event=lambda event: None,
+        )
+    except Exception as exc:
+        try:
+            from celery.exceptions import SoftTimeLimitExceeded
+
+            timed_out = isinstance(exc, SoftTimeLimitExceeded)
+        except ImportError:
+            timed_out = False
+        error = "probe timed out" if timed_out else str(exc)[:512]
+        _finish_probe(probe, AssetProbe.Status.FAILED, error=error)
+        return {"probeId": probe_id, "status": AssetProbe.Status.FAILED}
+    success = result.status == "success"
+    _finish_probe(
+        probe,
+        AssetProbe.Status.SUCCESS if success else AssetProbe.Status.FAILED,
+        result={
+            "runnerStatus": result.status,
+            "returnCode": result.return_code,
+            "error": result.error or "",
+        },
+        error="" if success else (result.error or "probe failed"),
+    )
+    return {"probeId": probe_id, "status": "success" if success else "failed"}
+
+
+def _finish_probe(probe, status, *, result=None, error=""):
+    probe.status = status
+    probe.result = result or {}
+    probe.error = error
+    probe.save(update_fields=["status", "result", "error", "updated_at"])
+
+
+@shared_task(name="cmdb.recover_stale_asset_probes")
+def recover_stale_asset_probes():
+    from .probes import recover_stale_probes
+
+    return {"recovered": recover_stale_probes()}

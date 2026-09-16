@@ -66,7 +66,7 @@ const canRerun = computed(() => Boolean(run.value && finishedStatuses.has(run.va
 
 /** ============ 事件流（T14 同步协议） ============ */
 
-const { events, terminal, connected, transportError } = useRunEventStream(runId, domain);
+const { events, terminal, connected, transportError, dropped } = useRunEventStream(runId, domain);
 
 const eventListRef = shallowRef<HTMLElement | null>(null);
 
@@ -211,14 +211,17 @@ async function onRerun() {
 
 async function onDownloadLog() {
   if (runId.value === null) return;
-  const blob = await fetchRunLogFile(runId.value, domain.value, requestScope.signal);
-  if (!blob) return;
-  const url = URL.createObjectURL(blob);
+  const result = await fetchRunLogFile(runId.value, domain.value, requestScope.signal);
+  if (!result) return;
+  const url = URL.createObjectURL(result.blob);
   const link = document.createElement('a');
   link.href = url;
   link.download = `run-${runId.value}.log`;
   link.click();
   URL.revokeObjectURL(url);
+  if (result.truncated) {
+    window.$message?.warning($t('page.task.run.logTruncated'));
+  }
 }
 
 watch(
@@ -395,7 +398,10 @@ onScopeDispose(() => requestScope.abort());
       <div class="flex-1 overflow-hidden">
         <div class="mb-8px flex items-center justify-between">
           <p class="font-bold">{{ $t('page.task.detail.event.title') }}</p>
-          <span class="text-12px text-gray-400">{{ events.length }}</span>
+          <span v-if="dropped > 0" class="text-12px text-warning">
+            {{ $t('page.task.detail.event.dropped', { count: events.length, dropped }) }}
+          </span>
+          <span v-else class="text-12px text-gray-400">{{ events.length }}</span>
         </div>
         <div
           ref="eventListRef"

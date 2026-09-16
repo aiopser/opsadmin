@@ -291,3 +291,47 @@ class CMDBApiTests(TestCase):
         )
         self.assertEqual(audit.actor, self.user)
         self.assertEqual(audit.after["hostname"], "audit-web01")
+
+    def test_vault_credential_creation_is_rejected(self):
+        from apps.cmdb.views import CredentialRefViewSet
+
+        request = APIRequestFactory().post(
+            "/api/v1/cmdb/credential-refs",
+            {
+                "name": "vault-ref",
+                "type": "vault_ref",
+                "scope": "global",
+                "secret_ref": "vault://secret/data/db",
+            },
+            format="json",
+        )
+        force_authenticate(request, user=self.user)
+        response = CredentialRefViewSet.as_view({"post": "create"})(request)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not supported", str(response.data))
+        self.assertFalse(
+            CredentialRef.objects.filter(name="vault-ref").exists()
+        )
+
+    def test_env_reference_creation_is_rejected_when_disabled(self):
+        from apps.cmdb.views import CredentialRefViewSet
+
+        request = APIRequestFactory().post(
+            "/api/v1/cmdb/credential-refs",
+            {
+                "name": "env-ref",
+                "type": "password",
+                "scope": "global",
+                "secret_ref": "env:APP_DB_PASSWORD",
+            },
+            format="json",
+        )
+        force_authenticate(request, user=self.user)
+        response = CredentialRefViewSet.as_view({"post": "create"})(request)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("disabled", str(response.data))
+        self.assertFalse(
+            CredentialRef.objects.filter(name="env-ref").exists()
+        )

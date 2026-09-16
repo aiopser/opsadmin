@@ -11,6 +11,7 @@ from django.conf import settings
 from datetime import timedelta
 
 from django.db import OperationalError, transaction
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
@@ -25,9 +26,9 @@ from apps.jobs.node_executors import execute_generic_node, record_generic_result
 from apps.jobs.recovery import recover_stale_executions
 from apps.jobs.state_machine import ExecutionLease
 from apps.jobs.application.dispatch import (
+    deliver_pending_dispatches,
     enqueue_node_run,
     enqueue_workflow_run,
-    recover_pending_dispatches,
 )
 from apps.jobs.application.runs import (
     create_workflow_run_from_host_ids,
@@ -47,6 +48,13 @@ TERMINAL_WORKFLOW_STATUSES = {
     WorkflowRun.Status.FAILED,
     WorkflowRun.Status.TIMEOUT,
     WorkflowRun.Status.CANCELED,
+}
+ACTIVE_WORKFLOW_STATUSES = {
+    WorkflowRun.Status.PENDING,
+    WorkflowRun.Status.QUEUED,
+    WorkflowRun.Status.RUNNING,
+    WorkflowRun.Status.WAITING,
+    WorkflowRun.Status.CANCEL_REQUESTED,
 }
 
 
@@ -273,10 +281,59 @@ def execute_node(node_run_id, attempt):
 
 @shared_task(name="jobs.recover_stale_workflow_runs")
 def recover_stale_workflow_runs():
+    from .log_artifacts import purge_expired_archives, rearchive_failed_chunks
+
     return {
-        "dispatches": recover_pending_dispatches(),
+        "dispatches": deliver_pending_dispatches(),
         "recovered": recover_stale_executions(),
+        "archives": rearchive_failed_chunks(),
+        "purgedArchives": purge_expired_archives(),
     }
+
+
+def _transfer_orphan_schedule_ownerships() -> int:
+    """Reassign schedules whose owner is gone (inactive or suspended).
+
+    Run creation requires an active actor, so an orphaned schedule would
+    silently stop dispatching and only surface as repeated "dispatch
+    rejected" skips. The fallback owner is the lowest-id active superuser.
+    """
+    from django.contrib.auth import get_user_model
+
+    fallback = (
+        get_user_model()
+        .objects.filter(is_active=True, is_superuser=True, job_status=True)
+        .order_by("pk")
+        .first()
+    )
+    if fallback is None:
+        return 0
+    orphans = ScheduledJob.objects.filter(
+        Q(created_by__is_active=False) | Q(created_by__job_status=False)
+    )
+    return orphans.update(created_by=fallback, updated_at=timezone.now())
+
+
+def _previous_scheduled_run_active(schedule) -> bool:
+    return bool(
+        schedule.last_workflow_run_id
+        and WorkflowRun.objects.filter(
+            pk=schedule.last_workflow_run_id,
+            status__in=ACTIVE_WORKFLOW_STATUSES,
+        ).exists()
+    )
+
+
+def _exception_reason(exc) -> str:
+    """Flatten a DRF exception into a short single-line reason string."""
+    detail = getattr(exc, "detail", None)
+    if detail is None:
+        return str(exc)
+    if isinstance(detail, dict):
+        return "; ".join(f"{key}: {value}" for key, value in detail.items())
+    if isinstance(detail, (list, tuple)):
+        return "; ".join(str(item) for item in detail)
+    return str(detail)
 
 
 @shared_task(name="jobs.dispatch_scheduled_jobs")
@@ -284,6 +341,7 @@ def dispatch_scheduled_jobs():
     from .cron import next_cron_time
 
     now = timezone.now()
+    transferred = _transfer_orphan_schedule_ownerships()
     dispatched = 0
     skipped = 0
     due_jobs = ScheduledJob.objects.select_related(
@@ -313,7 +371,64 @@ def dispatch_scheduled_jobs():
             ):
                 locked.enabled = False
                 locked.next_run_at = None
-                locked.save(update_fields=["enabled", "next_run_at", "updated_at"])
+                locked.last_skip_reason = (
+                    "disabled: workflow version unpublished"
+                    if locked.workflow_version.status != "published"
+                    else "disabled: worker pool inactive"
+                )
+                locked.save(
+                    update_fields=[
+                        "enabled",
+                        "next_run_at",
+                        "last_skip_reason",
+                        "updated_at",
+                    ]
+                )
+                skipped += 1
+                continue
+            # Misfire policy: an occurrence missed beyond the grace window
+            # (beat downtime, broker backlog) either fires late or is skipped.
+            overdue_seconds = (now - locked.next_run_at).total_seconds()
+            if (
+                locked.misfire_policy == ScheduledJob.MisfirePolicy.SKIP
+                and overdue_seconds > locked.misfire_grace_seconds
+            ):
+                locked.next_run_at = next_cron_time(
+                    locked.cron_expression, locked.timezone, now
+                )
+                locked.last_skip_reason = (
+                    f"misfire skipped: overdue by {int(overdue_seconds)}s"
+                )
+                locked.save(
+                    update_fields=["next_run_at", "last_skip_reason", "updated_at"]
+                )
+                skipped += 1
+                continue
+            # Overlap policy: decide what happens while the previous
+            # scheduled run is still active.
+            if (
+                locked.overlap_policy != ScheduledJob.OverlapPolicy.ALLOW
+                and _previous_scheduled_run_active(locked)
+            ):
+                if locked.overlap_policy == ScheduledJob.OverlapPolicy.QUEUE:
+                    # Mark one catch-up dispatch; it fires on the first tick
+                    # after the previous run reaches a terminal state.
+                    if not locked.pending_dispatch:
+                        locked.pending_dispatch = True
+                        locked.last_skip_reason = (
+                            "overlap queued: previous run still active"
+                        )
+                        locked.save(
+                            update_fields=["pending_dispatch", "last_skip_reason", "updated_at"]
+                        )
+                else:
+                    locked.next_run_at = next_cron_time(
+                        locked.cron_expression, locked.timezone, now
+                    )
+                    locked.last_skip_reason = "overlap skipped: previous run still active"
+                    locked.save(
+                        update_fields=["next_run_at", "last_skip_reason", "updated_at"]
+                    )
                 skipped += 1
                 continue
             try:
@@ -332,12 +447,17 @@ def dispatch_scheduled_jobs():
                     timeout_seconds=run_options["timeout_seconds"],
                     queue_timeout_seconds=run_options["queue_timeout_seconds"],
                 )
-            except (PermissionDenied, ValidationError):
+            except (PermissionDenied, ValidationError) as exc:
                 skipped += 1
                 locked.next_run_at = next_cron_time(
                     locked.cron_expression, locked.timezone, now
                 )
-                locked.save(update_fields=["next_run_at", "updated_at"])
+                locked.last_skip_reason = (
+                    f"dispatch rejected: {_exception_reason(exc)}"[:255]
+                )
+                locked.save(
+                    update_fields=["next_run_at", "last_skip_reason", "updated_at"]
+                )
                 continue
             append_run_event(
                 run_id=(run).id,
@@ -358,13 +478,21 @@ def dispatch_scheduled_jobs():
             locked.next_run_at = next_cron_time(
                 locked.cron_expression, locked.timezone, now
             )
+            locked.pending_dispatch = False
+            locked.last_skip_reason = ""
             locked.save(
                 update_fields=[
                     "last_run_at",
                     "last_workflow_run",
                     "next_run_at",
+                    "pending_dispatch",
+                    "last_skip_reason",
                     "updated_at",
                 ]
             )
             dispatched += 1
-    return {"dispatched": dispatched, "skipped": skipped}
+    return {
+        "dispatched": dispatched,
+        "skipped": skipped,
+        "ownershipTransferred": transferred,
+    }

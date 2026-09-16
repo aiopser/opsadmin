@@ -758,6 +758,7 @@ declare namespace App {
             retry: string;
             rerun: string;
             log: string;
+            logTruncated: string;
             retryCreated: string;
             status: {
               pending: string;
@@ -806,6 +807,7 @@ declare namespace App {
             };
             event: {
               title: string;
+              dropped: string;
             };
             host: {
               hostname: string;

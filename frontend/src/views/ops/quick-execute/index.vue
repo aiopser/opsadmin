@@ -282,7 +282,7 @@ watch(
 
 const runId = ref<number | null>(null);
 const runDomain = ref<Api.Jobs.RunDomain>('ops');
-const { events, terminal, connected, transportError } = useRunEventStream(runId, runDomain);
+const { events, terminal, connected, transportError, dropped } = useRunEventStream(runId, runDomain);
 const outputRef = ref<HTMLDivElement>();
 const clearedCount = ref(0);
 
@@ -682,6 +682,9 @@ onMounted(() => {
             <span class="font-bold">实时输出</span>
             <div class="flex items-center gap-8px">
               <ElTag size="small" :type="outputStatus.type">{{ outputStatus.text }}</ElTag>
+              <ElTag v-if="dropped > 0" size="small" type="warning" effect="plain">
+                早期 {{ dropped }} 条已自动清理
+              </ElTag>
               <ElButton size="small" :disabled="!outputLines.length" @click="clearOutput">清屏</ElButton>
             </div>
           </div>

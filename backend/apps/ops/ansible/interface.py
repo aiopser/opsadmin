@@ -37,9 +37,6 @@ class RunnerInterface:
     def get_runner_type(self):
         return self._runner_type
 
-    def kill_process(self, pid):
-        return self._runner_type.kill_precess(pid)
-
     def run(self, **kwargs):
         runner_type = self.get_runner_type()
         runner = runner_type(**kwargs)

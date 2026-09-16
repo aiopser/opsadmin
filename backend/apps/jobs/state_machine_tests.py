@@ -72,11 +72,21 @@ class ExecutionStateMachineTests(SimpleTestCase):
 
     def test_lease_is_expired_only_after_timeout_window(self):
         now = timezone.now()
+        node_runs = Mock()
+        node_runs.filter.return_value.aggregate.return_value = {"value": None}
+        # No running nodes: the configured floor lease (900s) applies.
         run = SimpleNamespace(
-            heartbeat_at=now - timedelta(seconds=31),
-            timeout_seconds=30,
+            heartbeat_at=now - timedelta(seconds=901),
+            node_runs=node_runs,
         )
         self.assertTrue(ExecutionLease.is_expired(run, now=now))
 
-        run.heartbeat_at = now - timedelta(seconds=29)
+        run.heartbeat_at = now - timedelta(seconds=899)
+        self.assertFalse(ExecutionLease.is_expired(run, now=now))
+
+        # A running node extends the lease to its own timeout plus grace.
+        node_runs.filter.return_value.aggregate.return_value = {"value": 3600}
+        run.heartbeat_at = now - timedelta(seconds=3700)
+        self.assertTrue(ExecutionLease.is_expired(run, now=now))
+        run.heartbeat_at = now - timedelta(seconds=3600)
         self.assertFalse(ExecutionLease.is_expired(run, now=now))

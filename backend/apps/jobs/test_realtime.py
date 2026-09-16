@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import time as time_mod
 from unittest.mock import patch
 
 import pytest
@@ -9,8 +10,10 @@ from channels.testing import WebsocketCommunicator
 from django.db import transaction
 from django.test import override_settings
 
+import apps.jobs.realtime.publisher as publisher
 from apps.jobs.events import append_run_event
 from apps.jobs.models import JobEventLog, WorkerPool, WorkflowRun
+from apps.jobs.realtime.consumer import RunEventsConsumer
 from apps.jobs.realtime.routing import websocket_urlpatterns
 from apps.jobs.realtime.tickets import issue_ticket, consume_ticket, CONSUME_SCRIPT
 
@@ -208,3 +211,153 @@ def test_ticket_endpoint_and_redis_outage_keep_rest_available(run, user, ticket_
             == 503
         )
         assert client.get(f"/api/v1/tasks/runs/{run.id}/events").status_code == 200
+
+
+class GateCache:
+    """可控的 NX 语义：仅首次 add 成功，之后全部被抑制。"""
+
+    def __init__(self):
+        self.gate_open = True
+
+    def add(self, key, value, timeout):
+        if self.gate_open:
+            self.gate_open = False
+            return True
+        return False
+
+
+@pytest.mark.django_db
+def test_notifications_are_coalesced_per_run(run):
+    """窗口内多条事件合并：前沿立即发一条，静默结束后补发最新 sequence。"""
+    sends = []
+    with patch.object(publisher, "cache", GateCache()), patch.object(
+        publisher, "DEBOUNCE_SECONDS", 0.05
+    ), patch.object(
+        publisher, "_send", side_effect=lambda run_id, seq: sends.append((run_id, seq))
+    ):
+        publisher.publish_events_available(run.id, 1)
+        publisher.publish_events_available(run.id, 2)
+        publisher.publish_events_available(run.id, 3)
+        assert sends == [(run.id, 1)]
+        time_mod.sleep(0.3)
+        assert sends == [(run.id, 1), (run.id, 3)]
+
+
+@pytest.mark.django_db
+def test_notification_leading_edge_suppresses_trailing(run):
+    """静默期内再次前沿通知会取消尾部补发，避免冗余。"""
+    sends = []
+    gate = GateCache()
+    with patch.object(publisher, "cache", gate), patch.object(
+        publisher, "DEBOUNCE_SECONDS", 0.05
+    ), patch.object(
+        publisher, "_send", side_effect=lambda run_id, seq: sends.append((run_id, seq))
+    ):
+        publisher.publish_events_available(run.id, 1)
+        publisher.publish_events_available(run.id, 2)
+        gate.gate_open = True
+        publisher.publish_events_available(run.id, 3)
+        time_mod.sleep(0.2)
+        assert sends == [(run.id, 1), (run.id, 3)]
+
+
+@pytest.mark.django_db
+def test_notification_cache_outage_degrades_to_per_event(run):
+    class BrokenCache:
+        def add(self, *args):
+            raise ConnectionError("cache outage")
+
+    sends = []
+    with patch.object(publisher, "cache", BrokenCache()), patch.object(
+        publisher, "_send", side_effect=lambda run_id, seq: sends.append((run_id, seq))
+    ):
+        publisher.publish_events_available(run.id, 1)
+        publisher.publish_events_available(run.id, 2)
+    assert sends == [(run.id, 1), (run.id, 2)]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_consumer_reuses_authorization_within_ttl(run, user, ticket_store):
+    """TTL 内的多条通知不重复触发数据库鉴权查询。"""
+    calls = {"n": 0}
+    original = RunEventsConsumer.still_authorized
+
+    async def counting(self):
+        calls["n"] += 1
+        return await original(self)
+
+    ticket = issue_ticket(user_id=user.id, run_id=run.id)
+
+    async def scenario():
+        socket = WebsocketCommunicator(
+            URLRouter(websocket_urlpatterns),
+            "/ws/jobs/runs/",
+            headers=[(b"origin", b"http://localhost:9527")],
+        )
+        assert (await socket.connect())[0]
+        await socket.send_json_to(
+            {"type": "subscribe", "run_id": run.id, "ticket": ticket}
+        )
+        assert await socket.receive_json_from() == {
+            "type": "subscribed",
+            "run_id": run.id,
+        }
+        layer = get_channel_layer()
+        await layer.group_send(
+            f"jobs.run.{run.id}",
+            {"type": "events.available", "run_id": run.id, "sequence": 1},
+        )
+        assert await socket.receive_json_from() == {
+            "type": "events_available",
+            "run_id": run.id,
+            "sequence": 1,
+        }
+        await layer.group_send(
+            f"jobs.run.{run.id}",
+            {"type": "events.available", "run_id": run.id, "sequence": 2},
+        )
+        assert await socket.receive_json_from() == {
+            "type": "events_available",
+            "run_id": run.id,
+            "sequence": 2,
+        }
+        await socket.disconnect()
+        assert calls["n"] == 0
+
+    with override_settings(JOBS_REALTIME_ALLOWED_ORIGINS=["http://localhost:9527"]):
+        with patch.object(RunEventsConsumer, "still_authorized", counting):
+            async_to_sync(scenario)()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_revoked_permission_closes_connection(run, user, ticket_store):
+    """TTL 到期后复核失败（权限被回收）时主动断开 4403。"""
+    ticket = issue_ticket(user_id=user.id, run_id=run.id)
+
+    async def scenario():
+        socket = WebsocketCommunicator(
+            URLRouter(websocket_urlpatterns),
+            "/ws/jobs/runs/",
+            headers=[(b"origin", b"http://localhost:9527")],
+        )
+        assert (await socket.connect())[0]
+        await socket.send_json_to(
+            {"type": "subscribe", "run_id": run.id, "ticket": ticket}
+        )
+        assert await socket.receive_json_from() == {
+            "type": "subscribed",
+            "run_id": run.id,
+        }
+        await get_channel_layer().group_send(
+            f"jobs.run.{run.id}",
+            {"type": "events.available", "run_id": run.id, "sequence": 1},
+        )
+        output = await socket.receive_output()
+        assert output["type"] == "websocket.close"
+        assert output["code"] == 4403
+
+    with override_settings(JOBS_REALTIME_ALLOWED_ORIGINS=["http://localhost:9527"]):
+        with patch.object(
+            RunEventsConsumer, "still_authorized", return_value=False
+        ), patch("apps.jobs.realtime.consumer.AUTH_RECHECK_SECONDS", 0.0):
+            async_to_sync(scenario)()

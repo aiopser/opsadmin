@@ -166,6 +166,13 @@ export function fetchPublishedWorkflowVersions() {
   });
 }
 
+/** 归档日志下载结果 */
+export interface RunLogFileResult {
+  blob: Blob;
+  /** X-Log-Truncated：部分输出被截断或分块归档失败/未完成，日志不完整 */
+  truncated: boolean;
+}
+
 /**
  * 归档日志下载（GET 流式 text/plain，非 JSON envelope 协议）。
  * 后端直接返回 StreamingHttpResponse，需绕过扁平 request 实例用原生 fetch 接收 Blob。
@@ -174,7 +181,7 @@ export async function fetchRunLogFile(
   id: number,
   domain: Api.Jobs.RunDomain = 'task',
   signal?: AbortSignal
-): Promise<Blob | null> {
+): Promise<RunLogFileResult | null> {
   const isHttpProxy = import.meta.env.DEV && import.meta.env.VITE_HTTP_PROXY === 'Y';
   const { baseURL } = getServiceBaseURL(import.meta.env, isHttpProxy);
   const response = await fetch(`${baseURL}${runPath(domain)}/${id}/log`, {
@@ -182,7 +189,10 @@ export async function fetchRunLogFile(
     signal
   });
   if (!response.ok) return null;
-  return response.blob();
+  return {
+    blob: await response.blob(),
+    truncated: response.headers.get('X-Log-Truncated') === 'true'
+  };
 }
 
 /** 资产主机选项（cmdb，AssetHostSerializer 已整体输出 camelCase） */

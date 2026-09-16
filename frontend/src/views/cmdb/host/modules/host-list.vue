@@ -3,11 +3,13 @@ import { ref, shallowRef, watch } from 'vue';
 import type { UploadFile } from 'element-plus';
 import {
   fetchAddHost,
+  fetchAssetProbe,
   fetchDeleteHost,
   fetchExcelImportHosts,
   fetchGetCredentialRefList,
   fetchGetHostList,
   fetchGetServiceNodeList,
+  fetchTestHostConnection,
   fetchUpdateHost
 } from '@/service/api';
 import { defaultTransform, useUIPaginatedTable } from '@/hooks/common/table';
@@ -95,6 +97,45 @@ function getInitSearchParams() {
 
 const searchParams = ref(getInitSearchParams());
 
+/** ============ 连通性测试（Worker 池执行 probe + 轮询结果） ============ */
+
+const probingIds = ref(new Set<number>());
+
+/** 每 1s 轮询一次 probe 状态，终态或超时（约 20s）返回 */
+async function pollProbe(probeId: number): Promise<Api.Cmdb.AssetProbeRecord | null> {
+  for (let i = 0; i < 20; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => {
+      setTimeout(resolve, 1000);
+    });
+    // eslint-disable-next-line no-await-in-loop
+    const { error, data: probeData } = await fetchAssetProbe(probeId);
+    if (error || !probeData) return null;
+    if (probeData.status === 'success' || probeData.status === 'failed') return probeData;
+  }
+  return null;
+}
+
+async function handleTestConnection(row: Api.Cmdb.HostRecord) {
+  probingIds.value.add(row.id);
+  const { error, data: dispatch } = await fetchTestHostConnection(row.id);
+  if (error || !dispatch) {
+    probingIds.value.delete(row.id);
+    return;
+  }
+  const probe = await pollProbe(dispatch.probeId);
+  probingIds.value.delete(row.id);
+  if (!probe) {
+    window.$message?.warning('探测超时，请稍后重试');
+    return;
+  }
+  if (probe.status === 'success') {
+    window.$message?.success(`连通性正常（执行节点：${probe.workerPoolName || '默认池'}）`);
+  } else {
+    window.$message?.error(`连通性失败：${probe.error || '未知错误'}`);
+  }
+}
+
 const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagination } = useUIPaginatedTable({
   paginationProps: {
     currentPage: searchParams.value.current,
@@ -167,11 +208,20 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
     {
       prop: 'operate',
       label: $t('common.operate'),
-      width: 140,
+      width: 200,
       align: 'center',
       fixed: 'right',
       formatter: row => (
         <>
+          <ElButton
+            type="success"
+            plain
+            size="small"
+            loading={probingIds.value.has(row.id)}
+            onClick={() => handleTestConnection(row)}
+          >
+            测试
+          </ElButton>
           <ElButton type="primary" plain size="small" onClick={() => openOperateDrawer('edit', row)}>
             {$t('common.edit')}
           </ElButton>

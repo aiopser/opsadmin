@@ -39,6 +39,17 @@ const hostStrategyText: Record<string, string> = {
   rolling: '滚动'
 };
 
+const overlapPolicyText: Record<string, string> = {
+  skip: '跳过本次',
+  allow: '允许并行',
+  queue: '结束后补跑一次'
+};
+
+const misfirePolicyText: Record<string, string> = {
+  fire: '立即补跑',
+  skip: '跳过错过的次数'
+};
+
 const togglingId = ref<number | null>(null);
 
 const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagination } = useUIPaginatedTable({
@@ -85,6 +96,20 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
       )
     },
     { prop: 'next_run_at', label: '下次执行时间', width: 170, formatter: row => row.next_run_at || '-' },
+    {
+      prop: 'overlap_policy',
+      label: '重叠策略',
+      width: 120,
+      align: 'center',
+      formatter: row => overlapPolicyText[row.overlap_policy] ?? row.overlap_policy
+    },
+    {
+      prop: 'last_skip_reason',
+      label: '最近跳过原因',
+      minWidth: 160,
+      showOverflowTooltip: true,
+      formatter: row => row.last_skip_reason || '-'
+    },
     {
       prop: 'operate',
       label: '操作',
@@ -196,6 +221,9 @@ function getInitForm() {
     queue_timeout_seconds: 3600,
     bypass_host_gateway: false,
     enabled: true,
+    overlap_policy: 'skip' as Api.Jobs.ScheduleOverlapPolicy,
+    misfire_policy: 'fire' as Api.Jobs.ScheduleMisfirePolicy,
+    misfire_grace_seconds: 3600,
     input_vars_text: '{}'
   };
 }
@@ -230,6 +258,9 @@ function openEdit(row: Api.Jobs.ScheduledJobRecord) {
     queue_timeout_seconds: row.queue_timeout_seconds,
     bypass_host_gateway: row.bypass_host_gateway,
     enabled: row.enabled,
+    overlap_policy: (row.overlap_policy as Api.Jobs.ScheduleOverlapPolicy) || 'skip',
+    misfire_policy: (row.misfire_policy as Api.Jobs.ScheduleMisfirePolicy) || 'fire',
+    misfire_grace_seconds: row.misfire_grace_seconds ?? 3600,
     input_vars_text: JSON.stringify(row.input_vars ?? {}, null, 2)
   });
   editVisible.value = true;
@@ -281,7 +312,10 @@ async function saveEdit() {
       timeout_seconds: form.timeout_seconds,
       queue_timeout_seconds: form.queue_timeout_seconds,
       bypass_host_gateway: form.bypass_host_gateway,
-      enabled: form.enabled
+      enabled: form.enabled,
+      overlap_policy: form.overlap_policy,
+      misfire_policy: form.misfire_policy,
+      misfire_grace_seconds: form.misfire_grace_seconds
     };
     const { error } = editingRow.value
       ? await fetchUpdateScheduledJob(editingRow.value.id, payload)
@@ -429,6 +463,21 @@ async function saveEdit() {
         </ElFormItem>
         <ElFormItem label="绕过主机网关">
           <ElSwitch v-model="form.bypass_host_gateway" />
+        </ElFormItem>
+        <ElFormItem label="重叠策略">
+          <ElSelect v-model="form.overlap_policy" class="w-full">
+            <ElOption v-for="(label, value) in overlapPolicyText" :key="value" :value="value" :label="label" />
+          </ElSelect>
+          <p class="mt-4px w-full text-12px text-gray-400">上次运行未结束时：跳过本次 / 仍并行派发 / 结束后补跑一次</p>
+        </ElFormItem>
+        <ElFormItem label="错过策略">
+          <ElSelect v-model="form.misfire_policy" class="w-full">
+            <ElOption v-for="(label, value) in misfirePolicyText" :key="value" :value="value" :label="label" />
+          </ElSelect>
+          <p class="mt-4px w-full text-12px text-gray-400">调度停机等原因错过触发时间且超过宽限期后的处理方式</p>
+        </ElFormItem>
+        <ElFormItem label="错过宽限期（秒）">
+          <ElInputNumber v-model="form.misfire_grace_seconds" :min="0" :step="60" />
         </ElFormItem>
         <ElFormItem label="是否启用">
           <ElSwitch v-model="form.enabled" />

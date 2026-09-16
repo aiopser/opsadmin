@@ -1,5 +1,7 @@
 import pytest
 
+from django.db import connection
+
 from apps.jobs.events import append_run_event
 from apps.jobs.models import (
     HostRunResult,
@@ -8,6 +10,11 @@ from apps.jobs.models import (
     NodeRunAttempt,
     WorkerPool,
     WorkflowRun,
+)
+
+# SQLite 无并发写能力（table is locked），并发分配仅在 MySQL 验收环境执行
+mysql_only = pytest.mark.skipif(
+    connection.vendor != "mysql", reason="concurrent writes require MySQL"
 )
 
 
@@ -61,6 +68,86 @@ def test_event_sequence_is_per_run_and_increases(execution):
     assert (first.sequence, second.sequence) == (1, 2)
     execution[0].refresh_from_db()
     assert execution[0].event_sequence == 2
+
+
+@pytest.mark.django_db
+def test_sequence_collision_retries_and_keeps_event_sequence_monotonic(execution):
+    """sequence 撞唯一约束时顺延重试，event_sequence 以 Greatest 单调推进。"""
+    run = execution[0]
+    # 模拟并发窗口：sequence=1 已被占用，但 run.event_sequence 仍为 0
+    JobEventLog.objects.create(
+        workflow_run=run,
+        sequence=1,
+        event_key="0:None:occupied",
+        event_type="test",
+        message="",
+        payload={},
+    )
+    log = append_run_event(
+        run_id=run.id, event_key="later", event={"event_type": "test"}
+    )
+    assert log.sequence == 2
+    run.refresh_from_db()
+    assert run.event_sequence == 2
+
+
+@mysql_only
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_appends_allocate_unique_sequences(execution):
+    """并发追加同一 run：sequence 不重复、event_sequence 单调、事件不丢失。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from django.db import close_old_connections
+
+    run = execution[0]
+
+    def append(index):
+        close_old_connections()
+        try:
+            return append_run_event(
+                run_id=run.id,
+                event_key=f"concurrent-{index}",
+                event={"event_type": "test", "message": str(index)},
+            )
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        logs = list(pool.map(append, range(30)))
+
+    sequences = [log.sequence for log in logs]
+    assert len(set(sequences)) == 30
+    assert JobEventLog.objects.filter(workflow_run=run).count() == 30
+    run.refresh_from_db()
+    assert run.event_sequence >= max(sequences)
+
+
+@mysql_only
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_same_key_returns_same_event(execution):
+    """并发投递同一 event_key：只落一条，双方返回同一条事件。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from django.db import close_old_connections
+
+    run = execution[0]
+
+    def append(_):
+        close_old_connections()
+        try:
+            return append_run_event(
+                run_id=run.id,
+                event_key="same-key",
+                event={"event_type": "test", "message": "dedup"},
+            )
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        logs = list(pool.map(append, range(4)))
+
+    assert len({log.pk for log in logs}) == 1
+    assert JobEventLog.objects.filter(workflow_run=run).count() == 1
 
 
 @pytest.mark.django_db

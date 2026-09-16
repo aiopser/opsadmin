@@ -3,9 +3,11 @@ from rest_framework import serializers
 
 from common.api.serializers import StandardModelSerializer
 
+from .credentials import check_secret_ref
 from .crypto import encrypt_secret, mask_secret
 from .models import (
     AssetHost,
+    AssetProbe,
     AssetSource,
     AssetSyncRecord,
     Business,
@@ -113,17 +115,25 @@ class CredentialRefSerializer(StandardModelSerializer):
         )
 
         if credential_type == CredentialRef.CredentialType.VAULT_REF:
-            if not secret_ref.startswith("vault://"):
-                raise serializers.ValidationError(
-                    {"secret_ref": "Vault credentials require a vault:// reference."}
-                )
+            # No Vault provider is configured in this deployment; refuse to
+            # create credentials that could never be executed.
+            raise serializers.ValidationError(
+                {"type": "Vault credentials are not supported in this deployment."}
+            )
         elif credential_type in {
             CredentialRef.CredentialType.PASSWORD,
             CredentialRef.CredentialType.SSH_KEY,
         }:
             # Allow either external ref (env:/file:) or encrypted inline secret
             has_external = secret_ref.startswith(("env:", "file:"))
-            if not has_external and not has_encrypted:
+            if has_external:
+                try:
+                    check_secret_ref(secret_ref)
+                except ValueError as exc:
+                    raise serializers.ValidationError(
+                        {"secret_ref": str(exc)}
+                    ) from exc
+            elif not has_encrypted:
                 raise serializers.ValidationError(
                     {
                         "secret": (
@@ -297,3 +307,27 @@ class HostTagSerializer(StandardModelSerializer):
         representation = super().to_representation(instance)
         representation["label"] = str(instance)
         return representation
+
+
+class AssetProbeSerializer(StandardModelSerializer):
+    hostname = serializers.CharField(source="host.hostname", read_only=True)
+    workerPoolName = serializers.CharField(
+        source="worker_pool.name", read_only=True, default=""
+    )
+
+    class Meta:
+        model = AssetProbe
+        fields = [
+            "id",
+            "hostname",
+            "kind",
+            "module",
+            "status",
+            "worker_pool",
+            "workerPoolName",
+            "attempt",
+            "result",
+            "error",
+            "created_at",
+            "updated_at",
+        ]

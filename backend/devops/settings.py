@@ -185,6 +185,9 @@ CORS_ALLOW_HEADERS = [
     "Pragma",
 ]
 
+# 前端需读取的自定义响应头（跨域时默认只暴露简单头）：日志不完整标记。
+CORS_EXPOSE_HEADERS = ["X-Log-Truncated"]
+
 REST_FRAMEWORK = {
     "EXCEPTION_HANDLER": "common.exception.custom_exception_handler",
     # 认证与权限
@@ -290,6 +293,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "jobs.dispatch_scheduled_jobs",
         "schedule": 60.0,
     },
+    "cmdb.recover-stale-asset-probes": {
+        "task": "cmdb.recover_stale_asset_probes",
+        "schedule": 60.0,
+    },
 }
 
 # Settings consumed by the migrated JumpServer Ansible runner.  Keep these
@@ -348,6 +355,16 @@ JOBS_LOG_ROOT = os.environ.get(
     "DEVOPS_LOG_ROOT", os.path.join(BASE_DIR, "data", "job-logs")
 )
 JOBS_LOG_MAX_BYTES = int(os.environ.get("DEVOPS_LOG_MAX_BYTES", "16777216"))
+
+# External credential reference policy. Both are disabled by default: an
+# empty allowlist rejects every env: reference, and a missing directory
+# rejects every file: reference. Check apps.cmdb.credentials.check_secret_ref.
+JOBS_CREDENTIAL_ENV_ALLOWLIST = tuple(
+    name
+    for name in os.environ.get("DEVOPS_CREDENTIAL_ENV_ALLOWLIST", "").split(",")
+    if name.strip()
+)
+JOBS_CREDENTIAL_FILE_DIR = os.environ.get("DEVOPS_CREDENTIAL_FILE_DIR") or None
 STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
     "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},

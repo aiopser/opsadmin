@@ -1,8 +1,10 @@
 from datetime import timedelta
 
+from django.conf import settings
+from django.db.models import Max
 from django.utils import timezone
 
-from .models import WorkflowRun
+from .models import NodeRun, WorkflowRun
 
 
 class InvalidExecutionTransition(ValueError):
@@ -20,10 +22,12 @@ class ExecutionStateMachine:
     TRANSITIONS = {
         WorkflowRun.Status.PENDING: {
             WorkflowRun.Status.QUEUED,
+            WorkflowRun.Status.TIMEOUT,
             WorkflowRun.Status.CANCEL_REQUESTED,
         },
         WorkflowRun.Status.QUEUED: {
             WorkflowRun.Status.RUNNING,
+            WorkflowRun.Status.TIMEOUT,
             WorkflowRun.Status.CANCEL_REQUESTED,
         },
         WorkflowRun.Status.RUNNING: {
@@ -43,6 +47,7 @@ class ExecutionStateMachine:
         WorkflowRun.Status.CANCEL_REQUESTED: {
             WorkflowRun.Status.CANCELED,
             WorkflowRun.Status.FAILED,
+            WorkflowRun.Status.TIMEOUT,
         },
     }
 
@@ -72,6 +77,11 @@ class ExecutionStateMachine:
 
 
 class ExecutionLease:
+    """Worker liveness lease, decoupled from the overall execution timeout."""
+
+    DEFAULT_LEASE_SECONDS = 900
+    NODE_TIMEOUT_GRACE_SECONDS = 60
+
     @staticmethod
     def touch(run_id, *, task_id=None, worker=None):
         values = {"heartbeat_at": timezone.now()}
@@ -80,6 +90,26 @@ class ExecutionLease:
         if worker is not None:
             values["worker_name"] = worker
         WorkflowRun.objects.filter(id=run_id).update(**values)
+
+    @staticmethod
+    def lease_seconds(run):
+        """Heartbeat lease: the longest still-running node's timeout plus grace.
+
+        Node tasks are hard-killed at their own time_limit, so a live worker
+        always touches the run again within node timeout + grace. The floor
+        (settings.JOBS_WORKER_LEASE_SECONDS, default 900s) covers runs whose
+        nodes are short so a wedged worker is reported quickly.
+        """
+        configured = int(
+            getattr(settings, "JOBS_WORKER_LEASE_SECONDS", ExecutionLease.DEFAULT_LEASE_SECONDS)
+        )
+        running_max = run.node_runs.filter(
+            status=NodeRun.Status.RUNNING
+        ).aggregate(value=Max("workflow_node__timeout_seconds"))["value"] or 0
+        return max(
+            configured,
+            int(running_max) + ExecutionLease.NODE_TIMEOUT_GRACE_SECONDS,
+        )
 
     @staticmethod
     def is_expired(run, now=None):
@@ -91,5 +121,4 @@ class ExecutionLease:
         if not last_activity:
             return False
         now = now or timezone.now()
-        timeout_seconds = max(int(run.timeout_seconds or 0), 1)
-        return last_activity + timedelta(seconds=timeout_seconds) < now
+        return last_activity + timedelta(seconds=ExecutionLease.lease_seconds(run)) < now

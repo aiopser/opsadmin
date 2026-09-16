@@ -5,14 +5,6 @@ __all__ = ["AnsibleNativeRunner"]
 
 
 class AnsibleNativeRunner(BaseRunner):
-    @classmethod
-    def kill_precess(cls, pid):
-        # Process cleanup is only needed when cancelling a running job. Keep
-        # this optional utility out of Django's startup/import path.
-        from libs.process.ssh import kill_ansible_ssh_process
-
-        return kill_ansible_ssh_process(pid)
-
     @cleanup_post_run
     def run(self):
         # Keep ansible-runner optional for Django management commands that do

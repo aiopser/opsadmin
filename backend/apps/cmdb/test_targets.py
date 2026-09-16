@@ -91,11 +91,55 @@ def test_execution_rejects_credential_disabled_after_snapshot():
 
 
 @pytest.mark.django_db
-def test_missing_credential_environment_variable_is_explicit(monkeypatch):
+def test_missing_credential_environment_variable_is_explicit(monkeypatch, settings):
     from apps.cmdb.credentials import DatabaseCredentialProvider
     monkeypatch.delenv("MISSING_PASSWORD", raising=False)
+    settings.JOBS_CREDENTIAL_ENV_ALLOWLIST = ("MISSING_PASSWORD",)
     credential = CredentialRef.objects.create(
         name="env-ref", type="password", scope="global", secret_ref="env:MISSING_PASSWORD"
     )
     with pytest.raises(ValueError, match="is not configured"):
+        DatabaseCredentialProvider().resolve(credential.pk)
+
+
+@pytest.mark.django_db
+def test_env_reference_is_rejected_when_disabled_by_default():
+    from apps.cmdb.credentials import DatabaseCredentialProvider
+    credential = CredentialRef.objects.create(
+        name="env-ref", type="password", scope="global", secret_ref="env:ANY_PASSWORD"
+    )
+    with pytest.raises(ValueError, match="disabled"):
+        DatabaseCredentialProvider().resolve(credential.pk)
+
+
+@pytest.mark.django_db
+def test_env_reference_outside_allowlist_is_rejected(settings):
+    from apps.cmdb.credentials import DatabaseCredentialProvider
+    settings.JOBS_CREDENTIAL_ENV_ALLOWLIST = ("OTHER_PASSWORD",)
+    credential = CredentialRef.objects.create(
+        name="env-ref", type="password", scope="global", secret_ref="env:MISSING_PASSWORD"
+    )
+    with pytest.raises(ValueError, match="allowlist"):
+        DatabaseCredentialProvider().resolve(credential.pk)
+
+
+@pytest.mark.django_db
+def test_file_reference_outside_dedicated_directory_is_rejected(settings, tmp_path):
+    from apps.cmdb.credentials import DatabaseCredentialProvider
+    settings.JOBS_CREDENTIAL_FILE_DIR = str(tmp_path / "creds")
+    outside = tmp_path / "elsewhere" / "id_rsa"
+    credential = CredentialRef.objects.create(
+        name="file-ref", type="ssh_key", scope="global", secret_ref=f"file:{outside}"
+    )
+    with pytest.raises(ValueError, match="inside the dedicated credential directory"):
+        DatabaseCredentialProvider().resolve(credential.pk)
+
+
+@pytest.mark.django_db
+def test_vault_reference_is_rejected_at_execution():
+    from apps.cmdb.credentials import DatabaseCredentialProvider
+    credential = CredentialRef.objects.create(
+        name="vault-ref", type="vault_ref", scope="global", secret_ref="vault://secret/data/db"
+    )
+    with pytest.raises(ValueError, match="not configured"):
         DatabaseCredentialProvider().resolve(credential.pk)

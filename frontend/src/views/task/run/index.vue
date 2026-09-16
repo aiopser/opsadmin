@@ -216,14 +216,17 @@ async function onRerun(id: number) {
 }
 
 async function onDownloadLog(id: number) {
-  const blob = await fetchRunLogFile(id, domainFor(id), requestScope.signal);
-  if (!blob) return;
-  const url = URL.createObjectURL(blob);
+  const result = await fetchRunLogFile(id, domainFor(id), requestScope.signal);
+  if (!result) return;
+  const url = URL.createObjectURL(result.blob);
   const link = document.createElement('a');
   link.href = url;
   link.download = `run-${id}.log`;
   link.click();
   URL.revokeObjectURL(url);
+  if (result.truncated) {
+    window.$message?.warning($t('page.task.run.logTruncated'));
+  }
 }
 
 const hasFilter = computed(() =>

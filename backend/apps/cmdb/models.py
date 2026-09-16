@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 from common.models import StandardModelMixin
@@ -341,3 +342,63 @@ class HostTagBinding(StandardModelMixin):
     class Meta:
         db_table = "cmdb_host_tag_binding"
         unique_together = ("host", "tag")
+
+
+class AssetProbe(StandardModelMixin):
+    """Async connectivity/fact probe executed by a WorkerPool runner.
+
+    Web processes never run Ansible directly; the row itself is the durable
+    dispatch record. A PENDING probe whose message was lost (process died
+    before publishing, broker outage) is republished by the recovery scanner;
+    the worker claims it with compare-and-set fencing on (attempt, status).
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        SUCCESS = "success", "Success"
+        FAILED = "failed", "Failed"
+
+    class Kind(models.TextChoices):
+        CONNECT = "connect", "Connectivity"
+        FACTS = "facts", "Host facts"
+
+    host = models.ForeignKey(
+        AssetHost,
+        on_delete=models.CASCADE,
+        related_name="probes",
+    )
+    triggered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        on_delete=models.SET_NULL,
+        related_name="asset_probes",
+    )
+    kind = models.CharField(
+        max_length=16,
+        choices=Kind.choices,
+        default=Kind.CONNECT,
+    )
+    module = models.CharField(max_length=128)
+    module_args = models.CharField(max_length=512, blank=True, default="")
+    timeout_seconds = models.IntegerField(default=15)
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.PENDING,
+        db_index=True,
+    )
+    worker_pool = models.ForeignKey(
+        "jobs.WorkerPool",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="asset_probes",
+    )
+    attempt = models.IntegerField(default=0)
+    result = models.JSONField(default=dict, blank=True)
+    error = models.CharField(max_length=512, blank=True, default="")
+
+    class Meta:
+        db_table = "cmdb_asset_probe"
+        ordering = ["-id"]

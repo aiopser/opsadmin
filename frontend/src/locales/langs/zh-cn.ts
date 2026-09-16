@@ -587,6 +587,7 @@ const local: App.I18n.Schema = {
         retry: '重试',
         rerun: '重跑',
         log: '日志',
+        logTruncated: '日志可能因大小限制或分块归档失败/未完成而不完整',
         retryCreated: '已创建新运行',
         status: {
           pending: '等待调度',
@@ -634,7 +635,8 @@ const local: App.I18n.Schema = {
           }
         },
         event: {
-          title: '执行事件'
+          title: '执行事件',
+          dropped: '已显示最近 {count} 条事件，早期 {dropped} 条已自动清理'
         },
         host: {
           hostname: '主机名',

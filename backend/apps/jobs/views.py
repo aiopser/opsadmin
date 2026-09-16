@@ -152,10 +152,9 @@ class WorkflowRunViewSet(StandardModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset().filter(run_domain=self.run_domain)
-        if not self.request.user.is_active or not self.request.user.job_status:
-            return queryset.none()
-        if not self.request.user.is_superuser:
-            queryset = queryset.filter(triggered_by=self.request.user)
+        from .run_access import visible_runs
+
+        queryset = visible_runs(queryset, self.request.user)
         aliases = {
             "triggerType": "trigger_type",
             "executionKind": "execution_kind",
@@ -319,6 +318,7 @@ class WorkflowRunViewSet(StandardModelViewSet):
     def log(self, request, pk=None):
         from django.http import StreamingHttpResponse
         from .log_artifacts import iter_run_stdout
+        from .models import RunLogChunk
 
         run = self.get_object()
         if request.query_params:
@@ -330,9 +330,13 @@ class WorkflowRunViewSet(StandardModelViewSet):
         )
         response["Content-Disposition"] = f'attachment; filename="run-{run.id}.log"'
         response["X-Content-Type-Options"] = "nosniff"
-        response["X-Log-Truncated"] = (
-            "true" if run.log_chunks.filter(truncated=True).exists() else "false"
+        # Incomplete covers both size-clipped output and chunks that failed to
+        # archive (or are still pending), so consumers can warn about missing bytes.
+        incomplete = (
+            run.log_chunks.exclude(status=RunLogChunk.Status.ARCHIVED).exists()
+            or run.log_chunks.filter(truncated=True).exists()
         )
+        response["X-Log-Truncated"] = "true" if incomplete else "false"
         return response
 
     @action(methods=["POST"], detail=True, url_path="realtime-ticket")
@@ -1010,8 +1014,11 @@ class DashboardHealthView(APIView):
 
 class DashboardRecentView(APIView):
     def get(self, request):
-        runs = WorkflowRun.objects.filter(
-            run_domain=WorkflowRun.RunDomain.OPS,
+        from .run_access import visible_runs
+
+        runs = visible_runs(
+            WorkflowRun.objects.filter(run_domain=WorkflowRun.RunDomain.OPS),
+            request.user,
         ).select_related(
             "workflow_version", "workflow_version__workflow", "triggered_by"
         )[

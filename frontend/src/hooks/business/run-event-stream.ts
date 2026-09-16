@@ -1,11 +1,16 @@
 import { type Ref, onScopeDispose, ref, shallowRef, watch } from 'vue';
 import { fetchGetRunEvents, fetchRealtimeTicket, runEventWebSocketUrl } from '@/service/api';
 
+/** 事件流内存上限：仅保留最近 N 条，超出的最早事件计入 dropped。 */
+export const RUN_EVENT_LIMIT = 1000;
+
 export interface RunEventStream {
   events: Ref<Api.Jobs.RunEvent[]>;
   terminal: Ref<boolean>;
   connected: Ref<boolean>;
   transportError: Ref<string>;
+  /** 因超出内存上限被丢弃的最早事件数量 */
+  dropped: Ref<number>;
 }
 
 export function useRunEventStream(runId: Ref<number | null>, domain: Ref<Api.Jobs.RunDomain>): RunEventStream {
@@ -13,6 +18,7 @@ export function useRunEventStream(runId: Ref<number | null>, domain: Ref<Api.Job
   const terminal = ref(false);
   const connected = ref(false);
   const transportError = ref('');
+  const dropped = ref(0);
   let stopSession = () => {};
 
   function startSession(id: number, runDomain: Api.Jobs.RunDomain): () => void {
@@ -79,8 +85,15 @@ export function useRunEventStream(runId: Ref<number | null>, domain: Ref<Api.Job
             ...new Map(
               page.events.filter(item => item.sequence > previousCursor).map(item => [item.sequence, item])
             ).values()
-          ];
-          events.value = [...events.value, ...fresh.sort((a, b) => a.sequence - b.sequence)];
+          ].sort((a, b) => a.sequence - b.sequence);
+          const merged = [...events.value, ...fresh];
+          const overflow = merged.length - RUN_EVENT_LIMIT;
+          if (overflow > 0) {
+            dropped.value += overflow;
+            events.value = merged.slice(overflow);
+          } else {
+            events.value = merged;
+          }
           cursor = page.nextCursor;
           transportError.value = '';
           if (page.terminal && !page.hasMore) {
@@ -168,10 +181,11 @@ export function useRunEventStream(runId: Ref<number | null>, domain: Ref<Api.Job
       terminal.value = false;
       connected.value = false;
       transportError.value = '';
+      dropped.value = 0;
       stopSession = id !== null && Number.isSafeInteger(id) && id > 0 ? startSession(id, runDomain) : () => {};
     },
     { immediate: true }
   );
   onScopeDispose(() => stopSession());
-  return { events, terminal, connected, transportError };
+  return { events, terminal, connected, transportError, dropped };
 }

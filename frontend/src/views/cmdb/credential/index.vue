@@ -4,7 +4,6 @@ import {
   fetchAddCredentialRef,
   fetchDeleteCredentialRef,
   fetchGetCredentialRefList,
-  fetchTestCredentialConnection,
   fetchUpdateCredentialRef
 } from '@/service/api';
 import { defaultTransform, useUIPaginatedTable } from '@/hooks/common/table';
@@ -15,8 +14,8 @@ defineOptions({ name: 'CmdbCredential' });
 
 const typeOptions = [
   { value: 'ssh_key', label: 'SSH 密钥' },
-  { value: 'password', label: '密码' },
-  { value: 'vault_ref', label: 'Vault 引用' }
+  { value: 'password', label: '密码' }
+  // vault_ref 不可选：当前部署未配置 Vault Provider，后端会拒绝该类型
 ];
 
 const scopeOptions = [
@@ -40,8 +39,6 @@ function getInitSearchParams() {
 }
 
 const searchParams = ref(getInitSearchParams());
-
-const testingId = ref<number | null>(null);
 
 /** ============ 列表 ============ */
 
@@ -107,20 +104,11 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
     {
       prop: 'operate',
       label: '操作',
-      width: 220,
+      width: 160,
       align: 'center',
       fixed: 'right',
       formatter: row => (
         <>
-          <ElButton
-            type="success"
-            plain
-            size="small"
-            loading={testingId.value === row.id}
-            onClick={() => handleTest(row.id)}
-          >
-            测试
-          </ElButton>
           <ElButton type="primary" plain size="small" onClick={() => openOperateDrawer('edit', row)}>
             编辑
           </ElButton>
@@ -146,18 +134,6 @@ const hasFilter = computed(() =>
 function resetSearchParams() {
   searchParams.value = getInitSearchParams();
   getDataByPage();
-}
-
-/** ============ 连接测试 ============ */
-
-async function handleTest(id: number) {
-  testingId.value = id;
-  const { error, data: result } = await fetchTestCredentialConnection(id);
-  testingId.value = null;
-
-  if (!error) {
-    window.$message?.success(`连接测试通过：${JSON.stringify(result)}`);
-  }
 }
 
 /** ============ 新增/编辑抽屉 ============ */
@@ -365,7 +341,7 @@ async function handleDelete(id: number) {
           />
         </ElFormItem>
         <ElFormItem label="外部引用">
-          <ElInput v-model="formModel.secret_ref" placeholder="env:/file:/vault:// 引用" />
+          <ElInput v-model="formModel.secret_ref" placeholder="env:/file: 引用，需在环境白名单或凭据目录内" />
         </ElFormItem>
         <ElFormItem label="密钥明文">
           <ElInput

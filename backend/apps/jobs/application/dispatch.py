@@ -1,147 +1,268 @@
-"""Commit-aware publication; broker outages leave durable recovery records."""
-from uuid import uuid4
-from apps.jobs.events import append_run_event
+"""Durable broker publication; broker outages leave recoverable dispatch records.
 
-from django.db import transaction
+Every publication intent is mirrored in a DispatchRecord row created inside the
+same transaction as its business row (run creation / node queueing). If the
+process dies between commit and publish, the periodic scanner republishes from
+those rows; worker-side attempt fencing keeps a republish safe when the broker
+actually accepted the message.
+"""
+from datetime import timedelta
+from uuid import uuid4
+
+from django.db.models import Q
 from django.utils import timezone
 
-from apps.jobs.models import JobEventLog, NodeRun, NodeRunAttempt, WorkflowRun
+from apps.jobs.events import append_run_event
+from apps.jobs.models import (
+    DispatchRecord,
+    NodeRun,
+    NodeRunAttempt,
+    WorkflowRun,
+)
 from apps.jobs.state_machine import ExecutionLease
 from apps.jobs.workflow_engine import node_queue_name
 
+RECOVER_BATCH_SIZE = 100
+RETRY_BACKOFF_BASE_SECONDS = 30
+RETRY_BACKOFF_CAP_SECONDS = 900
+SENT_RECORD_RETENTION_DAYS = 7
 
-def _publish(*, run_id, node_run_id, attempt, publish):
-    try:
-        task = publish()
-    except Exception as exc:
-        append_run_event(
-            run_id=run_id,
-            node_run_id=node_run_id,
-            event_key=uuid4().hex,
-            event={
-                "event_type": "dispatch_failed",
-                "message": "Broker publication failed; pending recovery.",
-                "payload": {"attempt": attempt, "error_type": type(exc).__name__},
-            },
-        )
-        return None
+DISPATCHABLE_RUN_STATUSES = [
+    WorkflowRun.Status.PENDING,
+    WorkflowRun.Status.QUEUED,
+    WorkflowRun.Status.RUNNING,
+    WorkflowRun.Status.WAITING,
+]
+
+
+def _append_dispatch_event(*, run_id, node_run_id, event_type, message, payload):
     append_run_event(
         run_id=run_id,
         node_run_id=node_run_id,
         event_key=uuid4().hex,
-        event={
-            "event_type": "dispatch_sent",
-            "message": "Broker accepted publication.",
-            "payload": {"attempt": attempt},
-        },
+        event={"event_type": event_type, "message": message, "payload": payload},
     )
-    return task
+
+
+def register_dispatch(*, workflow_run_id, node_run_id=None, attempt=0):
+    """Create or fetch the durable pending record. Call inside the business transaction."""
+    record, _ = DispatchRecord.objects.get_or_create(
+        kind=(
+            DispatchRecord.Kind.NODE if node_run_id else DispatchRecord.Kind.WORKFLOW
+        ),
+        workflow_run_id=workflow_run_id,
+        node_run_id=node_run_id,
+        attempt=attempt,
+        defaults={"status": DispatchRecord.Status.PENDING},
+    )
+    return record
+
+
+def _node_queue_and_timeout(node):
+    run = node.workflow_run
+    queue = node_queue_name(node.node_type, run.worker_pool, run.run_domain)
+    timeout = max(
+        min(
+            int(
+                getattr(node.workflow_node, "timeout_seconds", 0)
+                or run.timeout_seconds
+            ),
+            run.timeout_seconds,
+        ),
+        1,
+    )
+    return queue, timeout
+
+
+def _attempt_publish(record, *, record_dispatch_task=True):
+    """Publish once and update the record; returns (task, queue).
+
+    Workflow-level records are republished even when SENT: run_workflow is
+    idempotent and repeat calls drive graph progression. Failures mark the
+    record FAILED with exponential backoff for the recovery scanner.
+    """
+    from apps.jobs.tasks import execute_node, run_workflow
+
+    node = None
+    if record.node_run_id:
+        node = NodeRun.objects.select_related(
+            "workflow_node", "workflow_run__worker_pool"
+        ).get(pk=record.node_run_id)
+        run = node.workflow_run
+        queue, timeout = _node_queue_and_timeout(node)
+        publish = lambda: execute_node.apply_async(
+            args=[node.id, record.attempt],
+            queue=queue,
+            soft_time_limit=timeout,
+            time_limit=timeout + 5,
+        )
+    else:
+        run = WorkflowRun.objects.get(pk=record.workflow_run_id)
+        queue = (
+            "ops"
+            if run.run_domain == WorkflowRun.RunDomain.OPS
+            else "task"
+        )
+        publish = lambda: run_workflow.apply_async(args=[run.id], queue=queue)
+
+    record.delivery_attempts += 1
+    try:
+        task = publish()
+    except Exception as exc:
+        backoff = min(
+            RETRY_BACKOFF_BASE_SECONDS
+            * (2 ** min(record.delivery_attempts - 1, 5)),
+            RETRY_BACKOFF_CAP_SECONDS,
+        )
+        record.status = DispatchRecord.Status.FAILED
+        record.next_retry_at = timezone.now() + timedelta(seconds=backoff)
+        record.last_error = type(exc).__name__
+        record.save(
+            update_fields=[
+                "status",
+                "next_retry_at",
+                "delivery_attempts",
+                "last_error",
+                "updated_at",
+            ]
+        )
+        _append_dispatch_event(
+            run_id=run.id,
+            node_run_id=node.id if node else None,
+            event_type="dispatch_failed",
+            message="Broker publication failed; pending recovery.",
+            payload={
+                "attempt": record.attempt,
+                "error_type": type(exc).__name__,
+            },
+        )
+        return None, queue
+
+    task_id = getattr(task, "id", "") or ""
+    record.status = DispatchRecord.Status.SENT
+    record.celery_task_id = task_id
+    record.next_retry_at = None
+    record.last_error = ""
+    record.save(
+        update_fields=[
+            "status",
+            "celery_task_id",
+            "next_retry_at",
+            "delivery_attempts",
+            "last_error",
+            "updated_at",
+        ]
+    )
+    if node:
+        NodeRun.objects.filter(pk=node.id, attempt_count=record.attempt).update(
+            celery_task_id=task_id
+        )
+        NodeRunAttempt.objects.filter(
+            node_run_id=node.id, attempt=record.attempt
+        ).update(celery_task_id=task_id)
+    elif record_dispatch_task and task_id:
+        ExecutionLease.touch(run.id, task_id=task_id)
+    _append_dispatch_event(
+        run_id=run.id,
+        node_run_id=node.id if node else None,
+        event_type="dispatch_sent",
+        message="Broker accepted publication.",
+        payload={"attempt": record.attempt},
+    )
+    return task, queue
 
 
 def enqueue_node_run(node_run_id):
-    from apps.jobs.tasks import execute_node
-
     node = NodeRun.objects.select_related(
         "workflow_node", "workflow_run__worker_pool"
     ).get(pk=node_run_id)
     if node.status != NodeRun.Status.QUEUED:
         return {"nodeRunId": node.id, "dispatched": False}
-    queue = node_queue_name(
-        node.node_type, node.workflow_run.worker_pool, node.workflow_run.run_domain
-    )
-    timeout = max(
-        min(
-            int(
-                getattr(node.workflow_node, "timeout_seconds", 0)
-                or node.workflow_run.timeout_seconds
-            ),
-            node.workflow_run.timeout_seconds,
-        ),
-        1,
-    )
-    task = _publish(
-        run_id=node.workflow_run_id,
+    record = register_dispatch(
+        workflow_run_id=node.workflow_run_id,
         node_run_id=node.id,
         attempt=node.attempt_count,
-        publish=lambda: execute_node.apply_async(
-            args=[node.id, node.attempt_count],
-            queue=queue,
-            soft_time_limit=timeout,
-            time_limit=timeout + 5,
-        ),
     )
-    task_id = getattr(task, "id", "") or ""
-    if task_id:
-        NodeRun.objects.filter(pk=node.id, attempt_count=node.attempt_count).update(
-            celery_task_id=task_id
-        )
-        NodeRunAttempt.objects.filter(
-            node_run_id=node.id, attempt=node.attempt_count
-        ).update(celery_task_id=task_id)
+    if record.status == DispatchRecord.Status.SENT:
+        # Already published for this attempt (e.g. duplicate enqueue); never republish.
+        queue, _timeout = _node_queue_and_timeout(node)
+        return {
+            "nodeRunId": node.id,
+            "taskId": record.celery_task_id,
+            "queue": queue,
+            "dispatched": False,
+        }
+    task, queue = _attempt_publish(record)
     return {
         "nodeRunId": node.id,
-        "taskId": task_id,
+        "taskId": getattr(task, "id", "") or "",
         "queue": queue,
         "dispatched": task is not None,
     }
 
 
 def enqueue_workflow_run(workflow_run_id, record_dispatch_task=True):
-    from apps.jobs.tasks import run_workflow
-
     run = WorkflowRun.objects.get(pk=workflow_run_id)
-    queue = "ops" if run.run_domain == WorkflowRun.RunDomain.OPS else "task"
-    task = _publish(
-        run_id=run.id,
-        node_run_id=None,
-        attempt=None,
-        publish=lambda: run_workflow.apply_async(args=[run.id], queue=queue),
+    record = register_dispatch(workflow_run_id=run.id)
+    task, queue = _attempt_publish(
+        record, record_dispatch_task=record_dispatch_task
     )
-    task_id = getattr(task, "id", "") or ""
-    if task_id and record_dispatch_task:
-        ExecutionLease.touch(run.id, task_id=task_id)
     return {
         "workflowRunId": run.id,
         "dispatchMode": "celery",
-        "taskId": task_id,
+        "taskId": getattr(task, "id", "") or "",
         "queue": queue,
         "dispatched": task is not None,
     }
 
 
 def dispatch_after_commit(run_id, *, record_dispatch_task=True):
-    transaction.on_commit(
+    transaction_on_commit = _on_commit
+    transaction_on_commit(
         lambda: enqueue_workflow_run(run_id, record_dispatch_task=record_dispatch_task)
     )
 
 
-def recover_pending_dispatches():
-    # Re-publish only unclaimed work; attempt fencing makes ambiguous broker acceptance safe.
-    latest = {}
-    for event in (
-        JobEventLog.objects.filter(event_type__in=["dispatch_failed", "dispatch_sent"])
-        .order_by("id")
-        .iterator(chunk_size=500)
-    ):
-        latest[
-            (event.workflow_run_id, event.node_run_id, event.payload.get("attempt"))
-        ] = event.event_type
-    recovered = 0
-    for (run_id, node_id, attempt), status in latest.items():
-        if status != "dispatch_failed":
-            continue
-        if node_id:
-            if NodeRun.objects.filter(
-                pk=node_id, attempt_count=attempt, status=NodeRun.Status.QUEUED
-            ).exists():
-                recovered += int(enqueue_node_run(node_id)["dispatched"])
-        elif WorkflowRun.objects.filter(
-            pk=run_id,
+def _on_commit(callback):
+    from django.db import transaction
+
+    transaction.on_commit(callback)
+
+
+def deliver_pending_dispatches(now=None):
+    """Republish pending/failed records whose business rows still need dispatch."""
+    now = now or timezone.now()
+    records = list(
+        DispatchRecord.objects.filter(
             status__in=[
-                WorkflowRun.Status.PENDING,
-                WorkflowRun.Status.QUEUED,
-                WorkflowRun.Status.RUNNING,
-            ],
-        ).exists():
-            recovered += int(enqueue_workflow_run(run_id)["dispatched"])
-    return recovered
+                DispatchRecord.Status.PENDING,
+                DispatchRecord.Status.FAILED,
+            ]
+        )
+        .filter(Q(next_retry_at__isnull=True) | Q(next_retry_at__lte=now))
+        .order_by("id")[:RECOVER_BATCH_SIZE]
+    )
+    delivered = 0
+    for record in records:
+        if record.node_run_id:
+            dispatchable = NodeRun.objects.filter(
+                pk=record.node_run_id,
+                attempt_count=record.attempt,
+                status=NodeRun.Status.QUEUED,
+            ).exists()
+        else:
+            dispatchable = WorkflowRun.objects.filter(
+                pk=record.workflow_run_id,
+                status__in=DISPATCHABLE_RUN_STATUSES,
+            ).exists()
+        if not dispatchable:
+            record.status = DispatchRecord.Status.STALE
+            record.save(update_fields=["status", "updated_at"])
+            continue
+        task, _queue = _attempt_publish(record)
+        delivered += int(task is not None)
+    DispatchRecord.objects.filter(
+        status=DispatchRecord.Status.SENT,
+        updated_at__lt=now - timedelta(days=SENT_RECORD_RETENTION_DAYS),
+    ).delete()
+    return delivered

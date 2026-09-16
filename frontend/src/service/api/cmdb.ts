@@ -329,10 +329,19 @@ export function fetchDeleteCredentialRef(id: number) {
   });
 }
 
-/** 凭据连接测试（POST credential-refs/{id}/test-connection） */
-export function fetchTestCredentialConnection(id: number) {
-  return request<Record<string, unknown>>({
-    url: `/api/v1/cmdb/credential-refs/${id}/test-connection`,
-    method: 'post'
+/** 触发主机连通性探测（POST credential-refs/test-connection；由目标地域的 Worker 池执行，返回 probeId 供轮询） */
+export function fetchTestHostConnection(hostId: number) {
+  return request<Api.Cmdb.ProbeDispatchResult>({
+    url: '/api/v1/cmdb/credential-refs/test-connection',
+    method: 'post',
+    data: { hostId }
+  });
+}
+
+/** 查询资产探测结果（GET credential-refs/probes/{probeId}） */
+export function fetchAssetProbe(probeId: number) {
+  return request<Api.Cmdb.AssetProbeRecord>({
+    url: `/api/v1/cmdb/credential-refs/probes/${probeId}`,
+    method: 'get'
   });
 }

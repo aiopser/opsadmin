@@ -132,6 +132,15 @@ class ScheduledJob(StandardModelMixin):
         SERIAL = "serial", "Serial"
         ROLLING = "rolling", "Rolling"
 
+    class OverlapPolicy(models.TextChoices):
+        SKIP = "skip", "Skip while previous run is active"
+        ALLOW = "allow", "Allow overlapping runs"
+        QUEUE = "queue", "Queue one catch-up dispatch"
+
+    class MisfirePolicy(models.TextChoices):
+        FIRE = "fire", "Fire late"
+        SKIP = "skip", "Skip overdue occurrence"
+
     name = models.CharField(max_length=128)
     workflow_version = models.ForeignKey(
         "automation.WorkflowVersion",
@@ -161,6 +170,23 @@ class ScheduledJob(StandardModelMixin):
     queue_timeout_seconds = models.PositiveIntegerField(default=120)
     bypass_host_gateway = models.BooleanField(default=False)
     enabled = models.BooleanField(default=True)
+    # 调度策略：overlap 控制上次运行未结束时本次是否派发；misfire 控制
+    # 错过调度窗口（beat 停机等）超过宽限期后补跑还是跳过。
+    overlap_policy = models.CharField(
+        max_length=16,
+        choices=OverlapPolicy.choices,
+        default=OverlapPolicy.SKIP,
+    )
+    misfire_policy = models.CharField(
+        max_length=16,
+        choices=MisfirePolicy.choices,
+        default=MisfirePolicy.FIRE,
+    )
+    misfire_grace_seconds = models.PositiveIntegerField(default=3600)
+    # queue 策略下：上次运行仍活跃时标记一次补投，待其结束后派发。
+    pending_dispatch = models.BooleanField(default=False)
+    # 最近一次跳过原因（overlap/misfire/派发被拒），成功派发后清空。
+    last_skip_reason = models.CharField(max_length=255, blank=True, default="")
     next_run_at = models.DateTimeField(null=True, blank=True, db_index=True)
     last_run_at = models.DateTimeField(null=True, blank=True)
     last_workflow_run = models.ForeignKey(
@@ -281,6 +307,57 @@ class NodeRunAttempt(StandardModelMixin):
         unique_together = ("node_run", "attempt")
 
 
+class DispatchRecord(StandardModelMixin):
+    """Broker publication ledger, created in the same transaction as its business row.
+
+    Closes the window where the database has committed but the process died
+    before the on_commit callback could publish to Celery: the scanner later
+    picks up pending/failed records and re-publishes; worker-side attempt
+    fencing keeps a republish safe if the broker actually accepted it.
+    """
+
+    class Kind(models.TextChoices):
+        WORKFLOW = "workflow", "Workflow run"
+        NODE = "node", "Node run"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending publication"
+        SENT = "sent", "Published"
+        FAILED = "failed", "Publication failed"
+        STALE = "stale", "Stale (business row no longer dispatchable)"
+
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+    workflow_run = models.ForeignKey(
+        "jobs.WorkflowRun",
+        on_delete=models.CASCADE,
+        related_name="dispatch_records",
+    )
+    node_run = models.ForeignKey(
+        NodeRun,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="dispatch_records",
+    )
+    attempt = models.PositiveIntegerField(default=0)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.PENDING, db_index=True
+    )
+    delivery_attempts = models.PositiveIntegerField(default=0)
+    next_retry_at = models.DateTimeField(null=True, blank=True)
+    celery_task_id = models.CharField(max_length=255, blank=True, default="")
+    last_error = models.CharField(max_length=255, blank=True, default="")
+
+    class Meta:
+        db_table = "jobs_dispatch_record"
+        ordering = ["id"]
+        indexes = [
+            models.Index(
+                fields=["status", "next_retry_at"], name="jobs_dispatch_retry_idx"
+            ),
+        ]
+
+
 class HostRunResult(StandardModelMixin):
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
@@ -380,13 +457,25 @@ class JobEventLog(StandardModelMixin):
 
 
 class RunLogChunk(StandardModelMixin):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending storage write"
+        ARCHIVED = "archived", "Archived"
+        FAILED = "failed", "Storage write failed"
+
     workflow_run = models.ForeignKey(
         WorkflowRun, on_delete=models.CASCADE, related_name="log_chunks"
     )
     sequence = models.PositiveBigIntegerField()
-    storage_name = models.CharField(max_length=256)
+    storage_name = models.CharField(max_length=256, blank=True, default="")
     byte_count = models.PositiveIntegerField()
     truncated = models.BooleanField(default=False)
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.ARCHIVED,
+        db_index=True,
+    )
+    last_error = models.CharField(max_length=255, blank=True, default="")
 
     class Meta:
         ordering = ["sequence"]

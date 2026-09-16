@@ -589,6 +589,7 @@ const local: App.I18n.Schema = {
         retry: 'Retry',
         rerun: 'Rerun',
         log: 'Log',
+        logTruncated: 'The log may be incomplete due to size limits or incomplete chunk archiving',
         retryCreated: 'New run created',
         status: {
           pending: 'Pending',
@@ -636,7 +637,8 @@ const local: App.I18n.Schema = {
           }
         },
         event: {
-          title: 'Execution Events'
+          title: 'Execution Events',
+          dropped: 'Showing the latest {count} events; {dropped} earlier events were cleared'
         },
         host: {
           hostname: 'Hostname',

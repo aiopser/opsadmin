@@ -18,6 +18,7 @@ from .services import resolve_group_host_ids
 from .tasks import sync_asset_source
 from .models import (
     AssetHost,
+    AssetProbe,
     AssetSource,
     AssetSyncRecord,
     Business,
@@ -30,6 +31,7 @@ from .models import (
 )
 from .serializers import (
     AssetHostSerializer,
+    AssetProbeSerializer,
     AssetSourceSerializer,
     AssetSyncRecordSerializer,
     BusinessSerializer,
@@ -479,18 +481,37 @@ class CredentialRefViewSet(CMDBAuditModelViewSet):
 
     @action(detail=False, methods=["post"], url_path="test-connection")
     def test_connection(self, request):
-        """Probe an authorized asset using its bound credential and gateway."""
-        from .execution import execute_asset_module
-        from .targets import resolve_targets
+        """Queue a connectivity probe; the routed worker pool executes it.
+
+        Returns the probe id so the client can poll for the result. Scheduling
+        failures (no access, no usable worker pool) surface synchronously as
+        400/403; queueing happens after commit and is recovered by the
+        scanner if the process dies first.
+        """
+        from .probes import schedule_asset_probe
 
         host_id = request.data.get("hostId")
-        targets = resolve_targets(actor=request.user, host_ids=[host_id], group_ids=[])
-        module = "ansible.windows.win_ping" if targets[0]["connection_type"] == "winrm" else "ansible.builtin.ping"
-        result = execute_asset_module(
-            actor=request.user, host_id=host_id, module=module, timeout=15, on_event=lambda event: None,
+        probe = schedule_asset_probe(
+            actor=request.user, host_id=host_id, kind=AssetProbe.Kind.CONNECT
         )
-        success = result.status == "success"
-        return api_ok_response({"success": success, "message": "连接成功" if success else "连接失败"})
+        return api_ok_response({"probeId": probe.id, "status": probe.status})
+
+    @action(detail=False, methods=["get"], url_path=r"probes/(?P<probe_id>[^/.]+)")
+    def probe_status(self, request, probe_id=None):
+        """Poll one probe result (owner or superuser only)."""
+        from apps.jobs.run_access import ALL, NONE, run_access_state
+
+        state = run_access_state(request.user)
+        if state == NONE:
+            return api_error_response("Forbidden", code="A0403", http_status=403)
+        probe = AssetProbe.objects.select_related("host", "worker_pool").filter(
+            pk=probe_id
+        ).first()
+        if probe is None or (
+            state != ALL and probe.triggered_by_id != request.user.id
+        ):
+            return api_error_response("Not found", code="A0400", http_status=404)
+        return api_ok_response(AssetProbeSerializer(probe).data)
 
 
 

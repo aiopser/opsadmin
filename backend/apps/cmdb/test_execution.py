@@ -10,9 +10,10 @@ from apps.ops.contracts import RunnerResult
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("crash", [False, True])
-def test_asset_probe_owns_key_lifetime(user, crash):
+def test_asset_probe_owns_key_lifetime(user, crash, settings):
     user.is_superuser = True
     user.save()
+    settings.JOBS_CREDENTIAL_ENV_ALLOWLIST = ("ISOLATED_TEST_KEY",)
     credential = CredentialRef.objects.create(name="probe-key", type=CredentialRef.CredentialType.SSH_KEY,
         secret_ref="env:ISOLATED_TEST_KEY")
     host = AssetHost.objects.create(hostname="probe", primary_ip="192.0.2.10", credential_ref=credential,

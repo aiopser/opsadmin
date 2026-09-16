@@ -61,8 +61,10 @@ class RoleSerializer(StandardModelSerializer):
         representation["status"] = "1" if instance.is_active else "2"
         representation["homePath"] = instance.home_path
         representation["sort"] = instance.id
-        representation["dataScope"] = 1
-        representation["dataScopeLabel"] = "All data"
+        # The backend currently restricts non-superusers to their own runs;
+        # report scope 5 ("self only") so the UI matches enforced behaviour.
+        representation["dataScope"] = 5
+        representation["dataScopeLabel"] = "Self data"
         representation["updateTime"] = instance.updated_at
         return representation
 

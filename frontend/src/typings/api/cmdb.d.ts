@@ -405,5 +405,33 @@ declare namespace Api {
 
     /** 主机页右侧「管理」抽屉 key */
     type HostManageKey = 'host-group' | 'tag' | 'asset-source' | 'sync-record';
+
+    /** 探测状态（AssetProbe.Status） */
+    type AssetProbeStatus = 'pending' | 'running' | 'success' | 'failed';
+
+    /** 探测类型（AssetProbe.Kind） */
+    type AssetProbeKind = 'connect' | 'facts';
+
+    /** 资产探测记录（AssetProbeSerializer 输出，只读） */
+    interface AssetProbeRecord {
+      id: number;
+      hostname: string;
+      kind: AssetProbeKind | string;
+      module: string;
+      status: AssetProbeStatus | string;
+      worker_pool: number | null;
+      workerPoolName: string;
+      attempt: number;
+      result: Record<string, unknown>;
+      error: string;
+      created_at: string | null;
+      updated_at: string | null;
+    }
+
+    /** 触发探测的响应（POST credential-refs/test-connection） */
+    interface ProbeDispatchResult {
+      probeId: number;
+      status: AssetProbeStatus | string;
+    }
   }
 }

@@ -6,9 +6,50 @@ import stat
 import tempfile
 from typing import Any, Mapping
 
+from django.conf import settings
+
 from apps.ops.adapters import CredentialProvider
 
 from .models import CredentialRef
+
+
+def check_secret_ref(secret_ref: str) -> None:
+    """Validate an external secret reference against deployment policy.
+
+    Called both when a credential is created (serializer) and when it is
+    resolved at execution time, so a reference saved under an earlier policy
+    can never silently bypass the current one. Raises ValueError with a
+    user-facing message when the reference cannot be used.
+    """
+    if secret_ref.startswith("env:"):
+        env_name = secret_ref[4:]
+        allowlist = set(getattr(settings, "JOBS_CREDENTIAL_ENV_ALLOWLIST", ()) or ())
+        if not allowlist:
+            raise ValueError(
+                "Environment credential references are disabled for this deployment."
+            )
+        if env_name not in allowlist:
+            raise ValueError(
+                f"Environment variable {env_name} is not in the credential allowlist."
+            )
+        return
+    if secret_ref.startswith("file:"):
+        base = getattr(settings, "JOBS_CREDENTIAL_FILE_DIR", None)
+        if not base:
+            raise ValueError(
+                "File credential references are disabled for this deployment."
+            )
+        path = Path(secret_ref[5:]).expanduser().resolve()
+        if not path.is_relative_to(Path(base).resolve()):
+            raise ValueError(
+                "File credential references must stay inside the dedicated credential directory."
+            )
+        return
+    if secret_ref.startswith("vault://"):
+        raise ValueError(
+            "Vault credential resolution is not configured for this deployment."
+        )
+    raise ValueError("Unsupported secret reference scheme.")
 
 
 class DatabaseCredentialProvider(CredentialProvider):
@@ -52,6 +93,10 @@ class DatabaseCredentialProvider(CredentialProvider):
 
         # 2. External reference
         secret_ref = credential.secret_ref or ""
+        if secret_ref:
+            # Re-validate against the current deployment policy so a
+            # reference saved under an earlier policy cannot bypass it.
+            check_secret_ref(secret_ref)
         if secret_ref.startswith("env:"):
             env_name = secret_ref[4:]
             secret = os.environ.get(env_name)

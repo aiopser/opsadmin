@@ -5,7 +5,9 @@ import re
 
 from common.redaction import REDACTED_VALUE, SENSITIVE_KEY_PATTERN, redact_text
 
-from django.db import OperationalError, transaction
+from django.db import IntegrityError, OperationalError, transaction
+from django.db.models import F, Max
+from django.db.models.functions import Greatest
 from django.utils import timezone
 
 from apps.ops.workflow.events import normalize_runner_event
@@ -265,7 +267,12 @@ def update_host_result_from_event(*, node_run, event):
 
 
 def append_run_event(*, run_id, node_run_id=None, attempt_id=None, event_key, event):
-    """Serialize run events and project once, retrying only bounded database deadlocks."""
+    """Persist a run event, retrying bounded deadlocks.
+
+    Run 行不再全程加锁：sequence 由 (workflow_run, sequence) 唯一约束兜底
+    并发分配（冲突顺延重试），run.event_sequence 以 Greatest 单调推进。
+    同一 node/attempt 的事件由 worker 串行投递，投影不产生并发竞争。
+    """
     if not isinstance(event_key, str) or not event_key or len(event_key) > 200:
         raise ValueError("Event key must contain 1 to 200 characters")
     if not isinstance(event, dict):
@@ -278,9 +285,53 @@ def append_run_event(*, run_id, node_run_id=None, attempt_id=None, event_key, ev
                 raise
 
 
+_SEQUENCE_ATTEMPTS = 6
+
+
+def _create_log_with_sequence(run, node, attempt, scoped_key, safe, base):
+    """并发分配 sequence 后创建事件，返回 (log, created)。
+
+    sequence 撞车（IntegrityError）时顺延重试；event_key 撞车说明同一
+    事件已被并发投递，返回既有事件（幂等，不重复计数）。
+    """
+    payload = dict(
+        workflow_run=run,
+        node_run=node,
+        attempt=attempt,
+        event_key=scoped_key,
+        host_id=safe["host_id"],
+        event_type=safe["event"],
+        message=safe["message"],
+        payload=safe["payload"],
+    )
+    for _ in range(2):
+        for offset in range(_SEQUENCE_ATTEMPTS):
+            try:
+                # savepoint：IntegrityError 后回滚到原子事务点，外层事务可继续
+                with transaction.atomic():
+                    return (
+                        JobEventLog.objects.create(sequence=base + offset, **payload),
+                        True,
+                    )
+            except IntegrityError:
+                previous = JobEventLog.objects.filter(
+                    workflow_run=run, event_key=scoped_key
+                ).first()
+                if previous:
+                    return previous, False
+        # 连续顺延仍未分配成功：以已提交的最大 sequence 重新起算
+        base = (
+            JobEventLog.objects.filter(workflow_run=run).aggregate(m=Max("sequence"))[
+                "m"
+            ]
+            or 0
+        ) + 1
+    raise IntegrityError("Could not allocate a run event sequence")
+
+
 @transaction.atomic
 def _append_once(run_id, node_run_id, attempt_id, event_key, event):
-    run = WorkflowRun.objects.select_for_update().get(pk=run_id)
+    run = WorkflowRun.objects.get(pk=run_id)
     node = (
         NodeRun.objects.filter(pk=node_run_id, workflow_run_id=run_id).first()
         if node_run_id
@@ -321,19 +372,13 @@ def _append_once(run_id, node_run_id, attempt_id, event_key, event):
     )
     if runner_event:
         safe["host_id"] = _resolve_event_host(run, safe)[0]
-    run.event_sequence += 1
-    run.save(update_fields=["event_sequence"])
-    log = JobEventLog.objects.create(
-        workflow_run=run,
-        node_run=node,
-        attempt=attempt,
-        sequence=run.event_sequence,
-        event_key=scoped_key,
-        host_id=safe["host_id"],
-        event_type=safe["event"],
-        message=safe["message"],
-        payload=safe["payload"],
+    log, created = _create_log_with_sequence(
+        run, node, attempt, scoped_key, safe, base=run.event_sequence + 1
     )
+    if created:
+        WorkflowRun.objects.filter(pk=run_id).update(
+            event_sequence=Greatest(F("event_sequence"), log.sequence)
+        )
     if (
         runner_event
         and node

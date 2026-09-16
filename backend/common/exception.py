@@ -10,7 +10,7 @@ from rest_framework.exceptions import (
     ValidationError,
 )
 from rest_framework.views import exception_handler
-from common.redaction import redact_value
+from common.redaction import redact_text, redact_value
 
 from common.api.responses import (
     BAD_REQUEST,
@@ -22,6 +22,21 @@ from common.api.responses import (
 )
 
 logger = logging.getLogger("drf_exception")
+
+
+def _redact_validation_copy(message):
+    """Keep DRF field-error structure but redact secret-shaped text.
+
+    Key-level redaction would replace the whole copy of errors raised on
+    secret-named fields (e.g. secret_ref) with a placeholder and hide the
+    rejection reason from the user; validation copy is fixed policy text,
+    and text-level redaction still guards secret-shaped substrings.
+    """
+    if isinstance(message, dict):
+        return {key: _redact_validation_copy(value) for key, value in message.items()}
+    if isinstance(message, (list, tuple)):
+        return [_redact_validation_copy(item) for item in message]
+    return redact_text(message)
 
 
 def custom_exception_handler(exc, context):
@@ -37,7 +52,10 @@ def custom_exception_handler(exc, context):
             )
     else:
         message = "Internal server error"
-    message = redact_value(message)
+    if isinstance(exc, (ValidationError, ParseError)):
+        message = _redact_validation_copy(message)
+    else:
+        message = redact_value(message)
     logger.error("API error: %s", type(exc).__name__)
 
     if isinstance(exc, (AuthenticationFailed, NotAuthenticated)):

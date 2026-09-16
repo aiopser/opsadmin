@@ -14,7 +14,7 @@ from apps.jobs.models import WorkflowRun
 from apps.jobs.settings_service import get_engine_settings
 from common.workflow.node_types import NodeType
 
-from .dispatch import enqueue_workflow_run
+from .dispatch import enqueue_workflow_run, register_dispatch
 
 
 class InvalidQuickCommand(ValueError):
@@ -131,7 +131,7 @@ def _persist_run(
         1,
     )
     now = timezone.now()
-    return WorkflowRun.objects.create(
+    run = WorkflowRun.objects.create(
         workflow_version=workflow_version,
         run_domain=run_domain,
         execution_kind=execution_kind,
@@ -149,6 +149,9 @@ def _persist_run(
         queue_timeout_seconds=queue_timeout_seconds,
         queue_deadline_at=now + timedelta(seconds=queue_timeout_seconds),
     )
+    # Durable dispatch intent, created in the same transaction as the run row.
+    register_dispatch(workflow_run_id=run.id)
+    return run
 
 
 @transaction.atomic

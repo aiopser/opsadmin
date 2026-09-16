@@ -52,10 +52,6 @@ class BaseRunner(WorkPostRunCleaner):
             os.environ["LANGUAGE"] = candidate
             break
 
-    @classmethod
-    def kill_precess(cls, pid):
-        raise NotImplementedError
-
     @property
     def clean_dir(self):
         if not self.clean_workspace:

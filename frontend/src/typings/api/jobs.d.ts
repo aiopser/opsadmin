@@ -325,6 +325,12 @@ declare namespace Api {
       secret?: string;
     }
 
+    /** 定时任务重叠策略（ScheduledJob.OverlapPolicy） */
+    type ScheduleOverlapPolicy = 'skip' | 'allow' | 'queue';
+
+    /** 定时任务错过策略（ScheduledJob.MisfirePolicy） */
+    type ScheduleMisfirePolicy = 'fire' | 'skip';
+
     /** 定时任务记录（ScheduledJobSerializer：fields="__all__" 蛇形 + 附加驼峰只读） */
     interface ScheduledJobRecord {
       id: number;
@@ -343,6 +349,15 @@ declare namespace Api {
       queue_timeout_seconds: number;
       bypass_host_gateway: boolean;
       enabled: boolean;
+      /** 上次运行仍活跃时的处理策略 */
+      overlap_policy: ScheduleOverlapPolicy | string;
+      /** 错过调度窗口（超过宽限期）后补跑还是跳过 */
+      misfire_policy: ScheduleMisfirePolicy | string;
+      misfire_grace_seconds: number;
+      /** queue 策略下：等待上次运行结束后补投一次 */
+      pending_dispatch: boolean;
+      /** 最近一次跳过原因（overlap/misfire/派发被拒），成功派发后清空 */
+      last_skip_reason: string;
       next_run_at: string | null;
       last_run_at: string | null;
       /** serializer 附加只读字段 */
@@ -370,6 +385,9 @@ declare namespace Api {
       queue_timeout_seconds?: number;
       bypass_host_gateway?: boolean;
       enabled?: boolean;
+      overlap_policy?: ScheduleOverlapPolicy;
+      misfire_policy?: ScheduleMisfirePolicy;
+      misfire_grace_seconds?: number;
     }
 
     /** 定时任务列表查询参数 */

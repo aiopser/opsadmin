@@ -190,6 +190,9 @@ def _process_failed_node(run, node_run):
 
 @transaction.atomic
 def plan_dispatch(workflow_run_id):
+    # Local import: application.dispatch imports this module for node_queue_name.
+    from apps.jobs.application.dispatch import register_dispatch
+
     run = (
         WorkflowRun.objects.select_for_update()
         .select_related("workflow_version", "workflow_version__workflow", "worker_pool")
@@ -394,6 +397,11 @@ def plan_dispatch(workflow_run_id):
             attempt=node_run.attempt_count,
             status=NodeRunAttempt.Status.QUEUED,
             queue_name=node_queue_name(node_type, worker_pool, run.run_domain),
+        )
+        register_dispatch(
+            workflow_run_id=run.id,
+            node_run_id=node_run.id,
+            attempt=node_run.attempt_count,
         )
         queued_node_ids.append(node_run.id)
         if node_type in ANSIBLE_NODE_TYPES:

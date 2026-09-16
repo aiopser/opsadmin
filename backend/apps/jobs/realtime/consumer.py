@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
@@ -10,11 +11,16 @@ from apps.jobs.models import WorkflowRun
 from .access import can_view_run
 from .tickets import consume_ticket
 
+# 订阅时已完成完整鉴权；此处仅周期性复核权限是否被回收，
+# 避免每条通知都触发数据库查询（通知合并后仍可能高频到达）。
+AUTH_RECHECK_SECONDS = 5.0
+
 
 class RunEventsConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
         self.run_id = None
         self.user_id = None
+        self.last_auth_check = 0.0
         self.subscription_timeout = None
         origin = (
             dict(self.scope.get("headers", []))
@@ -80,6 +86,7 @@ class RunEventsConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json({"type": "error", "code": "realtime_unavailable"})
             return
         self.run_id, self.user_id = run_id, user_id
+        self.last_auth_check = time.monotonic()
         if self.subscription_timeout:
             self.subscription_timeout.cancel()
         await self.send_json({"type": "subscribed", "run_id": run_id})
@@ -87,9 +94,12 @@ class RunEventsConsumer(AsyncJsonWebsocketConsumer):
     async def events_available(self, event):
         if event.get("run_id") != self.run_id:
             return
-        if not await self.still_authorized():
-            await self.close(code=4403)
-            return
+        now = time.monotonic()
+        if now - self.last_auth_check >= AUTH_RECHECK_SECONDS:
+            if not await self.still_authorized():
+                await self.close(code=4403)
+                return
+            self.last_auth_check = now
         await self.send_json(
             {
                 "type": "events_available",

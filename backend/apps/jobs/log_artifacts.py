@@ -3,6 +3,7 @@
 import logging
 import re
 from collections.abc import Iterator
+from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,13 +12,17 @@ from django.core.exceptions import SuspiciousFileOperation
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Q, Sum
+from django.utils import timezone
 from django.utils.module_loading import import_string
 
 from common.redaction import redact_text
-from .models import RunLogChunk, WorkflowRun
+from .models import JobEventLog, RunLogChunk, WorkflowRun
 
 logger = logging.getLogger(__name__)
+
+RECOVER_BATCH_SIZE = 100
+PENDING_RETRY_AFTER_SECONDS = 600
 
 
 def job_log_storage():
@@ -30,16 +35,6 @@ def job_log_storage():
     if not config:
         return default_storage
     return import_string(config["BACKEND"])(**(config.get("OPTIONS") or {}))
-
-
-def _chunk_storage(name):
-    """Pick the storage holding a chunk; fall back for pre-dedication files."""
-    storage = job_log_storage()
-    if storage.exists(name):
-        return storage
-    if default_storage.exists(name):
-        return default_storage
-    return storage
 
 
 def _validate_name(storage, run_id: int, name: str) -> str:
@@ -55,14 +50,30 @@ def _validate_name(storage, run_id: int, name: str) -> str:
     return name
 
 
+def _mark_chunk(run_id: int, sequence: int, error: str) -> None:
+    """Persist a durable FAILED state so the recovery sweep retries idempotently."""
+    RunLogChunk.objects.filter(workflow_run_id=run_id, sequence=sequence).update(
+        status=RunLogChunk.Status.FAILED,
+        last_error=str(error)[:255],
+        updated_at=timezone.now(),
+    )
+
+
 @transaction.atomic
-def archive_stdout(*, run_id: int, sequence: int, text: str):
+def _reserve_chunk(run_id: int, sequence: int, text: str):
+    """Reserve capacity and stage a PENDING row in a short DB-only transaction.
+
+    Storage I/O stays outside so a slow backend never extends the run-row lock.
+    Returns (chunk, raw, truncated); chunk is None when the run is at capacity.
+    """
     WorkflowRun.objects.select_for_update().get(pk=run_id)
     existing = RunLogChunk.objects.filter(
         workflow_run_id=run_id, sequence=sequence
     ).first()
-    if existing or not text:
-        return existing
+    if existing and existing.status == RunLogChunk.Status.ARCHIVED:
+        return existing, b"", False
+    if not text:
+        return existing, b"", False
     limit = max(int(settings.JOBS_LOG_MAX_BYTES), 1)
     used = (
         RunLogChunk.objects.filter(workflow_run_id=run_id).aggregate(
@@ -70,10 +81,13 @@ def archive_stdout(*, run_id: int, sequence: int, text: str):
         )["total"]
         or 0
     )
+    # PENDING/FAILED rows still hold reserved bytes; recycle them on retry.
     remaining = max(limit - used, 0)
+    if existing:
+        remaining += existing.byte_count
     if not remaining:
         RunLogChunk.objects.filter(workflow_run_id=run_id).update(truncated=True)
-        return None
+        return None, b"", False
     # Limit before encoding, so an arbitrarily large callback cannot allocate an unbounded byte buffer.
     safe = redact_text(text)
     raw = safe[:remaining].encode("utf-8")
@@ -82,21 +96,58 @@ def archive_stdout(*, run_id: int, sequence: int, text: str):
         clipped = raw[:remaining].decode("utf-8", errors="ignore")
         clipped = re.sub(r"\x1b\[[0-?]*[ -/]*$", "", clipped)
         raw = clipped.encode("utf-8")
+    if existing:
+        existing.byte_count = len(raw)
+        existing.status = RunLogChunk.Status.PENDING
+        existing.last_error = ""
+        existing.save(
+            update_fields=["byte_count", "status", "last_error", "updated_at"]
+        )
+        return existing, raw, truncated
+    chunk = RunLogChunk.objects.create(
+        workflow_run_id=run_id,
+        sequence=sequence,
+        byte_count=len(raw),
+        status=RunLogChunk.Status.PENDING,
+    )
+    return chunk, raw, truncated
+
+
+def archive_stdout(*, run_id: int, sequence: int, text: str):
+    chunk, raw, truncated = _reserve_chunk(run_id=run_id, sequence=sequence, text=text)
+    if chunk is None:
+        return None
+    if not raw:
+        return chunk
     storage = job_log_storage()
     name = f"job-logs/run-{run_id}/{sequence}-{uuid4().hex}.log"
-    name = storage.save(name, ContentFile(raw), max_length=256)
-    _validate_name(storage, run_id, name)
     try:
-        return RunLogChunk.objects.create(
-            workflow_run_id=run_id,
-            sequence=sequence,
-            storage_name=name,
-            byte_count=len(raw),
-            truncated=truncated,
+        name = storage.save(name, ContentFile(raw), max_length=256)
+        _validate_name(storage, run_id, name)
+    except Exception as exc:
+        _mark_chunk(run_id, sequence, f"storage write failed: {type(exc).__name__}")
+        raise
+    try:
+        chunk.storage_name = name
+        chunk.byte_count = len(raw)
+        chunk.truncated = truncated
+        chunk.status = RunLogChunk.Status.ARCHIVED
+        chunk.last_error = ""
+        chunk.save(
+            update_fields=[
+                "storage_name",
+                "byte_count",
+                "truncated",
+                "status",
+                "last_error",
+                "updated_at",
+            ]
         )
     except Exception:
         storage.delete(name)
+        _mark_chunk(run_id, sequence, "database finalize failed")
         raise
+    return chunk
 
 
 def archive_event_stdout(run_id: int, sequence: int, event: dict) -> None:
@@ -115,15 +166,90 @@ def archive_event_stdout(run_id: int, sequence: int, event: dict) -> None:
         logger.warning("Run output archive unavailable: %s", type(exc).__name__)
 
 
+def rearchive_failed_chunks(now=None):
+    """Rebuild output text from persisted events and retry failed/stuck writes."""
+    now = now or timezone.now()
+    retry_before = now - timedelta(seconds=PENDING_RETRY_AFTER_SECONDS)
+    stale = list(
+        RunLogChunk.objects.filter(
+            Q(status=RunLogChunk.Status.FAILED)
+            | Q(status=RunLogChunk.Status.PENDING, updated_at__lt=retry_before)
+        )
+        .order_by("updated_at")[:RECOVER_BATCH_SIZE]
+    )
+    retried = 0
+    for chunk in stale:
+        event = JobEventLog.objects.filter(
+            workflow_run_id=chunk.workflow_run_id, sequence=chunk.sequence
+        ).first()
+        parts = []
+        if event:
+            result = (event.payload.get("event_data") or {}).get("res") or {}
+            if isinstance(result, dict):
+                parts = [
+                    str(result[key])
+                    for key in ("stdout", "stderr", "msg")
+                    if result.get(key)
+                ]
+        if not parts:
+            # No recoverable output (e.g. no_log): drop the placeholder row.
+            chunk.delete()
+            continue
+        text = "\n".join(parts)
+        if not text.endswith("\n"):
+            text += "\n"
+        try:
+            archive_stdout(
+                run_id=chunk.workflow_run_id, sequence=chunk.sequence, text=text
+            )
+            retried += 1
+        except Exception as exc:
+            logger.warning("Run output rearchive unavailable: %s", type(exc).__name__)
+    return retried
+
+
+def purge_expired_archives(now=None):
+    """Delete archived chunks past the retention window, files before rows."""
+    now = now or timezone.now()
+    retention_days = getattr(settings, "JOBS_LOG_RETENTION_DAYS", 30)
+    cutoff = now - timedelta(days=retention_days)
+    expired = list(
+        RunLogChunk.objects.filter(
+            status=RunLogChunk.Status.ARCHIVED,
+            created_at__lt=cutoff,
+        )
+        .order_by("created_at")
+        .select("workflow_run_id", "sequence", "storage_name")[:RECOVER_BATCH_SIZE]
+    )
+    if not expired:
+        return 0
+    storage = job_log_storage()
+    purged = 0
+    for chunk in expired:
+        try:
+            if chunk.storage_name:
+                name = _validate_name(storage, chunk.workflow_run_id, chunk.storage_name)
+                if storage.exists(name):
+                    storage.delete(name)
+            chunk.delete()
+            purged += 1
+        except Exception as exc:
+            logger.warning("Run log purge unavailable: %s", type(exc).__name__)
+            # Keep the row so the next pass retries the delete.
+    return purged
+
+
 def iter_run_stdout(run_id: int, *, block_size: int = 65536) -> Iterator[bytes]:
     if not 1 <= block_size <= 65536:
         raise ValueError("Invalid log block size")
+    storage = job_log_storage()
     for chunk in (
-        RunLogChunk.objects.filter(workflow_run_id=run_id)
+        RunLogChunk.objects.filter(
+            workflow_run_id=run_id, status=RunLogChunk.Status.ARCHIVED
+        )
         .order_by("sequence")
         .iterator(chunk_size=100)
     ):
-        storage = _chunk_storage(chunk.storage_name)
         name = _validate_name(storage, run_id, chunk.storage_name)
         with storage.open(name, "rb") as stream:
             while data := stream.read(block_size):
