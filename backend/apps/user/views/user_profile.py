@@ -8,8 +8,9 @@ from drf_spectacular.utils import extend_schema, inline_serializer
 from common.api.schema import api_message_response, generate_crud_schema
 from common.api.viewsets import CommaSeparatedBulkDeleteMixin, StandardModelViewSet
 from common.api.responses import api_error_response, api_ok_response
+from common.system_policy import validate_password_policy
 from ..models import UserProfile
-from ..serializers import UserProfileSerializer
+from ..serializers import UserProfileSerializer, UserProfileUpdateSerializer
 
 
 @generate_crud_schema(verbose_name="用户", tags=["用户中心"])
@@ -73,16 +74,19 @@ class UserProfileViewSet(CommaSeparatedBulkDeleteMixin, StandardModelViewSet):
         return [item for item in values if item]
 
     def get_permissions(self):
-        if getattr(self, "action", None) in {"profile", "password"}:
+        if getattr(self, "action", None) in {"profile", "update_profile", "password"}:
             return [IsAuthenticated()]
         return super().get_permissions()
 
     def create(self, request, *args, **kwargs):
         try:
-            serializer = UserProfileSerializer(data=request.data)
+            initial_password = self._get_initial_password(request)
+            validate_password_policy(initial_password)
+            serializer = self.get_serializer(data=request.data)
             serializer.is_valid(raise_exception=True)
             user_obj = serializer.save()
-            user_obj.set_password(self._get_initial_password(request))
+            user_obj.set_password(initial_password)
+            user_obj.must_change_password = True
             user_obj.save()
             return api_ok_response(data=serializer.data)
         except Exception as e:
@@ -90,6 +94,8 @@ class UserProfileViewSet(CommaSeparatedBulkDeleteMixin, StandardModelViewSet):
 
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
+        if self._is_super_admin(instance) and not request.user.is_superuser:
+            return api_error_response(message="只有超级管理员可维护超级管理员账户")
         data = request.data.copy()
         if "icon" in data and data.get("icon"):
             if not isinstance(data.get("icon"), InMemoryUploadedFile):
@@ -114,9 +120,13 @@ class UserProfileViewSet(CommaSeparatedBulkDeleteMixin, StandardModelViewSet):
         ids = [item for item in raw_pk.split(",") if item]
 
         if len(ids) > 1:
-            protected_count = self.get_queryset().filter(
-                Q(pk__in=ids, is_superuser=True) | Q(pk__in=ids, username="admin")
-            ).count()
+            protected_count = (
+                self.get_queryset()
+                .filter(
+                    Q(pk__in=ids, is_superuser=True) | Q(pk__in=ids, username="admin")
+                )
+                .count()
+            )
             if protected_count:
                 return api_error_response(message="默认超管用户不能删除")
             deleted, _ = self.get_queryset().filter(pk__in=ids).delete()
@@ -169,15 +179,15 @@ class UserProfileViewSet(CommaSeparatedBulkDeleteMixin, StandardModelViewSet):
     )
     @action(methods=["put"], detail=True, url_path="password/reset")
     def password_reset(self, request, pk):
-        """Reset password, 兼容 <new_password>/<password> 与 query password."""
+        """Reset password using request-body fields only."""
         instance = self.get_object()
-        new_pwd = (
-            request.data.get("new_password")
-            or request.data.get("password")
-            or request.query_params.get("password")
-        )
+        if self._is_super_admin(instance) and not request.user.is_superuser:
+            return api_error_response(message="只有超级管理员可重置超级管理员密码")
+        new_pwd = request.data.get("new_password") or request.data.get("password")
         if new_pwd:
+            validate_password_policy(new_pwd.strip())
             instance.set_password(new_pwd.strip())
+            instance.must_change_password = True
             instance.save()
             return api_ok_response(data=f"{instance.name} 账户密码修改成功!")
         return api_error_response(message="<name>,<new_password> 为必传参数")
@@ -194,12 +204,17 @@ class UserProfileViewSet(CommaSeparatedBulkDeleteMixin, StandardModelViewSet):
         return api_ok_response(serializer.data)
 
     @extend_schema(summary="更新当前用户资料", tags=["用户中心"])
-    @action(methods=["PUT"], detail=False, url_path="profile")
+    @profile.mapping.put
     def update_profile(self, request):
-        serializer = self.get_serializer(request.user, data=request.data, partial=True)
+        serializer = UserProfileUpdateSerializer(
+            request.user,
+            data=request.data,
+            partial=True,
+            context=self.get_serializer_context(),
+        )
         serializer.is_valid(raise_exception=True)
         serializer.save(request=request)
-        return api_ok_response(serializer.data)
+        return api_ok_response(self.get_serializer(request.user).data)
 
     @extend_schema(summary="修改当前用户密码", tags=["用户中心"])
     @action(methods=["PUT"], detail=False, url_path="password")
@@ -211,6 +226,7 @@ class UserProfileViewSet(CommaSeparatedBulkDeleteMixin, StandardModelViewSet):
             return api_error_response("原密码和新密码不能为空")
         if not user.check_password(old_pwd):
             return api_error_response("原密码错误")
+        validate_password_policy(str(new_pwd).strip())
         user.set_password(str(new_pwd).strip())
         user.save(update_fields=["password"])
         return api_ok_response("密码修改成功")
@@ -228,4 +244,3 @@ class UserProfileViewSet(CommaSeparatedBulkDeleteMixin, StandardModelViewSet):
                 for user in users
             ]
         )
-

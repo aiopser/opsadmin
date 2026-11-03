@@ -26,6 +26,40 @@ from apps.permission.views.menu import MenuViewSet
 from apps.permission.views.role import RoleViewSet
 
 
+class MenuLayoutSyncTests(TestCase):
+    def test_layout_sync_preserves_custom_and_cleared_icons(self):
+        from io import StringIO
+        from django.core.management import call_command
+
+        seed_system_settings(bind_superusers=False)
+        config = Menu.objects.get(name="Config")
+        user = Menu.objects.get(name="User")
+        original_order = config.order
+        config.icon = "custom-settings"
+        config.icon_type = "2"
+        config.show_icon = True
+        config.order = 999
+        config.save()
+        user.icon = ""
+        user.show_icon = False
+        user.save()
+        for _ in range(2):
+            call_command(
+                "init_system_settings",
+                sync_menu_layout=True,
+                skip_bind_superusers=True,
+                stdout=StringIO(),
+            )
+        config.refresh_from_db()
+        user.refresh_from_db()
+        self.assertEqual(config.icon, "custom-settings")
+        self.assertEqual(config.icon_type, "2")
+        self.assertTrue(config.show_icon)
+        self.assertEqual(config.order, original_order)
+        self.assertEqual(user.icon, "")
+        self.assertFalse(user.show_icon)
+
+
 class PermissionModelTests(TestCase):
     def test_role_permission_helpers(self):
         role = Role.objects.create(name="ops")
@@ -193,9 +227,26 @@ class SeedSystemSettingsTests(TestCase):
     def test_quick_execution_button_grants_creation_and_target_reads(self):
         seed_system_settings(bind_superusers=False)
         button = MenuButton.objects.get(code="jobs.quick_command:execute")
-        self.assertEqual(button.menu.component, "view.ops_quick-execute")
+        self.assertEqual(button.menu.component, "view.ops_quick-execute_script")
         codes = set(button.permission.values_list("code", flat=True))
         self.assertTrue({"jobs.quick_command.create", "cmdb.host.list", "jobs.worker_pool.list"} <= codes)
+        # 执行链路经 snapshot_targets/resolve_worker_pool，需补齐 detail 级权限
+        self.assertTrue({"cmdb.host.detail", "cmdb.credential_ref.detail", "jobs.worker_pool.detail"} <= codes)
+
+    def test_quick_execution_split_buttons_bind_run_creation_apis(self):
+        seed_system_settings(bind_superusers=False)
+        playbook = MenuButton.objects.get(code="jobs.playbook_run:execute")
+        self.assertEqual(playbook.menu.component, "view.ops_quick-execute_playbook")
+        self.assertIn(
+            "jobs.playbook_run.create",
+            playbook.permission.values_list("code", flat=True),
+        )
+        module = MenuButton.objects.get(code="jobs.module_run:execute")
+        self.assertEqual(module.menu.component, "view.ops_quick-execute_module")
+        self.assertIn(
+            "jobs.module_run.create",
+            module.permission.values_list("code", flat=True),
+        )
 
     def test_run_read_buttons_bind_domain_specific_events_and_tickets(self):
         seed_system_settings(bind_superusers=False)
@@ -222,11 +273,15 @@ class SeedSystemSettingsTests(TestCase):
         codes = set(menu.permission.values_list("code", flat=True))
         self.assertTrue({"automation.workflow_version.graph", "automation.node_resource.list", "automation.notification_template.list"} <= codes)
 
-    def test_task_list_uses_existing_soybean_run_component_and_retry_actions(self):
+    def test_task_list_and_execution_history_use_separate_menus(self):
         seed_system_settings(bind_superusers=False)
-        menu = Menu.objects.get(permission__code="menu.task.list")
-        self.assertEqual(menu.component, "view.task_run")
-        button = MenuButton.objects.get(code="jobs.workflow_run:retry", menu=menu)
+        task_list = Menu.objects.get(permission__code="menu.task.list")
+        self.assertEqual(task_list.component, "view.task_run")
+        self.assertFalse(task_list.buttons.filter(code="jobs.workflow_run:retry").exists())
+
+        history_menu = Menu.objects.get(permission__code="menu.task.execution-history")
+        self.assertEqual(history_menu.component, "view.task_execution-history")
+        button = MenuButton.objects.get(code="jobs.workflow_run:retry", menu=history_menu)
         self.assertTrue({"jobs.workflow_run.retry_failed", "jobs.workflow_run.rerun", "jobs.node_run.retry"} <= set(button.permission.values_list("code", flat=True)))
 
     def test_seed_converts_legacy_menu_permissions_to_buttons_in_place(self):
@@ -450,9 +505,11 @@ class SeedSystemSettingsTests(TestCase):
         self.assertEqual(first_counts, second_counts)
 
 
-    def test_system_log_menu_binds_related_api_permissions(self):
+    def test_operation_log_menu_moves_to_audit_and_binds_related_api_permissions(self):
         seed_system_settings(bind_superusers=False)
         log_menu = Menu.objects.get(name="Log")
+        self.assertEqual(log_menu.pid.name, "Audit")
+        self.assertEqual(log_menu.title, "操作日志")
 
         codes = set(
             log_menu.permission.filter(type=Permission.PermissionType.API).values_list(
@@ -464,6 +521,28 @@ class SeedSystemSettingsTests(TestCase):
         self.assertIn("logs.list", codes)
         self.assertIn("logs.analytics.overview", codes)
         self.assertIn("logs.analytics.trend", codes)
+        login_menu = Menu.objects.get(name="audit_login")
+        self.assertEqual(login_menu.pid.name, "Audit")
+        self.assertIn(
+            "audit.login_event.list",
+            set(login_menu.permission.values_list("code", flat=True)),
+        )
+
+    def test_existing_system_log_role_keeps_operation_log_access_after_seed(self):
+        legacy = Permission.objects.create(
+            code="menu.system.log",
+            name="旧系统日志菜单",
+            type=Permission.PermissionType.MENU,
+            is_system=True,
+        )
+        role = Role.objects.create(name="existing_log_reader")
+        role.permission.add(legacy)
+
+        seed_system_settings(bind_superusers=False)
+
+        self.assertFalse(Permission.objects.filter(code="menu.system.log").exists())
+        self.assertTrue(role.permission.filter(code="menu.audit.operations").exists())
+        self.assertTrue(role.permission.filter(code="logs.list").exists())
 
     def test_cmdb_host_menu_binds_read_apis_and_buttons_bind_write_apis(self):
         seed_system_settings(bind_superusers=False)
@@ -486,6 +565,59 @@ class SeedSystemSettingsTests(TestCase):
         delete_codes = set(delete_button.permission.values_list("code", flat=True))
         self.assertIn("cmdb.host:delete", delete_codes)
         self.assertIn("cmdb.host.delete", delete_codes)
+
+    def test_tag_button_merged_into_host_menu_and_source_owned(self):
+        seed_system_settings(bind_superusers=False)
+        host_menu = Menu.objects.get(name="cmdb_host")
+        source_menu = Menu.objects.get(name="cmdb_source")
+
+        # 标签管理菜单已移除，标签新建按钮并入主机资产菜单
+        self.assertFalse(Menu.objects.filter(name="cmdb_tag").exists())
+        self.assertEqual(MenuButton.objects.get(code="cmdb.tag:create").menu, host_menu)
+        self.assertEqual(MenuButton.objects.get(code="cmdb.asset_source:sync").menu, source_menu)
+        self.assertFalse(
+            MenuButton.objects.filter(code__in=("cmdb.tag:update", "cmdb.tag:delete")).exists()
+        )
+        self.assertFalse(Permission.objects.filter(code__in=("cmdb.tag:update", "cmdb.tag:delete")).exists())
+        self.assertIn(
+            "cmdb.asset_sync_record.list",
+            set(source_menu.permission.values_list("code", flat=True)),
+        )
+
+        # 旧库残留的标签编辑按钮权限在重播种后被清理
+        Permission.objects.create(
+            code="cmdb.tag:update",
+            name="标签编辑",
+            type=Permission.PermissionType.BUTTON,
+            is_system=True,
+        )
+        seed_system_settings(bind_superusers=False)
+        self.assertFalse(Permission.objects.filter(code="cmdb.tag:update").exists())
+        self.assertEqual(MenuButton.objects.get(code="cmdb.tag:create").menu, host_menu)
+
+    def test_existing_cmdb_button_role_keeps_permissions(self):
+        tag_write = Permission.objects.create(
+            code="cmdb.tag:create",
+            name="标签新增",
+            type=Permission.PermissionType.BUTTON,
+            is_system=True,
+        )
+        source_write = Permission.objects.create(
+            code="cmdb.asset_source:sync",
+            name="来源同步",
+            type=Permission.PermissionType.BUTTON,
+            is_system=True,
+        )
+        role = Role.objects.create(name="cmdb_editor")
+        role.permission.add(tag_write, source_write)
+
+        seed_system_settings(bind_superusers=False)
+
+        codes = set(role.permission.values_list("code", flat=True))
+        # 标签新建权限保留（标签创建已并入主机表单）
+        self.assertIn("cmdb.tag:create", codes)
+        self.assertIn("cmdb.asset_source:read", codes)
+        self.assertIn("cmdb.asset_sync_record.list", codes)
 
 
 
@@ -796,6 +928,42 @@ class RoleFieldTests(TestCase):
 
 
 class DynamicRouteTests(TestCase):
+    def test_menu_repair_preserves_ids_icons_and_real_links(self):
+        from importlib import import_module
+        from types import SimpleNamespace
+        from django.apps import apps
+
+        config = Menu.objects.get(component="system/config/index")
+        config.icon = "carbon:settings-edit"
+        config.href = config.icon
+        config.save(update_fields=["icon", "href"])
+        user = Menu.objects.get(component="system/user/index")
+        user.path = "/User"
+        user.href = "https://example.com/docs"
+        user.save(update_fields=["path", "href"])
+        permission_ids = list(user.permission.values_list("id", flat=True))
+        repair = import_module("apps.permission.migrations.0005_repair_menu_icon_links")
+        editor = SimpleNamespace(connection=SimpleNamespace(alias="default"))
+        repair.repair_menu_data(apps, editor)
+        repair.repair_menu_data(apps, editor)
+        config.refresh_from_db()
+        user.refresh_from_db()
+        self.assertIsNone(config.href)
+        self.assertEqual(config.icon, "carbon:settings-edit")
+        self.assertEqual(user.path, "user")
+        self.assertEqual(user.href, "https://example.com/docs")
+        self.assertEqual(list(user.permission.values_list("id", flat=True)), permission_ids)
+
+    def test_icon_value_in_external_link_does_not_override_config_navigation(self):
+        menu = Menu.objects.get(component="system/config/index")
+        menu.icon = "carbon:settings-edit"
+        menu.href = menu.icon
+        menu.save(update_fields=["icon", "href"])
+        system = next(r for r in self._get_routes()["routes"] if r["name"] == "system")
+        config = next(r for r in system["children"] if r["name"] == "manage_config")
+        self.assertEqual(config["path"], "/manage/config")
+        self.assertNotIn("href", config["meta"])
+
     def setUp(self):
         seed_system_settings(bind_superusers=False)
         self.user = get_user_model().objects.create_superuser(
@@ -820,6 +988,34 @@ class DynamicRouteTests(TestCase):
         self.assertEqual(detail["name"], "task_run-detail")
         self.assertEqual(detail["path"], "/task/run-detail/:id")
         self.assertTrue(detail["meta"]["hideInMenu"])
+
+        ops = next(route for route in data["routes"] if route["path"] == "/ops")
+        ops_detail = next(route for route in ops["children"] if route["component"] == "view.ops_run-detail")
+        self.assertEqual(ops_detail["name"], "ops_run-detail")
+        self.assertEqual(ops_detail["path"], "/ops/run-detail/:id")
+        self.assertTrue(ops_detail["meta"]["hideInMenu"])
+
+    def test_action_permissions_expose_only_matching_hidden_run_routes(self):
+        role = Role.objects.create(name="route-operator")
+        role.permission.add(
+            Permission.objects.get(code="jobs.workflow_run:create"),
+            Permission.objects.get(code="ops.workflow_run:read"),
+        )
+        user = get_user_model().objects.create_user(
+            username="route-operator", password="123456",
+            email="route-operator@example.com", phone="13800000123",
+        )
+        user.role.add(role)
+
+        data = self._get_routes(user)
+        visible_names = {
+            child["name"]
+            for root in data["routes"]
+            for child in root.get("children", [])
+        }
+        self.assertIn("task_run-create", visible_names)
+        self.assertIn("ops_run-detail", visible_names)
+        self.assertNotIn("task_run-detail", visible_names)
 
     def test_routes_response_matches_soybean_user_route_shape(self):
         data = self._get_routes()
@@ -849,6 +1045,38 @@ class DynamicRouteTests(TestCase):
         self.assertEqual(user_route["meta"]["title"], "用户管理")
         # 按钮不再出现在路由树中
         self.assertNotIn("buttons", user_route)
+
+    def test_legacy_component_with_accidental_view_prefix_still_resolves(self):
+        menu = Menu.objects.get(component="system/user/index")
+        menu.component = "view.system/user/index"
+        menu.path = "/User"
+        menu.save(update_fields=["component", "path"])
+        data = self._get_routes()
+        system = next(route for route in data["routes"] if route["name"] == "system")
+        user = next(child for child in system["children"] if child["name"] == "manage_user")
+        self.assertEqual(user["component"], "view.manage_user")
+        self.assertEqual(user["path"], "/manage/user")
+
+    def test_system_pages_saved_as_legacy_route_names_remain_navigable(self):
+        pages = {
+            "User": ("system/user/index", "manage_user"),
+            "Role": ("system/role/index", "manage_role"),
+            "SysMenu": ("system/menu/index", "manage_menu"),
+            "Dept": ("system/dept/index", "manage_dept"),
+            "Dict": ("system/dict/index", "manage_dict"),
+            "Config": ("system/config/index", "manage_config"),
+        }
+        for name, (legacy, _) in pages.items():
+            menu = Menu.objects.get(component=legacy)
+            menu.component = f"view.{name}"
+            menu.path = f"/{name}"
+            menu.save(update_fields=["component", "path"])
+        data = self._get_routes()
+        system = next(route for route in data["routes"] if route["name"] == "system")
+        actual = {child["name"]: child for child in system["children"]}
+        for _, expected in pages.values():
+            self.assertIn(expected, actual)
+            self.assertEqual(actual[expected]["component"], f"view.{expected}")
 
     def test_routes_home_resolves_from_role_home_path(self):
         role = Role.objects.create(name="home_tester", home_path="config")
@@ -931,6 +1159,15 @@ class DynamicRouteTests(TestCase):
 
 
 class MenuRouteMetaSerializerTests(TestCase):
+    def test_icon_identifier_is_not_a_valid_external_link(self):
+        serializer = MenuSerializer(data={
+            "type": "M", "routeName": "Config", "routePath": "config",
+            "title": "系统配置", "component": "system/config/index",
+            "href": "carbon:settings-edit", "sort": 7,
+        })
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("href", serializer.errors)
+
     def test_menu_serializer_round_trips_route_meta_fields(self):
         serializer = MenuSerializer(
             data={

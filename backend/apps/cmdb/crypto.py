@@ -7,12 +7,22 @@ Secrets are stored as url-safe base64 tokens in the database.
 
 from cryptography.fernet import Fernet, InvalidToken
 from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 
 _ENCRYPTED_PLACEHOLDER = "$encrypted$"
 
 
 def _get_fernet() -> Fernet:
-    return Fernet(settings.CREDENTIAL_ENCRYPTION_KEY.encode())
+    key = settings.CREDENTIAL_ENCRYPTION_KEY
+    if not key:
+        # 未配置时 Fernet("") 会抛难以定位的裸 ValueError，这里给出可操作的指引
+        raise ImproperlyConfigured(
+            "CREDENTIAL_ENCRYPTION_KEY is not configured. Set the "
+            "DEVOPS_CREDENTIAL_ENCRYPTION_KEY environment variable "
+            '(generate with: python -c "from cryptography.fernet import Fernet; '
+            'print(Fernet.generate_key().decode())")'
+        )
+    return Fernet(key.encode())
 
 
 def encrypt_secret(plaintext: str) -> str:

@@ -16,6 +16,7 @@
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import AuthenticationFailed, ValidationError
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.settings import api_settings
@@ -30,6 +31,7 @@ from common.api.responses import (
 from common.api.schema import api_envelope_serializer, api_message_response
 from common.api.views import StandardApiView, StandardOpenApiView
 from common.auth.jwt import MyTokenSerializer
+from apps.audit_center.services import create_domain_audit_event
 from ..models import UserProfile
 from ..serializers import UserProfileSerializer
 
@@ -68,6 +70,29 @@ def _format_login_error(error):
     if "username" in message.lower() or "password" in message.lower():
         return "用户名或密码错误"
     return "登录失败"
+
+
+def _record_login_attempt(request, *, actor=None, result, reason):
+    raw_username = request.data.get("username", "")
+    username = raw_username.strip()[:150] if isinstance(raw_username, str) else ""
+    create_domain_audit_event(
+        actor=actor,
+        action=f"auth.login.{result}",
+        resource_type="login",
+        resource_id=username,
+        after={"reason": reason},
+        request=request,
+        domain="security",
+        result=result,
+    )
+
+
+def _login_failure_reason(error, is_bad_request):
+    if is_bad_request:
+        return "invalid_request"
+    if isinstance(error, (AuthenticationFailed, ValidationError)):
+        return "authentication_failed"
+    return "internal_error"
 
 
 class LoginApiView(StandardOpenApiView):
@@ -110,6 +135,11 @@ class LoginApiView(StandardOpenApiView):
             serializer.is_valid(raise_exception=True)
         except Exception as e:
             is_bad_request = _is_bad_login_request(e)
+            _record_login_attempt(
+                request,
+                result="failure",
+                reason=_login_failure_reason(e, is_bad_request),
+            )
             return api_error_response(
                 _format_login_error(e),
                 code=BAD_REQUEST if is_bad_request else UNAUTHORIZED,
@@ -119,6 +149,9 @@ class LoginApiView(StandardOpenApiView):
                     else status.HTTP_401_UNAUTHORIZED
                 ),
             )
+        _record_login_attempt(
+            request, actor=serializer.user, result="success", reason="authenticated"
+        )
         return api_ok_response(serializer.validated_data)
 
 
@@ -161,7 +194,10 @@ class RefreshTokenApiView(StandardOpenApiView):
         try:
             refresh = RefreshToken(raw_refresh)
             if not UserProfile.objects.filter(
-                pk=refresh[api_settings.USER_ID_CLAIM], is_active=True, job_status=True
+                pk=refresh[api_settings.USER_ID_CLAIM],
+                is_active=True,
+                job_status=True,
+                auth_version=refresh.get("auth_version", 0),
             ).exists():
                 raise TokenError("User unavailable")
             access = refresh.access_token
@@ -189,7 +225,9 @@ class UserInfoApiView(StandardApiView):
     @extend_schema(
         summary="获取当前登录用户信息",
         tags=["认证中心"],
-        responses=api_envelope_serializer("AuthUserInfoResponse", UserProfileSerializer),
+        responses=api_envelope_serializer(
+            "AuthUserInfoResponse", UserProfileSerializer
+        ),
     )
     def get(self, request, *args, **kwargs):
         user = request.user
@@ -226,7 +264,8 @@ class LogoutApiView(StandardApiView):
             refresh.blacklist()
         except (TokenError, KeyError, TypeError, ValueError):
             return api_error_response(
-                "Invalid refresh token", code=BAD_REQUEST,
+                "Invalid refresh token",
+                code=BAD_REQUEST,
                 http_status=status.HTTP_400_BAD_REQUEST,
             )
         return api_ok_response(data="ok")

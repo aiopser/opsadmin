@@ -1,5 +1,5 @@
 <script setup lang="tsx">
-import { computed, ref } from 'vue';
+import { ref } from 'vue';
 import {
   fetchAddWorkerPool,
   fetchDeleteWorkerPool,
@@ -23,10 +23,10 @@ const searchParams = ref(getInitSearchParams());
 const executionKindOptions = ['workflow', 'quick_command', 'playbook', 'module'];
 
 const executionKindText: Record<string, string> = {
-  workflow: '工作流',
-  quick_command: '快速命令',
+  workflow: '流程',
+  quick_command: '脚本命令',
   playbook: 'Playbook',
-  module: 'Module'
+  module: 'Ansible 模块'
 };
 
 const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagination } = useUIPaginatedTable({
@@ -65,7 +65,7 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
       align: 'center',
       formatter: row => <ElTag type={row.isActive ? 'success' : 'info'}>{row.isActive ? '启用' : '停用'}</ElTag>
     },
-    { prop: 'concurrencyLimit', label: '并发限制', width: 100, align: 'center' },
+    { prop: 'concurrencyLimit', label: '并发限制', width: 100, align: 'center', className: 'tabular-nums' },
     {
       prop: 'executionKinds',
       label: '执行类型',
@@ -95,7 +95,7 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
           <ElButton type="primary" plain size="small" onClick={() => openOperateDrawer('edit', row)}>
             编辑
           </ElButton>
-          <ElPopconfirm title="确认删除该 Worker 池？" onConfirm={() => handleDelete(row.id)}>
+          <ElPopconfirm title="确认删除该执行节点池？" onConfirm={() => handleDelete(row.id)}>
             {{
               reference: () => (
                 <ElButton type="danger" plain size="small">
@@ -109,8 +109,6 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
     }
   ]
 });
-
-const hasFilter = computed(() => Boolean(searchParams.value.search));
 
 function resetSearchParams() {
   searchParams.value = getInitSearchParams();
@@ -198,7 +196,7 @@ async function handleSubmit() {
   submitting.value = false;
 
   if (!error) {
-    window.$message?.success(operateType.value === 'add' ? '新增成功' : '修改成功');
+    window.$notification?.success(operateType.value === 'add' ? '新增成功' : '修改成功');
     drawerVisible.value = false;
     getData();
   }
@@ -208,7 +206,7 @@ async function handleDelete(id: number) {
   const { error } = await fetchDeleteWorkerPool(id);
 
   if (!error) {
-    window.$message?.success('删除成功');
+    window.$notification?.success('删除成功');
     getData();
   }
 }
@@ -216,28 +214,23 @@ async function handleDelete(id: number) {
 
 <template>
   <div class="min-h-500px flex-col-stretch gap-16px overflow-hidden lt-sm:overflow-auto">
-    <ElCard class="card-wrapper">
-      <ElForm :model="searchParams" label-width="70px" inline @submit.prevent>
+    <SearchPanel @reset="resetSearchParams" @search="getDataByPage">
+      <ElForm :model="searchParams" label-width="80px" @submit.prevent="getDataByPage">
         <ElFormItem label="关键词">
           <ElInput
             v-model="searchParams.search"
             clearable
             placeholder="编码/名称/队列"
-            class="w-240px"
             @keyup.enter="getDataByPage()"
           />
         </ElFormItem>
-        <ElFormItem>
-          <ElButton type="primary" @click="getDataByPage()">查询</ElButton>
-          <ElButton :disabled="!hasFilter" @click="resetSearchParams">重置</ElButton>
-        </ElFormItem>
       </ElForm>
-    </ElCard>
+    </SearchPanel>
 
     <ElCard class="card-wrapper sm:flex-1-hidden">
       <template #header>
-        <div class="flex items-center justify-between">
-          <p>执行器管理</p>
+        <div class="flex flex-wrap items-center justify-between gap-8px">
+          <p>执行节点池</p>
           <TableHeaderOperation
             v-model:columns="columnChecks"
             :loading="loading"
@@ -255,9 +248,9 @@ async function handleDelete(id: number) {
           </TableHeaderOperation>
         </div>
       </template>
-      <div class="h-[calc(100%-52px)]">
-        <ElTable v-loading="loading" height="100%" border class="sm:h-full" :data="data" row-key="id">
-          <ElTableColumn v-for="col in columns" :key="col.prop" v-bind="(col as any)" />
+      <div class="h-[calc(100%-52px)] min-w-0 overflow-x-auto">
+        <ElTable v-loading="loading" height="100%" border class="min-w-900px sm:h-full" :data="data" row-key="id">
+          <ElTableColumn v-for="col in columns" :key="col.prop" v-bind="col" />
         </ElTable>
       </div>
       <div class="mt-20px flex justify-end">
@@ -271,24 +264,53 @@ async function handleDelete(id: number) {
       </div>
     </ElCard>
 
-    <ElDrawer v-model="drawerVisible" :title="operateType === 'add' ? '新增执行器' : '编辑执行器'" size="440px">
-      <ElForm ref="formRef" :model="formModel" :rules="formRules" label-width="90px">
+    <ElDrawer
+      v-model="drawerVisible"
+      :title="operateType === 'add' ? '新增执行节点池' : '编辑执行节点池'"
+      size="min(680px, 100%)"
+    >
+      <ElForm
+        ref="formRef"
+        :model="formModel"
+        :rules="formRules"
+        label-position="top"
+        label-suffix="："
+        require-asterisk-position="left"
+      >
         <ElFormItem label="编码" prop="code">
           <ElInput v-model="formModel.code" :disabled="operateType === 'edit'" placeholder="如 default" />
         </ElFormItem>
         <ElFormItem label="名称" prop="name">
-          <ElInput v-model="formModel.name" placeholder="执行器名称" />
+          <ElInput v-model="formModel.name" placeholder="执行节点池名称" />
         </ElFormItem>
-        <ElFormItem label="队列" prop="queueName">
+        <ElFormItem prop="queueName">
+          <template #label>
+            <FormLabelHelp
+              label="队列"
+              :help="['Celery 队列名，需与 Worker 节点订阅的队列一致', '仅支持字母、数字、点、下划线、连字符']"
+            />
+          </template>
           <ElInput v-model="formModel.queueName" placeholder="Celery 队列名" />
         </ElFormItem>
-        <ElFormItem label="地域">
+        <ElFormItem>
+          <template #label>
+            <FormLabelHelp
+              label="地域"
+              :help="['目标主机地域与该池一致时，任务优先路由到此池执行', '留空表示不参与地域就近路由']"
+            />
+          </template>
           <ElInput v-model="formModel.region" placeholder="如 cn-east-1，留空不参与地域路由" />
         </ElFormItem>
-        <ElFormItem label="并发限制" prop="concurrencyLimit">
+        <ElFormItem prop="concurrencyLimit">
+          <template #label>
+            <FormLabelHelp label="并发限制" :help="['该池同时执行的任务数上限，超出后任务排队等待']" />
+          </template>
           <ElInputNumber v-model="formModel.concurrencyLimit" :min="1" class="w-full" />
         </ElFormItem>
-        <ElFormItem label="执行类型">
+        <ElFormItem>
+          <template #label>
+            <FormLabelHelp label="执行类型" :help="['该池可承接的任务类型，未勾选的类型不会路由到此池']" />
+          </template>
           <ElSelect v-model="formModel.executionKinds" multiple class="w-full">
             <ElOption
               v-for="item in executionKindOptions"
@@ -298,7 +320,10 @@ async function handleDelete(id: number) {
             />
           </ElSelect>
         </ElFormItem>
-        <ElFormItem label="默认池">
+        <ElFormItem>
+          <template #label>
+            <FormLabelHelp label="默认池" :help="['未指定执行池且无同地域可用池时，任务回退到默认池执行']" />
+          </template>
           <ElSwitch v-model="formModel.isDefault" />
         </ElFormItem>
         <ElFormItem label="启用">

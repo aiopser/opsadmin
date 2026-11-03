@@ -27,6 +27,8 @@ class RunnerResult:
     return_code: int | None
     stats: dict = field(default_factory=dict)
     error: str | None = None
+    # ansible-runner 的原生控制台输出（PLAY/TASK/RECAP 等），已脱敏截断
+    console_output: str = ""
 
     @classmethod
     def from_mapping(cls, value):

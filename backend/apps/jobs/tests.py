@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models.deletion import ProtectedError
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 from rest_framework import serializers
@@ -21,7 +22,7 @@ from apps.automation.models import (
     WorkflowVersion,
 )
 from apps.cmdb.models import AssetHost
-from apps.jobs.models import WorkerPool
+from apps.jobs.models import Gateway, WorkerPool
 from apps.audit_center.models import DomainAuditEvent
 from apps.jobs.models import (
     HostRunResult,
@@ -29,6 +30,7 @@ from apps.jobs.models import (
     NodeRun,
     ScheduledJob,
     WorkflowRun,
+    WorkflowTaskTicket,
 )
 from apps.jobs.serializers import WorkflowRunCreateSerializer
 from apps.jobs.events import append_run_event, sanitize_runner_event
@@ -39,6 +41,87 @@ from apps.permission.services import CasbinEnforcerService, sync_casbin_rules
 
 
 class VersionedAnsibleResourceTests(SimpleTestCase):
+    @patch(
+        "apps.jobs.workflow_engine.resolve_workflow_inputs",
+        return_value={"show_hidden": True},
+    )
+    @patch(
+        "apps.jobs.execution.plan_builder.resolve_workflow_inputs",
+        return_value={"show_hidden": True},
+    )
+    def test_step_mapping_can_read_declared_input_by_name(
+        self, _resolve, _resolve_context
+    ):
+        from apps.jobs.execution.plan_builder import _merge_node_vars
+
+        node = SimpleNamespace(
+            command_version=SimpleNamespace(content="ls -a", default_vars={}),
+            input_mapping={"show_hidden": "{{ show_hidden }}"},
+        )
+        run = SimpleNamespace(
+            node_runs=SimpleNamespace(all=lambda: []),
+            graph_snapshot={},
+            execution_kind="workflow",
+            id=1,
+            pk=1,
+            name="",
+            triggered_by_id=None,
+            trigger_type="manual",
+        )
+
+        self.assertIs(_merge_node_vars(run, node)["show_hidden"], True)
+
+    @patch("apps.jobs.workflow_engine.resolve_workflow_inputs", return_value={})
+    @patch("apps.jobs.execution.plan_builder.resolve_workflow_inputs", return_value={})
+    def test_step_mapping_missing_variable_has_actionable_error(
+        self, _resolve, _resolve_context
+    ):
+        from apps.jobs.execution.plan_builder import _merge_node_vars
+
+        node = SimpleNamespace(
+            command_version=SimpleNamespace(content="ls", default_vars={}),
+            input_mapping={"show_hidden": "{{ show_hidden }}"},
+        )
+        run = SimpleNamespace(
+            node_runs=SimpleNamespace(all=lambda: []),
+            graph_snapshot={},
+            execution_kind="workflow",
+            id=1,
+            pk=1,
+            name="",
+            triggered_by_id=None,
+            trigger_type="manual",
+        )
+
+        with self.assertRaisesRegex(ValueError, "参数映射.*show_hidden"):
+            _merge_node_vars(run, node)
+
+    @patch("apps.jobs.workflow_engine.resolve_workflow_inputs", return_value={})
+    @patch("apps.jobs.execution.plan_builder.resolve_workflow_inputs", return_value={})
+    def test_step_mapping_can_read_resource_default_by_name(
+        self, _resolve, _resolve_context
+    ):
+        from apps.jobs.execution.plan_builder import _merge_node_vars
+
+        node = SimpleNamespace(
+            command_version=SimpleNamespace(
+                content="ls -a", default_vars={"show_hidden": True}
+            ),
+            input_mapping={"show_hidden": "{{ show_hidden }}"},
+        )
+        run = SimpleNamespace(
+            node_runs=SimpleNamespace(all=lambda: []),
+            graph_snapshot={},
+            execution_kind="workflow",
+            id=1,
+            pk=1,
+            name="",
+            triggered_by_id=None,
+            trigger_type="manual",
+        )
+
+        self.assertIs(_merge_node_vars(run, node)["show_hidden"], True)
+
     @patch(
         "apps.jobs.execution.plan_builder.resolve_workflow_inputs",
         return_value={"execution_source": "quick_command"},
@@ -179,6 +262,8 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
             execution_kind="workflow",
             workflow_version=None,
             id=1,
+            pk=1,
+            name="",
             triggered_by_id=None,
             trigger_type="manual",
         )
@@ -205,9 +290,10 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
             execution_kind="quick_command",
             workflow_version=SimpleNamespace(
                 workflow=SimpleNamespace(code="__quick_linux_shell"),
-                global_vars={},
             ),
             id=1,
+            pk=1,
+            name="",
             triggered_by_id=None,
             trigger_type="manual",
         )
@@ -216,16 +302,39 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
 
         self.assertEqual(values["command_content"], "echo real")
 
-    def test_version_timeout_participates_in_effective_timeout(self):
+    def test_step_timeout_overrides_version_default(self):
         from apps.jobs.execution.plan_builder import _effective_ansible_timeout
+        from apps.jobs.execution.settings_snapshot import freeze_execution_settings
+
+        snapshot = freeze_execution_settings(
+            {
+                "host_strategy": "parallel",
+                "forks": 10,
+                "serial_batch": 1,
+                "max_fail_percentage": 0,
+                "timeout": 300,
+            },
+            {},
+            {
+                "nodes": [
+                    {
+                        "id": "work",
+                        "type": "command",
+                        "timeoutSeconds": 120,
+                        "commandVersion": {"timeout_seconds": 45},
+                    }
+                ]
+            },
+        )
 
         timeout = _effective_ansible_timeout(
-            SimpleNamespace(timeout_seconds=300),
-            SimpleNamespace(timeout_seconds=120),
+            SimpleNamespace(timeout_seconds=300, execution_settings=snapshot),
+            SimpleNamespace(node_key="work", timeout_seconds=120),
             SimpleNamespace(timeout_seconds=45),
         )
 
-        self.assertEqual(timeout, 45)
+        self.assertEqual(timeout, 120)
+        self.assertEqual(snapshot["nodes"]["work"]["sources"]["timeoutSeconds"], "step")
 
     def test_version_argument_schema_validates_required_values_and_types(self):
         from apps.jobs.execution.plan_builder import _validate_version_arguments
@@ -259,6 +368,36 @@ class VersionedAnsibleResourceTests(SimpleTestCase):
         outputs = _extract_version_outputs("version=2026.08\nreplicas=3", spec)
 
         self.assertEqual(outputs, {"version": "2026.08", "replicas": 3})
+
+    def test_ansible_outputs_keep_each_hosts_extracted_values(self):
+        from apps.jobs.execution.registry import _build_host_output_vars
+
+        host_outputs = {
+            "host-a": {"stdout": "RESULT=one", "status": "success"},
+            "host-b": {"stdout": "RESULT=two", "status": "success"},
+        }
+        spec = SimpleNamespace(
+            output_extractors=[{"name": "result", "pattern": r"RESULT=(\w+)"}]
+        )
+
+        outputs = _build_host_output_vars(host_outputs, spec)
+
+        self.assertEqual(outputs["hosts"]["host-a"]["outputs"], {"result": "one"})
+        self.assertEqual(outputs["hosts"]["host-b"]["outputs"], {"result": "two"})
+        self.assertNotIn("result", outputs)
+
+    def test_single_host_ansible_output_preserves_scalar_reference(self):
+        from apps.jobs.execution.registry import _build_host_output_vars
+
+        outputs = _build_host_output_vars(
+            {"host-a": {"stdout": "RESULT=one"}},
+            SimpleNamespace(
+                output_extractors=[{"name": "result", "pattern": r"RESULT=(\w+)"}]
+            ),
+        )
+
+        self.assertEqual(outputs["result"], "one")
+        self.assertEqual(outputs["hosts"]["host-a"]["outputs"], {"result": "one"})
 
 
 class JobHistoryViewSetTests(SimpleTestCase):
@@ -576,11 +715,16 @@ class RunnerFailureFallbackTests(SimpleTestCase):
 
 
 from apps.jobs.application.runs import create_workflow_run
+
+
 def execute_graph_fixture(run_id):
     """Drive real graph/claim tasks synchronously with broker transport isolated."""
     from apps.jobs.tasks import run_workflow, execute_node
     from apps.jobs.workflow_engine import TERMINAL_NODE_STATUSES
-    with patch("apps.jobs.tasks.enqueue_node_run"), patch("apps.jobs.tasks.enqueue_workflow_run"):
+
+    with patch("apps.jobs.tasks.enqueue_node_run"), patch(
+        "apps.jobs.tasks.enqueue_workflow_run"
+    ):
         for _ in range(20):
             result = run_workflow(run_id)
             for node_id in result["queuedNodes"]:
@@ -595,15 +739,26 @@ def execute_graph_fixture(run_id):
 def publish_linear_fixture(version):
     """Build an explicit graph for test command nodes before publication."""
     from apps.automation.models import WorkflowEdge
+
     commands = list(version.nodes.order_by("order_index", "id"))
-    start = WorkflowNode.objects.create(workflow_version=version, node_key="start", name="Start", node_type="start")
-    end = WorkflowNode.objects.create(workflow_version=version, node_key="end", name="End", node_type="end")
+    start = WorkflowNode.objects.create(
+        workflow_version=version, node_key="start", name="Start", node_type="start"
+    )
+    end = WorkflowNode.objects.create(
+        workflow_version=version, node_key="end", name="End", node_type="end"
+    )
     path = [start, *commands, end]
     for index, (source, target) in enumerate(zip(path, path[1:])):
-        WorkflowEdge.objects.create(workflow_version=version, edge_key=f"edge-{index}", source_node=source, target_node=target)
+        WorkflowEdge.objects.create(
+            workflow_version=version,
+            edge_key=f"edge-{index}",
+            source_node=source,
+            target_node=target,
+        )
     version.publish(None)
 
-from apps.jobs.views import WorkflowRunViewSet
+
+from apps.jobs.views import WorkflowRunViewSet, WorkflowTaskTicketViewSet
 
 
 class WorkflowRunServiceTests(TestCase):
@@ -622,7 +777,7 @@ class WorkflowRunServiceTests(TestCase):
         )
         self.host = AssetHost.objects.create(
             hostname="web01",
-            primary_ip="10.0.0.11",
+            internal_ip="10.0.0.11",
             os_family=AssetHost.OSFamily.LINUX,
             cpu_cores=2,
             memory_mb=4096,
@@ -635,6 +790,7 @@ class WorkflowRunServiceTests(TestCase):
             name="Check disk",
             code="check_disk",
             category="system",
+            status=CommandAtom.Status.PUBLISHED,
             risk_level=CommandAtom.RiskLevel.LOW,
             created_by=self.user,
             updated_by=self.user,
@@ -934,6 +1090,8 @@ class WorkflowRunServiceTests(TestCase):
     def test_scheduled_job_create_calculates_first_cron_run(self):
         from apps.jobs.views import ScheduledJobViewSet
 
+        gateway = Gateway.objects.create(name="schedule-jump", address="10.0.0.1:22")
+
         request = APIRequestFactory().post(
             "/api/v1/jobs/scheduled-jobs",
             {
@@ -949,7 +1107,7 @@ class WorkflowRunServiceTests(TestCase):
                 "max_fail_percentage": 25,
                 "timeout_seconds": 900,
                 "queue_timeout_seconds": 45,
-                "bypass_host_gateway": True,
+                "gateway": gateway.id,
                 "enabled": True,
             },
             format="json",
@@ -972,14 +1130,26 @@ class WorkflowRunServiceTests(TestCase):
         self.assertEqual(schedule.max_fail_percentage, 25)
         self.assertEqual(schedule.timeout_seconds, 900)
         self.assertEqual(schedule.queue_timeout_seconds, 45)
-        self.assertTrue(schedule.bypass_host_gateway)
+        self.assertEqual(schedule.gateway_id, gateway.id)
         from apps.jobs.application.runs import scheduled_job_run_options
 
         run_options = scheduled_job_run_options(schedule)
         self.assertEqual(run_options["input_vars"]["host_strategy"], "rolling")
         self.assertEqual(run_options["input_vars"]["ansible_forks"], 8)
+        self.assertEqual(run_options["input_vars"]["gateway_id"], gateway.id)
         self.assertEqual(run_options["timeout_seconds"], 900)
         self.assertEqual(run_options["queue_timeout_seconds"], 45)
+
+    def test_gateway_referenced_by_schedule_cannot_be_deleted_into_direct_mode(self):
+        gateway = Gateway.objects.create(name="protected-jump", address="10.0.0.1:22")
+        ScheduledJob.objects.create(
+            name="protected-schedule",
+            worker_pool=self.worker_pool,
+            workflow_version=self.workflow_version,
+            gateway=gateway,
+        )
+        with self.assertRaises(ProtectedError):
+            gateway.delete()
 
     def test_quick_command_preserves_source_template_risk_level(self):
         response = self.post_quick_command(
@@ -1003,6 +1173,7 @@ class WorkflowRunServiceTests(TestCase):
         high_risk_command = CommandAtom.objects.create(
             name="Remove files",
             code="quick_remove_files",
+            status=CommandAtom.Status.PUBLISHED,
             risk_level=CommandAtom.RiskLevel.HIGH,
             created_by=self.user,
             updated_by=self.user,
@@ -1632,7 +1803,7 @@ class WorkflowRunServiceTests(TestCase):
 
         self.assertEqual(run.status, WorkflowRun.Status.PENDING)
         self.assertEqual(run.target_snapshot[0]["hostname"], self.host.hostname)
-        self.assertEqual(run.target_snapshot[0]["address"], self.host.primary_ip)
+        self.assertEqual(run.target_snapshot[0]["address"], self.host.internal_ip)
         self.assertEqual(run.worker_pool_id, self.worker_pool.id)
 
     @patch("apps.jobs.execution.registry.AnsibleExecutor")
@@ -1713,7 +1884,9 @@ class WorkflowRunServiceTests(TestCase):
 
         result = execute_graph_fixture(run.id)
 
-        node_run = NodeRun.objects.exclude(node_type__in={"start", "end", "parallel_gateway", "parallel_join"}).get(workflow_run=run)
+        node_run = NodeRun.objects.exclude(
+            node_type__in={"start", "end", "parallel_gateway", "parallel_join"}
+        ).get(workflow_run=run)
         host_result = HostRunResult.objects.get(node_run=node_run, hostname="web01")
         serialized = json.dumps(
             {
@@ -1742,7 +1915,7 @@ class WorkflowRunServiceTests(TestCase):
     ):
         second_host = AssetHost.objects.create(
             hostname="web02",
-            primary_ip="10.0.0.12",
+            internal_ip="10.0.0.12",
             os_family=AssetHost.OSFamily.LINUX,
             connection_type=AssetHost.ConnectionType.SSH,
             connection_port=22,
@@ -1760,7 +1933,9 @@ class WorkflowRunServiceTests(TestCase):
 
         execute_graph_fixture(run.id)
 
-        node_run = NodeRun.objects.exclude(node_type__in={"start", "end", "parallel_gateway", "parallel_join"}).get(workflow_run=run)
+        node_run = NodeRun.objects.exclude(
+            node_type__in={"start", "end", "parallel_gateway", "parallel_join"}
+        ).get(workflow_run=run)
         host_results = HostRunResult.objects.filter(node_run=node_run)
         self.assertEqual(host_results.count(), 2)
         self.assertEqual(
@@ -1778,7 +1953,7 @@ class WorkflowRunServiceTests(TestCase):
     ):
         second_host = AssetHost.objects.create(
             hostname="web02",
-            primary_ip="10.0.0.12",
+            internal_ip="10.0.0.12",
             os_family=AssetHost.OSFamily.LINUX,
             connection_type=AssetHost.ConnectionType.SSH,
             connection_port=22,
@@ -1806,7 +1981,9 @@ class WorkflowRunServiceTests(TestCase):
 
         execute_graph_fixture(run.id)
 
-        node_run = NodeRun.objects.exclude(node_type__in={"start", "end", "parallel_gateway", "parallel_join"}).get(workflow_run=run)
+        node_run = NodeRun.objects.exclude(
+            node_type__in={"start", "end", "parallel_gateway", "parallel_join"}
+        ).get(workflow_run=run)
         host_results = HostRunResult.objects.filter(node_run=node_run)
         self.assertEqual(host_results.count(), 2)
         self.assertEqual(
@@ -1827,7 +2004,7 @@ class WorkflowRunServiceTests(TestCase):
     ):
         second_host = AssetHost.objects.create(
             hostname="web02",
-            primary_ip="10.0.0.12",
+            internal_ip="10.0.0.12",
             os_family=AssetHost.OSFamily.LINUX,
             connection_type=AssetHost.ConnectionType.SSH,
             connection_port=22,
@@ -1850,7 +2027,9 @@ class WorkflowRunServiceTests(TestCase):
         execute_graph_fixture(run.id)
 
         run.refresh_from_db()
-        node_run = NodeRun.objects.exclude(node_type__in={"start", "end", "parallel_gateway", "parallel_join"}).get(workflow_run=run)
+        node_run = NodeRun.objects.exclude(
+            node_type__in={"start", "end", "parallel_gateway", "parallel_join"}
+        ).get(workflow_run=run)
         self.assertEqual(run.status, WorkflowRun.Status.FAILED)
         self.assertEqual(node_run.status, NodeRun.Status.FAILED)
         self.assertEqual(
@@ -1907,7 +2086,9 @@ class WorkflowRunServiceTests(TestCase):
 
         result = execute_graph_fixture(run.id)
 
-        node_run = NodeRun.objects.exclude(node_type__in={"start", "end", "parallel_gateway", "parallel_join"}).get(workflow_run=run)
+        node_run = NodeRun.objects.exclude(
+            node_type__in={"start", "end", "parallel_gateway", "parallel_join"}
+        ).get(workflow_run=run)
         host_result = HostRunResult.objects.get(node_run=node_run, hostname="web01")
         self.assertEqual(result.status, WorkflowRun.Status.CANCELED)
         self.assertEqual(node_run.status, NodeRun.Status.CANCELED)
@@ -1923,7 +2104,9 @@ class WorkflowRunServiceTests(TestCase):
     def test_ansible_preclaim_cancellation_materializes_all_node_and_host_results(
         self, runner_service
     ):
-        self.workflow_version = WorkflowVersion.objects.create(workflow=self.workflow, version=2)
+        self.workflow_version = WorkflowVersion.objects.create(
+            workflow=self.workflow, version=2
+        )
         self.node.pk = None
         self.node.workflow_version = self.workflow_version
         self.node.save()
@@ -1954,7 +2137,7 @@ class WorkflowRunServiceTests(TestCase):
             host_id=self.host.id,
             hostname=self.host.hostname,
             host_key=HostRunResult.host_key_for(self.host.id, self.host.hostname),
-            ip=self.host.primary_ip,
+            ip=self.host.internal_ip,
             status=HostRunResult.Status.OK,
             stdout="completed",
         )
@@ -1964,7 +2147,9 @@ class WorkflowRunServiceTests(TestCase):
 
         node_runs = {
             node_run.workflow_node_id: node_run
-            for node_run in NodeRun.objects.filter(workflow_run=run).exclude(node_type__in={"start", "end", "parallel_gateway", "parallel_join"})
+            for node_run in NodeRun.objects.filter(workflow_run=run).exclude(
+                node_type__in={"start", "end", "parallel_gateway", "parallel_join"}
+            )
         }
         self.assertEqual(result.status, WorkflowRun.Status.CANCELED)
         self.assertEqual(set(node_runs), {self.node.id, second_node.id})
@@ -1987,7 +2172,9 @@ class WorkflowRunServiceTests(TestCase):
     def test_ansible_midrun_cancellation_materializes_unstarted_node_work(
         self, runner_service
     ):
-        self.workflow_version = WorkflowVersion.objects.create(workflow=self.workflow, version=2)
+        self.workflow_version = WorkflowVersion.objects.create(
+            workflow=self.workflow, version=2
+        )
         self.node.pk = None
         self.node.workflow_version = self.workflow_version
         self.node.save()
@@ -2008,7 +2195,10 @@ class WorkflowRunServiceTests(TestCase):
         )
 
         def execute(plan, event_handler, cancel_callback, **_kwargs):
-            self.assertEqual(plan.node_run_id, NodeRun.objects.get(workflow_run=run, node_key=self.node.node_key).id)
+            self.assertEqual(
+                plan.node_run_id,
+                NodeRun.objects.get(workflow_run=run, node_key=self.node.node_key).id,
+            )
             WorkflowRun.objects.filter(id=run.id).update(
                 status=WorkflowRun.Status.CANCELED
             )
@@ -2023,7 +2213,9 @@ class WorkflowRunServiceTests(TestCase):
 
         node_runs = {
             node_run.workflow_node_id: node_run
-            for node_run in NodeRun.objects.filter(workflow_run=run).exclude(node_type__in={"start", "end", "parallel_gateway", "parallel_join"})
+            for node_run in NodeRun.objects.filter(workflow_run=run).exclude(
+                node_type__in={"start", "end", "parallel_gateway", "parallel_join"}
+            )
         }
         self.assertEqual(result.status, WorkflowRun.Status.CANCELED)
         self.assertEqual(set(node_runs), {self.node.id, second_node.id})
@@ -2057,7 +2249,7 @@ class WorkflowRunServiceTests(TestCase):
     ):
         second_host = AssetHost.objects.create(
             hostname="web02",
-            primary_ip="10.0.0.12",
+            internal_ip="10.0.0.12",
             os_family=AssetHost.OSFamily.LINUX,
             connection_type=AssetHost.ConnectionType.SSH,
             connection_port=22,
@@ -2094,7 +2286,9 @@ class WorkflowRunServiceTests(TestCase):
 
         result = execute_graph_fixture(run.id)
 
-        node_run = NodeRun.objects.exclude(node_type__in={"start", "end", "parallel_gateway", "parallel_join"}).get(workflow_run=run)
+        node_run = NodeRun.objects.exclude(
+            node_type__in={"start", "end", "parallel_gateway", "parallel_join"}
+        ).get(workflow_run=run)
         host_results = {
             host_result.hostname: host_result
             for host_result in HostRunResult.objects.filter(node_run=node_run)
@@ -2176,7 +2370,6 @@ class WorkflowRunServiceTests(TestCase):
                 "forks": 8,
                 "serialBatch": 3,
                 "maxFailPercentage": 20,
-                "bypassHostGateway": True,
                 "timeoutSeconds": 900,
                 "queueTimeoutSeconds": 45,
             },
@@ -2196,7 +2389,21 @@ class WorkflowRunServiceTests(TestCase):
         self.assertEqual(run.input_vars["ansible_forks"], 8)
         self.assertEqual(run.input_vars["serial_batch"], 3)
         self.assertEqual(run.input_vars["max_fail_percentage"], 20)
-        self.assertTrue(run.input_vars["bypass_host_gateway"])
+
+    def test_run_input_vars_cannot_choose_gateway_outside_explicit_field(self):
+        request = APIRequestFactory().post(
+            "/api/v1/tasks/runs/validate",
+            {
+                "workflowVersionId": self.workflow_version.id,
+                "hostIds": [self.host.id],
+                "workerPoolId": self.worker_pool.id,
+                "inputVars": {"gateway_id": 999},
+            },
+            format="json",
+        )
+        force_authenticate(request, user=self.user)
+        response = WorkflowRunViewSet.as_view({"post": "validate_run"})(request)
+        self.assertEqual(response.status_code, 400)
 
     def test_validate_workflow_run_does_not_create_or_dispatch_run(self):
         request = APIRequestFactory().post(
@@ -2305,3 +2512,246 @@ class WorkflowRunServiceTests(TestCase):
                 actor=self.user,
             ).exists()
         )
+
+
+class WorkflowTaskTicketApiTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="ticket-user",
+            password="123456",
+            email="ticket-user@example.com",
+            phone="13800000003",
+        )
+        self.worker_pool = WorkerPool.objects.create(
+            code="default",
+            name="Default Worker Pool",
+            queue_name="ansible.default",
+            is_default=True,
+        )
+        self.host = AssetHost.objects.create(
+            hostname="web01",
+            internal_ip="10.0.0.11",
+            os_family=AssetHost.OSFamily.LINUX,
+            cpu_cores=2,
+            memory_mb=4096,
+            system_disk_gb=40,
+            data_disk_gb=200,
+            connection_type=AssetHost.ConnectionType.SSH,
+            connection_port=22,
+        )
+        self.command = CommandAtom.objects.create(
+            name="Check disk",
+            code="check_disk",
+            category="system",
+            risk_level=CommandAtom.RiskLevel.LOW,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        self.command_version = CommandVersion.objects.create(
+            command=self.command,
+            version=1,
+            status=CommandVersion.Status.PUBLISHED,
+            command_type=CommandVersion.CommandType.LINUX_SHELL,
+            content="df -h",
+            created_by=self.user,
+            published_by=self.user,
+        )
+        self.workflow = WorkflowTemplate.objects.create(
+            name="Check service",
+            code="check_service",
+            status=WorkflowTemplate.Status.PUBLISHED,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        self.workflow_version = WorkflowVersion.objects.create(
+            workflow=self.workflow,
+            version=1,
+            status=WorkflowVersion.Status.DRAFT,
+            created_by=self.user,
+            published_by=self.user,
+        )
+        self.node = WorkflowNode.objects.create(
+            workflow_version=self.workflow_version,
+            node_key="check_disk",
+            name="Check disk",
+            command_version=self.command_version,
+            order_index=1,
+        )
+        publish_linear_fixture(self.workflow_version)
+        self.api_role = Role.objects.create(name="ticket_runner")
+        self.user.role.add(self.api_role)
+        self.api_role.permission.add(
+            Permission.objects.create(
+                name="创建任务单",
+                code="test.jobs.workflow_ticket.create",
+                type=Permission.PermissionType.API,
+                path="/api/v1/tasks/tickets",
+                method="POST",
+            ),
+            Permission.objects.create(
+                name="运行任务单",
+                code="test.jobs.workflow_ticket.run",
+                type=Permission.PermissionType.API,
+                path="/api/v1/tasks/tickets/:id/run",
+                method="POST",
+            ),
+            Permission.objects.create(
+                name="Use test pool",
+                code="test.jobs.ticket_pool.detail",
+                type="api",
+                path="/api/v1/jobs/worker-pools/:id",
+                method="GET",
+            ),
+            Permission.objects.create(
+                name="Use test asset",
+                code="test.cmdb.ticket_host.detail",
+                type="api",
+                path="/api/v1/cmdb/hosts/:id",
+                method="GET",
+            ),
+        )
+        sync_casbin_rules()
+        CasbinEnforcerService.reload()
+
+    def tearDown(self):
+        CasbinEnforcerService.reload()
+        super().tearDown()
+
+    def _create_ticket_payload(self, **overrides):
+        payload = {
+            "name": "Restart GS service",
+            "workflowVersionId": str(self.workflow_version.id),
+            "hostIds": [str(self.host.id)],
+            "workerPoolId": str(self.worker_pool.id),
+            "inputVars": {},
+            "hostStrategy": "serial",
+            "forks": 3,
+            "serialBatch": 2,
+            "timeoutSeconds": 600,
+        }
+        payload.update(overrides)
+        return payload
+
+    def _create_ticket(self, payload=None):
+        request = APIRequestFactory().post(
+            "/api/v1/tasks/tickets",
+            payload or self._create_ticket_payload(),
+            format="json",
+        )
+        force_authenticate(request, user=self.user)
+        request.user = self.user
+        return WorkflowTaskTicketViewSet.as_view({"post": "create"})(request)
+
+    def test_create_ticket_returns_normalized_record(self):
+        response = self._create_ticket()
+
+        self.assertEqual(response.status_code, 200)
+        data = response.data["data"]
+        self.assertEqual(data["workflowName"], "Check service")
+        self.assertEqual(data["workflowVersion"], 1)
+        self.assertEqual(data["runCount"], 0)
+        self.assertEqual(data["hostIds"], [self.host.id])
+        self.assertIsNone(data["lastRunId"])
+        self.assertTrue(
+            WorkflowTaskTicket.objects.filter(
+                id=data["id"],
+                name="Restart GS service",
+                host_strategy="serial",
+                forks=3,
+                serial_batch=2,
+                timeout_seconds=600,
+                created_by=self.user,
+            ).exists()
+        )
+
+    def test_create_ticket_rejects_draft_version(self):
+        draft_version = WorkflowVersion.objects.create(
+            workflow=self.workflow,
+            version=2,
+            status=WorkflowVersion.Status.DRAFT,
+            created_by=self.user,
+        )
+        response = self._create_ticket(
+            self._create_ticket_payload(workflowVersionId=str(draft_version.id))
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(WorkflowTaskTicket.objects.count(), 0)
+
+    def test_create_ticket_rejects_unenabled_template(self):
+        for status in (WorkflowTemplate.Status.DRAFT, WorkflowTemplate.Status.DISABLED):
+            with self.subTest(status=status):
+                self.workflow.status = status
+                self.workflow.save(update_fields=["status"])
+                response = self._create_ticket()
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(WorkflowTaskTicket.objects.count(), 0)
+
+    def test_run_ticket_rejects_template_disabled_after_creation(self):
+        response = self._create_ticket()
+        ticket_id = response.data["data"]["id"]
+        self.workflow.status = WorkflowTemplate.Status.DISABLED
+        self.workflow.save(update_fields=["status"])
+
+        request = APIRequestFactory().post(f"/api/v1/tasks/tickets/{ticket_id}/run")
+        force_authenticate(request, user=self.user)
+        request.user = self.user
+        response = WorkflowTaskTicketViewSet.as_view({"post": "run"})(
+            request, pk=str(ticket_id)
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(WorkflowRun.objects.count(), 0)
+
+    def test_run_ticket_creates_linked_run_and_updates_counters(self):
+        response = self._create_ticket()
+        ticket_id = response.data["data"]["id"]
+
+        request = APIRequestFactory().post(f"/api/v1/tasks/tickets/{ticket_id}/run")
+        force_authenticate(request, user=self.user)
+        request.user = self.user
+        response = WorkflowTaskTicketViewSet.as_view({"post": "run"})(
+            request, pk=str(ticket_id)
+        )
+
+        self.assertEqual(response.status_code, 200)
+        run = WorkflowRun.objects.get(id=response.data["data"]["id"])
+        self.assertEqual(run.ticket_id, ticket_id)
+        self.assertEqual(run.triggered_by, self.user)
+        self.assertEqual(run.input_vars["host_strategy"], "serial")
+        self.assertEqual(run.input_vars["ansible_forks"], 3)
+        self.assertEqual(run.input_vars["serial_batch"], 2)
+        ticket = WorkflowTaskTicket.objects.get(id=ticket_id)
+        self.assertEqual(ticket.run_count, 1)
+        self.assertEqual(ticket.last_run_id, run.id)
+        self.assertTrue(
+            DomainAuditEvent.objects.filter(
+                action="jobs.workflow_ticket.run",
+                resource_type="workflow_task_ticket",
+                resource_id=str(ticket_id),
+                actor=self.user,
+            ).exists()
+        )
+        self.assertTrue(
+            JobEventLog.objects.filter(
+                workflow_run_id=run.id,
+                event_type="workflow_dispatch_requested",
+            ).exists()
+        )
+
+    def test_run_ticket_rejects_when_version_deleted(self):
+        response = self._create_ticket()
+        ticket_id = response.data["data"]["id"]
+        WorkflowTaskTicket.objects.filter(id=ticket_id).update(workflow_version=None)
+
+        request = APIRequestFactory().post(f"/api/v1/tasks/tickets/{ticket_id}/run")
+        force_authenticate(request, user=self.user)
+        request.user = self.user
+        response = WorkflowTaskTicketViewSet.as_view({"post": "run"})(
+            request, pk=str(ticket_id)
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(WorkflowRun.objects.count(), 0)
+        ticket = WorkflowTaskTicket.objects.get(id=ticket_id)
+        self.assertEqual(ticket.run_count, 0)

@@ -5,11 +5,9 @@ from .views import (
     AssetHostViewSet,
     AssetSourceViewSet,
     AssetSyncRecordViewSet,
-    BusinessViewSet,
     CredentialRefViewSet,
     HostGroupViewSet,
     HostTagViewSet,
-    ServiceTreeNodeViewSet,
     CMDBSearchView,
 )
 
@@ -22,12 +20,6 @@ router.register(
     r"v1/cmdb/asset-sync-records",
     AssetSyncRecordViewSet,
     basename="cmdb-asset-sync-records",
-)
-router.register(r"v1/cmdb/businesses", BusinessViewSet, basename="cmdb-businesses")
-router.register(
-    r"v1/cmdb/service-tree-nodes",
-    ServiceTreeNodeViewSet,
-    basename="cmdb-service-tree-nodes",
 )
 router.register(r"v1/cmdb/host-groups", HostGroupViewSet, basename="cmdb-host-groups")
 router.register(r"v1/cmdb/tags", HostTagViewSet, basename="cmdb-tags")

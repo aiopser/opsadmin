@@ -1,20 +1,30 @@
 <script setup lang="tsx">
-import { computed, ref } from 'vue';
+import { computed, ref, shallowRef } from 'vue';
+import { useClipboard } from '@vueuse/core';
 import { fetchGetAuditEventList } from '@/service/api';
 import type { AuditEvent, AuditEventSearchParams } from '@/service/api/audit';
+import { useAppStore } from '@/store/modules/app';
 import { defaultTransform, useUIPaginatedTable } from '@/hooks/common/table';
 import { $t } from '@/locales';
+import { getAuditActionLabel, getAuditObjectLabel } from './shared';
 
 defineOptions({ name: 'AuditEvent' });
 
-/** 审计领域选项（与后端 DomainAuditEvent.Domain 对应） */
+const appStore = useAppStore();
+const auditLocale = computed(() => (appStore.locale === 'zh-CN' ? 'zh' : 'en'));
+
+/**
+ * 审计领域选项（命名对齐侧边栏模块与审计中心页面，与后端 DomainAuditEvent.Domain 对应）
+ * security 领域目前只写入 auth.login.* 登录事件，故显示为「登录日志」
+ */
 const domainOptions = [
-  { value: 'ops', label: '运维操作', tag: 'primary' },
+  { value: 'ops', label: '作业系统', tag: 'primary' },
   { value: 'task', label: '任务系统', tag: 'success' },
-  { value: 'automation', label: '自动化配置', tag: 'warning' },
+  { value: 'automation', label: '资源配置', tag: 'warning' },
   { value: 'cmdb', label: '资产管理', tag: 'info' },
-  { value: 'security', label: '安全', tag: 'danger' },
-  { value: 'system', label: '系统', tag: 'info' }
+  { value: 'monitoring', label: '监控管理', tag: 'info' },
+  { value: 'security', label: '登录日志', tag: 'danger' },
+  { value: 'system', label: '系统管理', tag: 'info' }
 ] as const;
 
 const domainRecord = Object.fromEntries(domainOptions.map(item => [item.value, item]));
@@ -24,8 +34,6 @@ function getInitSearchParams(): AuditEventSearchParams {
     current: 1,
     size: 10,
     domain: undefined,
-    action: undefined,
-    resourceType: undefined,
     keywords: undefined
   };
 }
@@ -67,18 +75,19 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
       width: 120,
       formatter: row => row.actorName || '-'
     },
-    { prop: 'action', label: $t('page.audit.event.action'), minWidth: 170, showOverflowTooltip: true },
     {
-      prop: 'resourceType',
-      label: $t('page.audit.event.resourceType'),
-      width: 120,
-      formatter: row => row.resourceType || '-'
+      prop: 'action',
+      label: $t('page.audit.event.operation'),
+      minWidth: 160,
+      showOverflowTooltip: true,
+      formatter: row => getAuditActionLabel(row, auditLocale.value)
     },
     {
-      prop: 'resourceId',
-      label: $t('page.audit.event.resourceId'),
-      width: 100,
-      formatter: row => row.resourceId || '-'
+      prop: 'resourceType',
+      label: $t('page.audit.event.object'),
+      minWidth: 220,
+      showOverflowTooltip: true,
+      formatter: row => getAuditObjectLabel(row, auditLocale.value)
     },
     {
       prop: 'ipAddress',
@@ -104,32 +113,81 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
 /** ============ 详情抽屉 ============ */
 
 const detailVisible = ref(false);
-const detailRow = ref<AuditEvent | null>(null);
+const detailRow = shallowRef<AuditEvent | null>(null);
 
 function showDetail(row: AuditEvent) {
   detailRow.value = row;
   detailVisible.value = true;
 }
 
-/** before/after 快照的并集键（用于变更对比展示） */
-const diffKeys = computed<string[]>(() => {
+/** Request ID 复制：主流审计详情都提供，便于排障时关联后端日志 */
+const { copy: copyToClipboard, isSupported: clipboardSupported } = useClipboard({ copiedDuring: 1500 });
+
+async function copyRequestId() {
+  const requestId = detailRow.value?.requestId;
+
+  if (!requestId) return;
+
+  if (!clipboardSupported.value) {
+    window.$message?.warning($t('page.audit.event.copyUnsupported'));
+    return;
+  }
+
+  await copyToClipboard(requestId);
+  window.$notification?.success($t('page.audit.event.copied'));
+}
+
+/** 登录失败原因（后端写入 after.reason） */
+const failureReason = computed(() => {
   const row = detailRow.value;
 
-  if (!row) return [];
+  if (!row || row.result !== 'failure') return '';
 
-  return Array.from(new Set([...Object.keys(row.before ?? {}), ...Object.keys(row.after ?? {})]));
+  const reason = row.after?.reason;
+
+  return typeof reason === 'string' ? reason : '';
 });
 
-function diffValue(key: string, source: 'before' | 'after') {
-  const snapshot = detailRow.value?.[source] ?? {};
-  const value = snapshot[key];
+/** 实际发生变化的字段；登录事件只记录结果原因，不参与数据变更展示 */
+const changedKeys = computed<string[]>(() => {
+  const row = detailRow.value;
 
-  return value === undefined ? '-' : JSON.stringify(value);
+  if (!row || row.resourceType === 'login') return [];
+
+  const keys = new Set([...Object.keys(row.before ?? {}), ...Object.keys(row.after ?? {})]);
+
+  return Array.from(keys).filter(key => isChanged(key));
+});
+
+function snapshotValue(key: string, source: 'before' | 'after') {
+  const snapshot = detailRow.value?.[source] ?? {};
+
+  return snapshot[key];
+}
+
+/** 快照值展示文本：字符串去引号，对象转 JSON，空值统一为占位符 */
+function formatSnapshotValue(value: unknown) {
+  if (value === undefined || value === null || value === '') return '-';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+
+  return JSON.stringify(value) ?? '-';
+}
+
+function snapshotText(key: string, source: 'before' | 'after') {
+  return formatSnapshotValue(snapshotValue(key, source));
+}
+
+function isMissing(key: string, source: 'before' | 'after') {
+  return snapshotText(key, source) === '-';
 }
 
 function isChanged(key: string) {
-  return diffValue(key, 'before') !== diffValue(key, 'after');
+  return snapshotText(key, 'before') !== snapshotText(key, 'after');
 }
+
+/** 变更表格行数据：只展示发生变化的字段 */
+const diffRows = computed(() => changedKeys.value.map(key => ({ key })));
 
 function resetSearchParams() {
   searchParams.value = getInitSearchParams();
@@ -139,41 +197,18 @@ function resetSearchParams() {
 
 <template>
   <div class="min-h-500px flex-col-stretch gap-16px overflow-hidden lt-sm:overflow-auto">
-    <ElCard class="card-wrapper">
-      <ElForm :model="searchParams" label-width="80px" inline>
+    <SearchPanel @reset="resetSearchParams" @search="getDataByPage">
+      <ElForm :model="searchParams" label-width="80px" @submit.prevent="getDataByPage">
         <ElFormItem :label="$t('page.audit.event.domain')">
           <ElSelect v-model="searchParams.domain" clearable :placeholder="$t('page.audit.event.form.domain')">
             <ElOption v-for="item in domainOptions" :key="item.value" :label="item.label" :value="item.value" />
           </ElSelect>
         </ElFormItem>
-        <ElFormItem :label="$t('page.audit.event.action')">
-          <ElInput v-model="searchParams.action" clearable :placeholder="$t('page.audit.event.form.action')" />
-        </ElFormItem>
-        <ElFormItem :label="$t('page.audit.event.resourceType')">
-          <ElInput
-            v-model="searchParams.resourceType"
-            clearable
-            :placeholder="$t('page.audit.event.form.resourceType')"
-          />
-        </ElFormItem>
         <ElFormItem :label="$t('page.audit.event.keywords')">
-          <ElInput
-            v-model="searchParams.keywords"
-            clearable
-            :placeholder="$t('page.audit.event.form.keywords')"
-            @keyup.enter="getDataByPage()"
-          />
-        </ElFormItem>
-        <ElFormItem>
-          <ElButton type="primary" @click="getDataByPage()">
-            {{ $t('common.search') }}
-          </ElButton>
-          <ElButton @click="resetSearchParams">
-            {{ $t('common.reset') }}
-          </ElButton>
+          <ElInput v-model="searchParams.keywords" clearable :placeholder="$t('page.audit.event.form.keywords')" />
         </ElFormItem>
       </ElForm>
-    </ElCard>
+    </SearchPanel>
 
     <ElCard class="card-wrapper sm:flex-1-hidden">
       <template #header>
@@ -204,11 +239,11 @@ function resetSearchParams() {
         />
       </div>
 
-      <ElDrawer v-model="detailVisible" :title="$t('page.audit.event.detail')" size="560px">
+      <ElDrawer v-model="detailVisible" :title="$t('page.audit.event.detail')" size="min(960px, 100%)">
         <template v-if="detailRow">
-          <ElDescriptions :column="2" border size="small">
+          <ElDescriptions class="detail-descriptions" :column="2" border size="small" :label-width="110">
             <ElDescriptionsItem :label="$t('page.audit.event.time')" :span="2">
-              {{ detailRow.createdAt }}
+              <span class="tabular-nums">{{ detailRow.createdAt }}</span>
             </ElDescriptionsItem>
             <ElDescriptionsItem :label="$t('page.audit.event.domain')">
               <ElTag v-if="domainRecord[detailRow.domain]" :type="domainRecord[detailRow.domain].tag">
@@ -216,50 +251,85 @@ function resetSearchParams() {
               </ElTag>
               <span v-else>{{ detailRow.domain }}</span>
             </ElDescriptionsItem>
+            <ElDescriptionsItem :label="$t('page.audit.event.result')">
+              <ElTag :type="detailRow.result === 'success' ? 'success' : 'danger'">
+                {{ $t(detailRow.result === 'success' ? 'page.audit.event.success' : 'page.audit.event.failure') }}
+              </ElTag>
+            </ElDescriptionsItem>
             <ElDescriptionsItem :label="$t('page.audit.event.actor')">
               {{ detailRow.actorName || '-' }}
             </ElDescriptionsItem>
-            <ElDescriptionsItem :label="$t('page.audit.event.action')" :span="2">
-              {{ detailRow.action }}
+            <ElDescriptionsItem :label="$t('page.audit.event.ipAddress')">
+              <span class="text-12px font-mono tabular-nums">{{ detailRow.ipAddress || '-' }}</span>
             </ElDescriptionsItem>
-            <ElDescriptionsItem :label="$t('page.audit.event.resourceType')">
-              {{ detailRow.resourceType || '-' }}
+            <ElDescriptionsItem :label="$t('page.audit.event.operation')">
+              {{ getAuditActionLabel(detailRow, auditLocale) }}
+            </ElDescriptionsItem>
+            <ElDescriptionsItem :label="$t('page.audit.event.object')">
+              {{ getAuditObjectLabel(detailRow, auditLocale) }}
+            </ElDescriptionsItem>
+            <ElDescriptionsItem v-if="failureReason" :label="$t('page.audit.event.failReason')" :span="2">
+              <div class="detail-text-block detail-failure-block">{{ failureReason }}</div>
+            </ElDescriptionsItem>
+            <ElDescriptionsItem :label="$t('page.audit.event.actionCode')" :span="2">
+              <span class="break-all text-12px font-mono">{{ detailRow.action }}</span>
+            </ElDescriptionsItem>
+            <ElDescriptionsItem :label="$t('page.audit.event.resourceTypeCode')">
+              <span class="break-all text-12px font-mono">{{ detailRow.resourceType || '-' }}</span>
             </ElDescriptionsItem>
             <ElDescriptionsItem :label="$t('page.audit.event.resourceId')">
-              {{ detailRow.resourceId || '-' }}
+              <span class="break-all text-12px font-mono">{{ detailRow.resourceId || '-' }}</span>
             </ElDescriptionsItem>
-            <ElDescriptionsItem :label="$t('page.audit.event.ipAddress')">
-              {{ detailRow.ipAddress || '-' }}
-            </ElDescriptionsItem>
-            <ElDescriptionsItem label="Request ID">
-              {{ detailRow.requestId || '-' }}
+            <ElDescriptionsItem label="Request ID" :span="2">
+              <div class="flex items-center gap-8px">
+                <span class="min-w-0 break-all text-12px font-mono">{{ detailRow.requestId || '-' }}</span>
+                <ElButton v-if="detailRow.requestId" class="shrink-0" link size="small" @click="copyRequestId">
+                  {{ $t('page.audit.event.copy') }}
+                </ElButton>
+              </div>
             </ElDescriptionsItem>
           </ElDescriptions>
 
-          <p class="mb-8px mt-16px font-bold">{{ $t('page.audit.event.changes') }}</p>
-          <ElEmpty v-if="!diffKeys.length" :description="$t('page.audit.event.noChanges')" :image-size="60" />
-          <ElTable
-            v-else
-            :data="diffKeys.map(key => ({ key }))"
-            border
-            size="small"
-            :row-class-name="({ row }) => (isChanged(row.key) ? 'audit-changed-row' : '')"
-          >
-            <ElTableColumn prop="key" :label="$t('page.audit.event.field')" min-width="120" show-overflow-tooltip />
-            <ElTableColumn :label="$t('page.audit.event.before')" min-width="140">
-              <template #default="{ row }">
-                <span class="break-all text-12px font-mono">{{ diffValue(row.key, 'before') }}</span>
-              </template>
-            </ElTableColumn>
-            <ElTableColumn :label="$t('page.audit.event.after')" min-width="140">
-              <template #default="{ row }">
-                <span class="break-all text-12px font-mono">{{ diffValue(row.key, 'after') }}</span>
-              </template>
-            </ElTableColumn>
-          </ElTable>
+          <template v-if="diffRows.length">
+            <div class="detail-section-header">
+              <p class="detail-section-title">{{ $t('page.audit.event.changes') }}</p>
+              <span class="detail-section-hint">
+                {{ $t('page.audit.event.changedHint', { count: diffRows.length }) }}
+              </span>
+            </div>
+            <ElTable :data="diffRows" border size="small" :max-height="320" class="detail-data-table">
+              <ElTableColumn prop="key" :label="$t('page.audit.event.field')" min-width="110">
+                <template #default="{ row }">
+                  <span class="break-all text-12px font-mono">{{ row.key }}</span>
+                </template>
+              </ElTableColumn>
+              <ElTableColumn :label="$t('page.audit.event.before')" min-width="150">
+                <template #default="{ row }">
+                  <span
+                    class="break-all text-12px font-mono"
+                    :class="isMissing(row.key, 'before') ? 'diff-empty' : 'diff-value'"
+                  >
+                    {{ snapshotText(row.key, 'before') }}
+                  </span>
+                </template>
+              </ElTableColumn>
+              <ElTableColumn :label="$t('page.audit.event.after')" min-width="150">
+                <template #default="{ row }">
+                  <span
+                    class="break-all text-12px font-mono"
+                    :class="isMissing(row.key, 'after') ? 'diff-empty' : 'diff-value'"
+                  >
+                    {{ snapshotText(row.key, 'after') }}
+                  </span>
+                </template>
+              </ElTableColumn>
+            </ElTable>
+          </template>
 
-          <p class="mb-8px mt-16px font-bold">User Agent</p>
-          <p class="break-all text-12px text-gray-500 font-mono">{{ detailRow.userAgent || '-' }}</p>
+          <div class="detail-section-header">
+            <p class="detail-section-title">{{ $t('page.audit.event.userAgent') }}</p>
+          </div>
+          <div class="detail-text-block">{{ detailRow.userAgent || '-' }}</div>
         </template>
       </ElDrawer>
     </ElCard>
@@ -267,7 +337,71 @@ function resetSearchParams() {
 </template>
 
 <style lang="scss" scoped>
-:deep(.audit-changed-row) {
-  background-color: var(--el-color-warning-light-9);
+/** 详情描述表：去掉标签列灰底，仅靠文字色区分标签与内容，降低表格重量 */
+.detail-descriptions {
+  :deep(.el-descriptions__label.is-bordered-label) {
+    background: transparent;
+    color: var(--el-text-color-regular);
+    font-weight: 400;
+  }
+}
+
+/** 详情数据表：全局表格 .cell padding 为 0，恢复内边距并压缩行高 */
+.detail-data-table {
+  :deep(.el-table__cell .cell) {
+    padding: 0 12px;
+  }
+
+  :deep(td.el-table__cell) {
+    padding: 6px 0;
+  }
+}
+
+.detail-section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 20px 0 8px;
+}
+
+.detail-section-title {
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+  text-wrap: balance;
+}
+
+.detail-section-hint {
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.diff-value {
+  color: var(--el-text-color-regular);
+}
+
+.diff-empty {
+  color: var(--el-text-color-placeholder);
+}
+
+.detail-text-block {
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  background: var(--el-fill-color-lighter);
+  color: var(--el-text-color-regular);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-all;
+}
+
+/* 失败原因：语义上属于异常信息，用浅红底与普通文本块区分 */
+.detail-failure-block {
+  border-color: var(--el-color-danger-light-7);
+  background: var(--el-color-danger-light-9);
+  color: var(--el-text-color-primary);
 }
 </style>

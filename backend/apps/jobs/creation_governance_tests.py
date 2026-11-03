@@ -11,7 +11,7 @@ def test_creation_initializes_governance_and_persists_snapshot(user):
     user.save()
     host = AssetHost.objects.create(
         hostname="governance",
-        primary_ip="192.0.2.30",
+        internal_ip="192.0.2.30",
         os_family="linux",
         connection_type="ssh",
     )

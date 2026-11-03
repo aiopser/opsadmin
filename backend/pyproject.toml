@@ -24,6 +24,7 @@ pycryptodome = "^3.14.1"
 djangorestframework-simplejwt = ">=5.5,<6"
 cryptography = "^48.0.0"
 celery = "^5.3.6"
+django-celery-beat = "^2.9.0"
 ansible-runner = "^2.4.0"
 # ansible-runner does not install Ansible itself; JumpServer execution code
 # imports ansible.* directly, so keep the core package explicit.
@@ -38,6 +39,10 @@ jsonschema = "^4.22.0"
 jsonpath-ng = "^1.6.1"
 openpyxl = "^3.1.5"
 channels-redis = ">=4.3,<5"
+alibabacloud-ecs20140526 = "^7.11.6"
+tencentcloud-sdk-python-cvm = "^3.1.178"
+alibabacloud-vpc20160428 = "^7.2.2"
+tencentcloud-sdk-python-vpc = "^3.1.189"
 
 [tool.poetry.group.dev.dependencies]
 black = "^22.3.0"

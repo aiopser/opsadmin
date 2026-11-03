@@ -4,8 +4,11 @@ import {
   fetchCreateWorkflowRun,
   fetchGetHostOptions,
   fetchGetWorkerPools,
+  fetchPreviewWorkflowRun,
   fetchPublishedWorkflowVersions
 } from '@/service/api';
+import RunPreviewDialog from '@/components/business/run-preview-dialog/index.vue';
+import TargetSelectorFields from '@/components/business/target-selector-fields/index.vue';
 
 defineOptions({ name: 'WorkflowRunCreateDrawer' });
 const visible = defineModel<boolean>('visible', { required: true });
@@ -14,7 +17,31 @@ const versions = shallowRef<Api.Jobs.WorkflowVersionOption[]>([]);
 const hosts = shallowRef<Api.Jobs.HostOption[]>([]);
 const pools = shallowRef<Api.Jobs.WorkerPoolOption[]>([]);
 const saving = ref(false);
-const form = reactive({ version: null as number | null, hosts: [] as number[], pool: null as number | null });
+const previewVisible = ref(false);
+const preview = shallowRef<Api.Jobs.RunPreview | null>(null);
+const pendingPayload = shallowRef<Api.Jobs.WorkflowRunPayload | null>(null);
+let previewRequestId = 0;
+const form = reactive({
+  version: null as number | null,
+  hosts: [] as number[],
+  groups: [] as number[],
+  tags: [] as number[],
+  pool: null as number | null
+});
+const formRef = ref();
+
+/** 目标资产为多选数组，required 基础规则无法校验空数组，用自定义 validator */
+function validateHosts(_rule: unknown, _value: number[], callback: (error?: Error) => void) {
+  if (!form.hosts.length && !form.groups.length && !form.tags.length) return callback(new Error('请选择目标资产'));
+  return callback();
+}
+
+const formRules = {
+  version: [{ required: true, message: '请选择流程版本', trigger: 'change' }],
+  hosts: [{ validator: validateHosts, trigger: 'change' }],
+  pool: [{ required: true, message: '请选择执行池', trigger: 'change' }]
+};
+
 const values = ref<Record<string, string | number | boolean>>({});
 const selected = computed(() => versions.value.find(item => item.id === form.version));
 const fields = computed(() => {
@@ -61,33 +88,64 @@ async function load() {
 }
 
 async function submit() {
-  if (!form.version || !form.pool || !form.hosts.length) {
-    window.$message?.warning('请选择已发布流程、执行池和目标资产');
-    return;
-  }
-  const missing = fields.value.find(
-    field => field.required && (values.value[field.name] === undefined || values.value[field.name] === '')
-  );
-  if (missing) {
-    window.$message?.warning(`请填写${missing.label || missing.name}`);
-    return;
-  }
+  if (saving.value) return;
   saving.value = true;
+  const requestId = previewRequestId;
   try {
+    await formRef.value?.validate();
+    if (requestId !== previewRequestId || !visible.value || !form.version) return;
+    const missing = fields.value.find(
+      field => field.required && (values.value[field.name] === undefined || values.value[field.name] === '')
+    );
+    if (missing) {
+      window.$message?.warning(`请填写${missing.label || missing.name}`);
+      return;
+    }
     const inputVars = Object.fromEntries(fields.value.map(field => [field.name, values.value[field.name]]));
-    const { data, error } = await fetchCreateWorkflowRun({
+    const payload: Api.Jobs.WorkflowRunPayload = {
       workflowVersionId: form.version,
       workerPoolId: form.pool,
-      hostIds: form.hosts,
+      hostIds: [...form.hosts],
+      groupIds: [...form.groups],
+      tagIds: [...form.tags],
       inputVars
+    };
+    const { data, error } = await fetchPreviewWorkflowRun(payload);
+    if (requestId !== previewRequestId || !visible.value || error || !data) return;
+    pendingPayload.value = payload;
+    preview.value = data;
+    previewVisible.value = true;
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function confirmRun() {
+  if (saving.value || !pendingPayload.value || !preview.value) return;
+  saving.value = true;
+  try {
+    const { data, error } = await fetchCreateWorkflowRun({
+      ...pendingPayload.value,
+      expectedTargetIds: preview.value.targets.map(target => target.hostId),
+      expectedTargetFingerprint: preview.value.targetFingerprint,
+      expectedConfirmationFingerprint: preview.value.confirmationFingerprint,
+      executionRequestId: preview.value.executionRequestId
     });
-    if (!error) {
+    if (!error && data) {
+      previewVisible.value = false;
       visible.value = false;
       emit('created', data);
     }
   } finally {
     saving.value = false;
   }
+}
+
+function invalidatePreview() {
+  previewRequestId += 1;
+  previewVisible.value = false;
+  preview.value = null;
+  pendingPayload.value = null;
 }
 
 watch(selected, () => {
@@ -99,15 +157,31 @@ watch(selected, () => {
     }
   });
 });
-watch(visible, open => {
-  if (open) load();
-});
+watch(
+  visible,
+  open => {
+    invalidatePreview();
+    if (open) load();
+  },
+  { flush: 'sync' }
+);
 </script>
 
 <template>
-  <ElDrawer v-model="visible" title="发起任务" size="520px">
-    <ElForm label-position="top">
-      <ElFormItem label="已发布流程" required>
+  <ElDrawer v-model="visible" title="发起执行" size="520px">
+    <ElForm
+      ref="formRef"
+      :model="form"
+      :rules="formRules"
+      :disabled="saving"
+      label-position="top"
+      label-suffix="："
+      require-asterisk-position="left"
+    >
+      <ElFormItem prop="version">
+        <template #label>
+          <FormLabelHelp label="已发布流程" :help="['只能选择已发布版本；运行创建后固定引用该版本的流程快照。']" />
+        </template>
         <ElSelect v-model="form.version" filterable class="w-full" placeholder="选择流程版本">
           <ElOption
             v-for="version in versions"
@@ -117,17 +191,21 @@ watch(visible, open => {
           />
         </ElSelect>
       </ElFormItem>
-      <ElFormItem label="目标资产" required>
+      <ElFormItem label="目标资产" prop="hosts">
         <ElSelect v-model="form.hosts" multiple filterable remote :remote-method="searchHosts" class="w-full">
           <ElOption
             v-for="host in hosts"
             :key="host.id"
             :value="host.id"
-            :label="`${host.hostname} · ${host.primaryIp}`"
+            :label="`${host.hostname} · ${host.internalIp}`"
           />
         </ElSelect>
       </ElFormItem>
-      <ElFormItem label="执行池" required>
+      <TargetSelectorFields v-model:group-ids="form.groups" v-model:tag-ids="form.tags" />
+      <ElFormItem prop="pool">
+        <template #label>
+          <FormLabelHelp label="执行池" :help="['运行被投递到该池对应队列执行；池可限制并发数量与支持的执行类型。']" />
+        </template>
         <ElSelect v-model="form.pool" class="w-full">
           <ElOption v-for="pool in pools" :key="pool.id" :value="pool.id" :label="pool.name" />
         </ElSelect>
@@ -153,6 +231,13 @@ watch(visible, open => {
         />
       </ElFormItem>
     </ElForm>
-    <template #footer><ElButton type="primary" :loading="saving" @click="submit">发起任务</ElButton></template>
+    <template #footer><ElButton type="primary" :loading="saving" @click="submit">发起执行</ElButton></template>
+    <RunPreviewDialog
+      v-model:visible="previewVisible"
+      :preview="preview"
+      :loading="saving"
+      append-to-body
+      @confirm="confirmRun"
+    />
   </ElDrawer>
 </template>

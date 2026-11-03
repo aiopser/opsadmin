@@ -1,34 +1,25 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import { fetchPatchHost } from '@/service/api';
-import AssetSourceTab from './modules/asset-source-tab.vue';
-import HostGroupTab from './modules/host-group-tab.vue';
+import { fetchGetHostRelations, fetchUpdateHostRelations } from '@/service/api';
 import HostList from './modules/host-list.vue';
 import HostTree from './modules/host-tree.vue';
-import SyncRecordTab from './modules/sync-record-tab.vue';
-import TagTab from './modules/tag-tab.vue';
 
 defineOptions({ name: 'CmdbHost' });
 
-/**
- * 主机资产页：左树右表布局。
- * 左侧为「业务 → 服务树节点」树（带主机计数与节点操作），
- * 右侧为主机列表（搜索 + CRUD + Excel 导入）；
- * 分组/标签/资产来源/同步记录等管理入口收纳进「管理」下拉 + 抽屉。
- */
+/** 主机资产工作台：左侧分组树，右侧主机列表。 */
 
 const hostTreeRef = ref<InstanceType<typeof HostTree>>();
 const hostListRef = ref<InstanceType<typeof HostList>>();
 
 /** ============ 左树选中 → 主机查询范围 ============ */
 
-const hostQuery = ref<Api.Cmdb.HostListQuery>({ business: null, serviceNodeIds: null });
+const hostQuery = ref<Api.Cmdb.HostListQuery>({ groupId: null });
 
 function handleTreeSelect(payload: Api.Cmdb.HostTreeSelectPayload) {
-  hostQuery.value = { business: payload.business, serviceNodeIds: payload.serviceNodeIds };
+  hostQuery.value = { groupId: payload.groupId };
 }
 
-/** 左树「添加主机到节点」：打开新增主机抽屉并预填服务树节点 */
+/** 左树「添加主机到分组」：打开新增主机抽屉并预填所属分组 */
 function handleAddHost(node: Api.Cmdb.HostTreeRow) {
   hostListRef.value?.openAddDrawer(node.id);
 }
@@ -38,10 +29,10 @@ function handleHostsChanged() {
   hostTreeRef.value?.refresh();
 }
 
-/** ============ 移动主机到节点 ============ */
+/** ============ 移动主机到分组（真移动：分组关系覆盖为目标分组，标签保留，动态分组不受影响） ============ */
 
 async function handleMoveHosts(node: Api.Cmdb.HostTreeRow) {
-  if (node.type !== 'node') return;
+  if (node.type !== 'group') return;
 
   const rows = hostListRef.value?.getSelectedRows() ?? [];
   if (!rows.length) {
@@ -49,59 +40,55 @@ async function handleMoveHosts(node: Api.Cmdb.HostTreeRow) {
     return;
   }
   try {
-    await ElMessageBox.confirm(`确认将选中的 ${rows.length} 台主机移动到节点「${node.name}」？`, '移动主机', {
-      type: 'warning'
-    });
+    await ElMessageBox.confirm(
+      `确认将选中的 ${rows.length} 台主机移动到分组「${node.name}」？主机将从其他所有分组移出`,
+      '移动主机',
+      { type: 'warning' }
+    );
   } catch {
     return;
   }
 
-  const results = await Promise.all(rows.map(row => fetchPatchHost(row.id, { service_node: node.id })));
-  const failedCount = results.filter(result => result.error).length;
-  if (failedCount) {
-    window.$message?.warning(`移动完成：${rows.length - failedCount} 台成功，${failedCount} 台失败`);
+  const targetGroupId = String(node.id);
+  // relations 接口为全量覆盖：先读每台主机的标签再回传，避免标签被清空
+  const okFlags = await Promise.all(
+    rows.map(async row => {
+      const { data: relations, error: getError } = await fetchGetHostRelations(row.id);
+      if (getError) return false;
+      const { error } = await fetchUpdateHostRelations(row.id, {
+        groupIds: [targetGroupId],
+        tagIds: relations?.tagIds ?? []
+      });
+      return !error;
+    })
+  );
+  const failed = okFlags.filter(ok => !ok).length;
+  if (failed) {
+    window.$message?.error(`移动失败 ${failed} 台，请重试`);
   } else {
-    window.$message?.success(`已将 ${rows.length} 台主机移动到「${node.name}」`);
+    window.$notification?.success(`已将 ${rows.length} 台主机移动到「${node.name}」`);
   }
   hostListRef.value?.refresh();
   hostTreeRef.value?.refresh();
 }
-
-/** ============ 管理抽屉（原页签组件收纳） ============ */
-
-const drawerVisible = ref(false);
-const activeDrawer = ref<Api.Cmdb.HostManageKey>('host-group');
-
-const drawerTitleMap: Record<Api.Cmdb.HostManageKey, string> = {
-  'host-group': '主机分组管理',
-  tag: '主机标签管理',
-  'asset-source': '资产来源管理',
-  'sync-record': '资产同步记录'
-};
-
-function openManageDrawer(key: Api.Cmdb.HostManageKey) {
-  activeDrawer.value = key;
-  drawerVisible.value = true;
-}
 </script>
 
 <template>
-  <div class="min-h-500px flex gap-12px lt-sm:flex-col">
-    <ElCard class="w-300px shrink-0 card-wrapper lt-sm:w-full">
-      <HostTree ref="hostTreeRef" @select="handleTreeSelect" @add-host="handleAddHost" @move-hosts="handleMoveHosts" />
-    </ElCard>
+  <div class="min-h-500px flex-col-stretch overflow-hidden lt-sm:overflow-auto">
+    <div class="min-h-0 flex flex-1 gap-12px lt-sm:flex-col">
+      <ElCard class="workspace-card min-h-0 w-300px shrink-0 card-wrapper lt-sm:w-full">
+        <HostTree
+          ref="hostTreeRef"
+          class="min-h-0 flex-1"
+          @select="handleTreeSelect"
+          @add-host="handleAddHost"
+          @move-hosts="handleMoveHosts"
+        />
+      </ElCard>
 
-    <ElCard class="min-w-0 flex-1 card-wrapper">
-      <HostList ref="hostListRef" :query="hostQuery" @changed="handleHostsChanged" @open-manage="openManageDrawer" />
-    </ElCard>
-
-    <ElDrawer v-model="drawerVisible" :title="drawerTitleMap[activeDrawer]" size="75%" destroy-on-close>
-      <HostGroupTab v-if="activeDrawer === 'host-group'" />
-      <TagTab v-else-if="activeDrawer === 'tag'" />
-      <AssetSourceTab v-else-if="activeDrawer === 'asset-source'" />
-      <SyncRecordTab v-else-if="activeDrawer === 'sync-record'" />
-    </ElDrawer>
+      <ElCard class="workspace-card min-h-0 min-w-0 flex-1 card-wrapper">
+        <HostList ref="hostListRef" :query="hostQuery" @changed="handleHostsChanged" />
+      </ElCard>
+    </div>
   </div>
 </template>
-
-<style scoped></style>

@@ -166,9 +166,7 @@ def test_published_definition_survives_workflow_deletion():
     )
     command_version.publish(None)
     template = WorkflowTemplate.objects.create(name="frozen", code="frozen")
-    version = WorkflowVersion.objects.create(
-        workflow=template, version=1, global_vars={"environment": "test"}
-    )
+    version = WorkflowVersion.objects.create(workflow=template, version=1)
     graph = valid_graph()
     graph["nodes"][1]["commandVersionId"] = command_version.pk
     assert replace_graph(version, graph) == []
@@ -182,7 +180,7 @@ def test_published_definition_survives_workflow_deletion():
     node = NodeRun.objects.create(workflow_run=run, node_key="work")
     with pytest.raises(ValueError):
         WorkflowVersion.objects.filter(pk=version.pk).update(
-            global_vars={"environment": "changed"}
+            input_schema={"fields": [{"name": "changed"}]}
         )
     template.delete()
     command.delete()
@@ -190,7 +188,7 @@ def test_published_definition_survives_workflow_deletion():
     node.refresh_from_db()
     assert run.workflow_version_id is None
     assert execution_node(node).command_version.content == "echo frozen"
-    assert runtime_context(run, {})["global"] == {"environment": "test"}
+    assert "global" not in runtime_context(run, {})
 
 
 @pytest.mark.django_db

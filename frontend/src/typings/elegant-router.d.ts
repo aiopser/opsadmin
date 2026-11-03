@@ -36,15 +36,19 @@ declare module "@elegant-router/types" {
     "500": "/500";
     "audit": "/audit";
     "audit_event": "/audit/event";
+    "audit_login": "/audit/login";
+    "audit_operation": "/audit/operation";
     "automation": "/automation";
     "automation_resource": "/automation/resource";
     "automation_resources": "/automation/resources";
     "automation_resources_api": "/automation/resources/api";
     "automation_resources_gateway": "/automation/resources/gateway";
+    "automation_resources_git": "/automation/resources/git";
     "automation_resources_jenkins": "/automation/resources/jenkins";
     "automation_resources_module": "/automation/resources/module";
     "automation_resources_notification": "/automation/resources/notification";
     "automation_resources_playbook": "/automation/resources/playbook";
+    "automation_resources_provisioning": "/automation/resources/provisioning";
     "automation_resources_script": "/automation/resources/script";
     "cmdb": "/cmdb";
     "cmdb_credential": "/cmdb/credential";
@@ -52,6 +56,7 @@ declare module "@elegant-router/types" {
     "cmdb_group": "/cmdb/group";
     "cmdb_host": "/cmdb/host";
     "cmdb_resource": "/cmdb/resource";
+    "cmdb_source": "/cmdb/source";
     "home": "/home";
     "iframe-page": "/iframe-page/:url";
     "login": "/login/:module(pwd-login|reset-pwd)?";
@@ -59,15 +64,26 @@ declare module "@elegant-router/types" {
     "manage_config": "/manage/config";
     "manage_dept": "/manage/dept";
     "manage_dict": "/manage/dict";
-    "manage_log": "/manage/log";
     "manage_menu": "/manage/menu";
+    "manage_notification": "/manage/notification";
     "manage_role": "/manage/role";
     "manage_user": "/manage/user";
     "manage_user-detail": "/manage/user-detail/:id";
+    "monitoring": "/monitoring";
+    "monitoring_consul": "/monitoring/consul";
+    "monitoring_consul-template": "/monitoring/consul-template";
+    "monitoring_integrations": "/monitoring/integrations";
+    "monitoring_policies": "/monitoring/policies";
+    "monitoring_security": "/monitoring/security";
+    "monitoring_targets": "/monitoring/targets";
     "ops": "/ops";
     "ops_dashboard": "/ops/dashboard";
     "ops_history": "/ops/history";
     "ops_quick-execute": "/ops/quick-execute";
+    "ops_quick-execute_module": "/ops/quick-execute/module";
+    "ops_quick-execute_playbook": "/ops/quick-execute/playbook";
+    "ops_quick-execute_script": "/ops/quick-execute/script";
+    "ops_run-detail": "/ops/run-detail/:id";
     "ops_settings": "/ops/settings";
     "plugin": "/plugin";
     "plugin_barcode": "/plugin/barcode";
@@ -95,7 +111,10 @@ declare module "@elegant-router/types" {
     "plugin_video": "/plugin/video";
     "task": "/task";
     "task_dashboard": "/task/dashboard";
+    "task_execution-history": "/task/execution-history";
     "task_flow-design": "/task/flow-design";
+    "task_provisioning": "/task/provisioning";
+    "task_provisioning-operations": "/task/provisioning-operations";
     "task_run": "/task/run";
     "task_run-create": "/task/run-create";
     "task_run-detail": "/task/run-detail/:id";
@@ -103,6 +122,7 @@ declare module "@elegant-router/types" {
     "task_templates": "/task/templates";
     "task_worker-pool": "/task/worker-pool";
     "user-center": "/user-center";
+    "wiki": "/wiki";
   };
 
   /**
@@ -158,10 +178,12 @@ declare module "@elegant-router/types" {
     | "iframe-page"
     | "login"
     | "manage"
+    | "monitoring"
     | "ops"
     | "plugin"
     | "task"
     | "user-center"
+    | "wiki"
   >;
 
   /**
@@ -186,31 +208,45 @@ declare module "@elegant-router/types" {
     | "iframe-page"
     | "login"
     | "audit_event"
+    | "audit_login"
+    | "audit_operation"
     | "automation_resource"
     | "automation_resources_api"
     | "automation_resources_gateway"
+    | "automation_resources_git"
     | "automation_resources_jenkins"
     | "automation_resources_module"
     | "automation_resources_notification"
     | "automation_resources_playbook"
+    | "automation_resources_provisioning"
     | "automation_resources_script"
     | "cmdb_credential"
     | "cmdb_execution"
     | "cmdb_group"
     | "cmdb_host"
     | "cmdb_resource"
+    | "cmdb_source"
     | "home"
     | "manage_config"
     | "manage_dept"
     | "manage_dict"
-    | "manage_log"
     | "manage_menu"
+    | "manage_notification"
     | "manage_role"
     | "manage_user-detail"
     | "manage_user"
+    | "monitoring_consul-template"
+    | "monitoring_consul"
+    | "monitoring_integrations"
+    | "monitoring_policies"
+    | "monitoring_security"
+    | "monitoring_targets"
     | "ops_dashboard"
     | "ops_history"
-    | "ops_quick-execute"
+    | "ops_quick-execute_module"
+    | "ops_quick-execute_playbook"
+    | "ops_quick-execute_script"
+    | "ops_run-detail"
     | "ops_settings"
     | "plugin_barcode"
     | "plugin_charts_antv"
@@ -232,7 +268,10 @@ declare module "@elegant-router/types" {
     | "plugin_typeit"
     | "plugin_video"
     | "task_dashboard"
+    | "task_execution-history"
     | "task_flow-design"
+    | "task_provisioning-operations"
+    | "task_provisioning"
     | "task_run-create"
     | "task_run-detail"
     | "task_run"
@@ -240,6 +279,7 @@ declare module "@elegant-router/types" {
     | "task_templates"
     | "task_worker-pool"
     | "user-center"
+    | "wiki"
   >;
 
   /**

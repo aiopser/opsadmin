@@ -42,7 +42,7 @@ const title = computed(() => {
   return titles[props.operateType];
 });
 
-type Model = Pick<Api.SystemManage.Role, 'roleName' | 'roleCode' | 'roleDesc' | 'status'>;
+type Model = Api.SystemManage.RoleModel;
 
 const model = ref(createDefaultModel());
 
@@ -51,6 +51,7 @@ function createDefaultModel(): Model {
     roleName: '',
     roleCode: '',
     roleDesc: '',
+    jobDataScope: 'own',
     status: undefined
   };
 }
@@ -60,6 +61,7 @@ type RuleKey = Exclude<keyof Model, 'roleDesc'>;
 const rules: Record<RuleKey, App.Global.FormRule> = {
   roleName: defaultRequiredRule,
   roleCode: defaultRequiredRule,
+  jobDataScope: defaultRequiredRule,
   status: defaultRequiredRule
 };
 
@@ -88,7 +90,7 @@ async function handleSubmit() {
       : await addRole(model.value);
 
   if (!error) {
-    window.$message?.success($t('common.updateSuccess'));
+    window.$notification?.success($t('common.updateSuccess'));
     closeDrawer();
     emit('submitted');
   }
@@ -104,17 +106,38 @@ watch(visible, () => {
 
 <template>
   <ElDrawer v-model="visible" :title="title" :size="360">
-    <ElForm ref="formRef" :model="model" :rules="rules" label-position="top">
+    <ElForm
+      ref="formRef"
+      :model="model"
+      :rules="rules"
+      label-position="top"
+      label-suffix="："
+      require-asterisk-position="left"
+    >
       <ElFormItem :label="$t('page.manage.role.roleName')" prop="roleName">
         <ElInput v-model="model.roleName" :placeholder="$t('page.manage.role.form.roleName')" />
       </ElFormItem>
-      <ElFormItem :label="$t('page.manage.role.roleCode')" prop="roleCode">
+      <ElFormItem prop="roleCode">
+        <template #label>
+          <FormLabelHelp
+            :label="$t('page.manage.role.roleCode')"
+            :help="['角色编码，全局唯一，用于前端权限匹配，如 R_ADMIN。']"
+          />
+        </template>
         <ElInput v-model="model.roleCode" :placeholder="$t('page.manage.role.form.roleCode')" />
       </ElFormItem>
       <ElFormItem :label="$t('page.manage.role.roleStatus')" prop="status">
         <ElRadioGroup v-model="model.status">
           <ElRadio v-for="{ label, value } in enableStatusOptions" :key="value" :value="value" :label="$t(label)" />
         </ElRadioGroup>
+      </ElFormItem>
+      <ElFormItem label="作业数据范围" prop="jobDataScope">
+        <ElSelect v-model="model.jobDataScope" class="w-full">
+          <ElOption value="own" label="本人作业" />
+          <ElOption value="department" label="同部门作业" />
+          <ElOption value="all" label="全部作业" />
+        </ElSelect>
+        <span class="text-xs text-gray">控制作业可见范围；取消、重试仍需相应操作权限。</span>
       </ElFormItem>
       <ElFormItem :label="$t('page.manage.role.roleDesc')" prop="roleDesc">
         <ElInput v-model="model.roleDesc" :placeholder="$t('page.manage.role.form.roleDesc')" />

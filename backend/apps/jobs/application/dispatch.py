@@ -61,16 +61,9 @@ def register_dispatch(*, workflow_run_id, node_run_id=None, attempt=0):
 def _node_queue_and_timeout(node):
     run = node.workflow_run
     queue = node_queue_name(node.node_type, run.worker_pool, run.run_domain)
-    timeout = max(
-        min(
-            int(
-                getattr(node.workflow_node, "timeout_seconds", 0)
-                or run.timeout_seconds
-            ),
-            run.timeout_seconds,
-        ),
-        1,
-    )
+    from apps.jobs.execution.settings_snapshot import effective_node_timeout
+
+    timeout = effective_node_timeout(run, node.node_key)
     return queue, timeout
 
 
@@ -98,11 +91,7 @@ def _attempt_publish(record, *, record_dispatch_task=True):
         )
     else:
         run = WorkflowRun.objects.get(pk=record.workflow_run_id)
-        queue = (
-            "ops"
-            if run.run_domain == WorkflowRun.RunDomain.OPS
-            else "task"
-        )
+        queue = "ops" if run.run_domain == WorkflowRun.RunDomain.OPS else "task"
         publish = lambda: run_workflow.apply_async(args=[run.id], queue=queue)
 
     record.delivery_attempts += 1
@@ -110,8 +99,7 @@ def _attempt_publish(record, *, record_dispatch_task=True):
         task = publish()
     except Exception as exc:
         backoff = min(
-            RETRY_BACKOFF_BASE_SECONDS
-            * (2 ** min(record.delivery_attempts - 1, 5)),
+            RETRY_BACKOFF_BASE_SECONDS * (2 ** min(record.delivery_attempts - 1, 5)),
             RETRY_BACKOFF_CAP_SECONDS,
         )
         record.status = DispatchRecord.Status.FAILED
@@ -204,9 +192,7 @@ def enqueue_node_run(node_run_id):
 def enqueue_workflow_run(workflow_run_id, record_dispatch_task=True):
     run = WorkflowRun.objects.get(pk=workflow_run_id)
     record = register_dispatch(workflow_run_id=run.id)
-    task, queue = _attempt_publish(
-        record, record_dispatch_task=record_dispatch_task
-    )
+    task, queue = _attempt_publish(record, record_dispatch_task=record_dispatch_task)
     return {
         "workflowRunId": run.id,
         "dispatchMode": "celery",

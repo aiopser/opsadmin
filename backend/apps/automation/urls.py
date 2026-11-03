@@ -6,13 +6,25 @@ from .views import (
     AutomationTemplateView,
     CommandAtomViewSet,
     CommandVersionViewSet,
+    DingtalkConnectionTestView,
+    DingtalkSettingsView,
+    FeishuConnectionTestView,
+    FeishuSettingsView,
+    GitRepositoryViewSet,
     JenkinsServerViewSet,
     JenkinsBuildViewSet,
     JenkinsJobViewSet,
     NotificationChannelViewSet,
+    NotificationEmailConnectionTestView,
+    NotificationEmailSettingsView,
+    NotificationEmailTestView,
+    NotificationHistoryPurgeView,
+    NotificationHistorySettingsView,
     NotificationRecordViewSet,
     NotificationTemplateViewSet,
     NodeResourceView,
+    WecomConnectionTestView,
+    WecomSettingsView,
     WorkflowEdgeViewSet,
     WorkflowNodeViewSet,
     WorkflowTemplateViewSet,
@@ -56,6 +68,11 @@ router.register(
     basename="automation-api-endpoints",
 )
 router.register(
+    r"v1/automation/git-repositories",
+    GitRepositoryViewSet,
+    basename="automation-git-repositories",
+)
+router.register(
     r"v1/automation/jenkins-servers",
     JenkinsServerViewSet,
     basename="automation-jenkins-servers",
@@ -87,5 +104,34 @@ router.register(
 urlpatterns = [
     path("v1/automation/templates", AutomationTemplateView.as_view()),
     path("v1/automation/node-resources", NodeResourceView.as_view()),
+    path("v1/notifications/email-settings", NotificationEmailSettingsView.as_view()),
+    path(
+        "v1/notifications/email-settings/test-connection",
+        NotificationEmailConnectionTestView.as_view(),
+    ),
+    path("v1/notifications/email-settings/test", NotificationEmailTestView.as_view()),
+    path(
+        "v1/notifications/history-settings",
+        NotificationHistorySettingsView.as_view(),
+    ),
+    path(
+        "v1/notifications/history-settings/purge",
+        NotificationHistoryPurgeView.as_view(),
+    ),
+    path("v1/notifications/wecom-settings", WecomSettingsView.as_view()),
+    path(
+        "v1/notifications/wecom-settings/test-connection",
+        WecomConnectionTestView.as_view(),
+    ),
+    path("v1/notifications/dingtalk-settings", DingtalkSettingsView.as_view()),
+    path(
+        "v1/notifications/dingtalk-settings/test-connection",
+        DingtalkConnectionTestView.as_view(),
+    ),
+    path("v1/notifications/feishu-settings", FeishuSettingsView.as_view()),
+    path(
+        "v1/notifications/feishu-settings/test-connection",
+        FeishuConnectionTestView.as_view(),
+    ),
     *router.urls,
 ]

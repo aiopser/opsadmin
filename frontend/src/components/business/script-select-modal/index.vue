@@ -149,6 +149,7 @@ watch(
     title="脚本库选择"
     width="780px"
     :close-on-click-modal="false"
+    append-to-body
     @update:model-value="handleClose"
   >
     <div class="flex gap-12px">
@@ -188,23 +189,23 @@ watch(
           highlight-current-row
           @row-click="handleRowClick"
         >
-          <ElTableColumn prop="name" label="名称" min-width="140" show-overflow-tooltip />
-          <ElTableColumn prop="code" label="编码" min-width="120" show-overflow-tooltip />
-          <ElTableColumn label="分类" width="100" show-overflow-tooltip>
+          <ElTableColumn prop="name" label="名称" min-width="140" align="center" show-overflow-tooltip />
+          <ElTableColumn prop="code" label="编码" min-width="120" align="center" show-overflow-tooltip />
+          <ElTableColumn label="分类" width="100" align="center" show-overflow-tooltip>
             <template #default="{ row }">{{ row.category || '-' }}</template>
           </ElTableColumn>
           <ElTableColumn label="风险" width="88" align="center">
             <template #default="{ row }">
-              <ElTag size="small" :type="getRiskMeta(row.risk_level).type">
-                {{ getRiskMeta(row.risk_level).label }}
+              <ElTag size="small" :type="getRiskMeta(row.riskLevel).type">
+                {{ getRiskMeta(row.riskLevel).label }}
               </ElTag>
             </template>
           </ElTableColumn>
           <ElTableColumn label="发布版本" width="88" align="center">
             <template #default="{ row }">{{ row.publishedVersion ? `v${row.publishedVersion}` : '-' }}</template>
           </ElTableColumn>
-          <ElTableColumn label="更新时间" width="104">
-            <template #default="{ row }">{{ formatDay(row.updated_at) }}</template>
+          <ElTableColumn label="更新时间" width="104" align="center">
+            <template #default="{ row }">{{ formatDay(row.updatedAt) }}</template>
           </ElTableColumn>
         </ElTable>
         <div class="mt-8px flex justify-end">
@@ -227,9 +228,9 @@ watch(
             <span class="font-bold">已选：</span>
             <span>{{ innerSelected.name }}</span>
             <ElTag v-if="innerSelected.category" size="small" class="ml-8px">{{ innerSelected.category }}</ElTag>
-            <span class="ml-8px text-12px text-gray-400">{{ innerSelected.code }}</span>
+            <span class="ml-8px text-12px text-gray-500">{{ innerSelected.code }}</span>
           </template>
-          <span v-else class="text-gray-400">点击表格行选择脚本（仅显示已发布脚本）</span>
+          <span v-else class="text-gray-500">点击表格行选择脚本（仅显示已发布脚本）</span>
         </div>
         <div class="shrink-0">
           <ElButton @click="handleClose">取消</ElButton>

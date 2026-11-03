@@ -97,12 +97,22 @@ export const request = createFlatRequest(
     onError(error) {
       // when the request is fail, you can show error message
 
+      // AbortController 主动取消的请求（如详情抽屉切换/关闭时 abort 未完成请求）
+      // 不算错误，静默处理；axios CanceledError 的 message 是 "canceled"，不能弹出
+      if (error.code === 'ERR_CANCELED') {
+        return;
+      }
+
       let message = error.message;
       let backendErrorCode = '';
 
       // get backend error message and code
-      if (error.code === BACKEND_ERROR_CODE) {
-        message = error.response?.data?.msg || message;
+      // 后端返回 {code, data, msg} 业务结构时优先展示业务 msg，覆盖两种错误形态：
+      // 1. HTTP 200 + 业务 code 失败（BACKEND_ERROR_CODE）
+      // 2. 真实 HTTP 4xx/5xx 携带业务错误体（如 api_error_response 的 400）
+      const backendMsg = error.response?.data?.msg;
+      if (error.code === BACKEND_ERROR_CODE || backendMsg) {
+        message = backendMsg || message;
         backendErrorCode = String(error.response?.data?.code || '');
       }
 

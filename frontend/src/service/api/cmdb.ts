@@ -1,10 +1,11 @@
+import { AxiosError } from 'axios';
 import { request } from '../request';
 
 /**
  * 资产管理域 API（cmdb）。
  *
  * - 主机：GET/POST/PUT/DELETE /api/v1/cmdb/hosts（读 camelCase / 写 snake_case）+ bulk-import/excel-import/relations
- * - 分组、标签、业务、服务树、资产来源：fields="__all__" 输出 snake_case（serializer 附加驼峰字段）
+ * - 分组、标签、资产来源：fields="__all__" 输出 snake_case（serializer 附加驼峰字段）
  * - 同步记录只读；资产来源 sync action 触发异步同步任务
  */
 
@@ -76,8 +77,8 @@ export function fetchGetHostList(params?: Api.Cmdb.HostSearchParams) {
       os_family: params?.osFamily,
       status: params?.status,
       environment: params?.environment,
-      business: params?.business,
-      service_node__in: params?.serviceNodeIds?.join(',')
+      ids: params?.ids,
+      group_id: params?.groupId
     })
   );
 }
@@ -92,7 +93,7 @@ export function fetchUpdateHost(id: number, data: Partial<Api.Cmdb.HostPayload>)
   return request<Api.Cmdb.HostRecord>({ url: `/api/v1/cmdb/hosts/${id}`, method: 'put', data });
 }
 
-/** 局部更新主机（PATCH，用于移动主机到服务树节点等轻量操作） */
+/** 局部更新主机（PATCH，轻量字段更新） */
 export function fetchPatchHost(id: number, data: Partial<Api.Cmdb.HostPayload>) {
   return request<Api.Cmdb.HostRecord>({ url: `/api/v1/cmdb/hosts/${id}`, method: 'patch', data });
 }
@@ -100,6 +101,14 @@ export function fetchPatchHost(id: number, data: Partial<Api.Cmdb.HostPayload>) 
 /** 删除主机 */
 export function fetchDeleteHost(id: number) {
   return request<null>({ url: `/api/v1/cmdb/hosts/${id}`, method: 'delete' });
+}
+
+/** 批量删除主机（后端逗号分隔主键，DELETE hosts/1,2,3） */
+export function fetchBatchDeleteHost(ids: number[]) {
+  return request<{ deleted: number }>({
+    url: `/api/v1/cmdb/hosts/${ids.join(',')}`,
+    method: 'delete'
+  });
 }
 
 /** 主机 Excel 导入（POST hosts/excel-import，multipart 上传 .xlsx） */
@@ -186,61 +195,6 @@ export function fetchDeleteTag(id: number) {
   return tagApi.fetchDelete(id);
 }
 
-/** ==================== 业务系统 ==================== */
-
-const businessApi = createCrudApi<Api.Cmdb.BusinessRecord, Api.Cmdb.BusinessPayload>('/api/v1/cmdb/businesses');
-
-export function fetchGetBusinessList(params?: Api.Cmdb.BusinessSearchParams) {
-  return businessApi.fetchGetList({
-    current: params?.current ?? 1,
-    size: params?.size ?? 10,
-    search: params?.search,
-    code: params?.code,
-    is_active: params?.isActive
-  });
-}
-
-export function fetchAddBusiness(data: Api.Cmdb.BusinessPayload) {
-  return businessApi.fetchAdd(data);
-}
-
-export function fetchUpdateBusiness(id: number, data: Partial<Api.Cmdb.BusinessPayload>) {
-  return businessApi.fetchUpdate(id, data);
-}
-
-export function fetchDeleteBusiness(id: number) {
-  return businessApi.fetchDelete(id);
-}
-
-/** ==================== 服务树节点 ==================== */
-
-const serviceNodeApi = createCrudApi<Api.Cmdb.ServiceTreeNodeRecord, Api.Cmdb.ServiceTreeNodePayload>(
-  '/api/v1/cmdb/service-tree-nodes'
-);
-
-export function fetchGetServiceNodeList(params?: Api.Cmdb.ServiceTreeNodeSearchParams) {
-  return serviceNodeApi.fetchGetList({
-    current: params?.current ?? 1,
-    size: params?.size ?? 10,
-    search: params?.search,
-    business: params?.business,
-    node_type: params?.nodeType,
-    is_active: params?.isActive
-  });
-}
-
-export function fetchAddServiceNode(data: Api.Cmdb.ServiceTreeNodePayload) {
-  return serviceNodeApi.fetchAdd(data);
-}
-
-export function fetchUpdateServiceNode(id: number, data: Partial<Api.Cmdb.ServiceTreeNodePayload>) {
-  return serviceNodeApi.fetchUpdate(id, data);
-}
-
-export function fetchDeleteServiceNode(id: number) {
-  return serviceNodeApi.fetchDelete(id);
-}
-
 /** ==================== 资产来源 ==================== */
 
 const assetSourceApi = createCrudApi<Api.Cmdb.AssetSourceRecord, Api.Cmdb.AssetSourcePayload>(
@@ -253,6 +207,7 @@ export function fetchGetAssetSourceList(params?: Api.Cmdb.AssetSourceSearchParam
     size: params?.size ?? 10,
     search: params?.search,
     source_type: params?.sourceType,
+    exclude_source_type: params?.excludeSourceType,
     is_active: params?.isActive
   });
 }
@@ -269,12 +224,87 @@ export function fetchDeleteAssetSource(id: number) {
   return assetSourceApi.fetchDelete(id);
 }
 
+export function fetchTestCloudConnection(
+  data: Api.Cmdb.AssetSourcePayload & { source_id?: number; test_regions?: string[] }
+) {
+  return request<{ results: Api.Cmdb.CloudConnectionResult[]; untestedRegions?: string[] }>({
+    url: '/api/v1/cmdb/asset-sources/test-cloud-connection',
+    method: 'post',
+    timeout: 45000,
+    data
+  });
+}
+
 /** 触发资产来源同步（POST asset-sources/{id}/sync，assets 为 JSON 数组，异步任务执行） */
 export function fetchSyncAssetSource(id: number, assets: Array<Record<string, unknown>>) {
   return request<Api.Cmdb.AssetSyncRecordRecord>({
     url: `/api/v1/cmdb/asset-sources/${id}/sync`,
     method: 'post',
     data: { assets }
+  });
+}
+
+export function fetchPreviewAssetSync(id: number, assets: Array<Record<string, unknown>>) {
+  return request<Api.Cmdb.AssetSyncPreview>({
+    url: `/api/v1/cmdb/asset-sources/${id}/preview-sync`,
+    method: 'post',
+    data: { assets }
+  });
+}
+
+export async function fetchPreviewCloudAssets(id: number, signal?: AbortSignal) {
+  const queued = await request<{ previewId: number; status: string }>({
+    url: `/api/v1/cmdb/asset-sources/${id}/preview-cloud`,
+    method: 'post',
+    signal
+  });
+  if (queued.error) return { ...queued, data: null };
+  return pollCloudPreview({
+    sourceId: id,
+    previewId: queued.data.previewId,
+    attempt: 0,
+    response: queued.response,
+    signal
+  });
+}
+
+interface CloudPreviewPolling {
+  sourceId: number;
+  previewId: number;
+  attempt: number;
+  response: Awaited<ReturnType<typeof request>>['response'];
+  signal?: AbortSignal;
+}
+
+async function pollCloudPreview(polling: CloudPreviewPolling) {
+  if (polling.signal?.aborted) {
+    return { data: null, error: new AxiosError('云资产预览已取消'), response: polling.response };
+  }
+  if (polling.attempt >= 120) {
+    window.$message?.error('云资产预览等待超时，请稍后重新预览');
+    return { data: null, error: new AxiosError('云资产预览等待超时'), response: polling.response };
+  }
+  await new Promise<void>(resolve => {
+    setTimeout(resolve, 3000);
+  });
+  if (polling.signal?.aborted) {
+    return { data: null, error: new AxiosError('云资产预览已取消'), response: polling.response };
+  }
+  const result = await request<Api.Cmdb.AssetSyncPreview & { status?: string }>({
+    url: `/api/v1/cmdb/asset-sources/${polling.sourceId}/preview-cloud-status`,
+    method: 'get',
+    params: { previewId: polling.previewId },
+    signal: polling.signal
+  });
+  if (result.error || result.data.status !== 'pending') return result;
+  return pollCloudPreview({ ...polling, attempt: polling.attempt + 1, response: result.response });
+}
+
+export function fetchSyncCloudAssets(id: number, confirmationToken: string, selectedSourceIds: string[]) {
+  return request<Api.Cmdb.AssetSyncRecordRecord>({
+    url: `/api/v1/cmdb/asset-sources/${id}/sync-cloud`,
+    method: 'post',
+    data: { confirmationToken, selectedSourceIds }
   });
 }
 

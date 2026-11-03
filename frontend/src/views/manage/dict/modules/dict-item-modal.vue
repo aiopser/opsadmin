@@ -151,7 +151,7 @@ async function handleSubmitItem() {
       : await updateDictItem(dictCode.value, editingItemId.value!, itemModel.value);
 
   if (!error) {
-    window.$message?.success($t(itemOperateType.value === 'add' ? 'common.addSuccess' : 'common.updateSuccess'));
+    window.$notification?.success($t(itemOperateType.value === 'add' ? 'common.addSuccess' : 'common.updateSuccess'));
     itemFormVisible.value = false;
     getDataByPage();
     emit('submitted');
@@ -162,7 +162,7 @@ async function handleDeleteItem(id: number) {
   const { error } = await deleteDictItem(dictCode.value, id);
 
   if (!error) {
-    window.$message?.success($t('common.deleteSuccess'));
+    window.$notification?.success($t('common.deleteSuccess'));
     getDataByPage();
   }
 }
@@ -199,11 +199,24 @@ watch(visible, val => {
     </div>
 
     <ElDialog v-model="itemFormVisible" :title="itemFormTitle" width="420px" append-to-body>
-      <ElForm ref="formRef" :model="itemModel" :rules="itemRules" label-position="top">
+      <ElForm
+        ref="formRef"
+        :model="itemModel"
+        :rules="itemRules"
+        label-position="top"
+        label-suffix="："
+        require-asterisk-position="left"
+      >
         <ElFormItem :label="$t('page.manage.dict.itemLabel')" prop="label">
           <ElInput v-model="itemModel.label" :placeholder="$t('page.manage.dict.form.itemLabel')" />
         </ElFormItem>
-        <ElFormItem :label="$t('page.manage.dict.itemValue')" prop="value">
+        <ElFormItem prop="value">
+          <template #label>
+            <FormLabelHelp
+              :label="$t('page.manage.dict.itemValue')"
+              :help="['字典项的存储值，程序按此值取数；', '同一字典下不可重复。']"
+            />
+          </template>
           <ElInput v-model="itemModel.value" :placeholder="$t('page.manage.dict.form.itemValue')" />
         </ElFormItem>
         <ElFormItem :label="$t('page.manage.dict.itemSort')" prop="sort">

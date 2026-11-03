@@ -11,13 +11,14 @@ from django.conf import settings
 from django.core.exceptions import SuspiciousFileOperation
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
-from django.db import transaction
-from django.db.models import Q, Sum
+from django.db import IntegrityError, transaction
+from django.db.models import F, Q, Sum
 from django.utils import timezone
 from django.utils.module_loading import import_string
 
+from apps.cmdb.crypto import decrypt_secret, encrypt_secret
 from common.redaction import redact_text
-from .models import JobEventLog, RunLogChunk, WorkflowRun
+from .models import JobEventLog, RunLogArchiveRequest, RunLogChunk, WorkflowRun
 
 logger = logging.getLogger(__name__)
 
@@ -150,20 +151,139 @@ def archive_stdout(*, run_id: int, sequence: int, text: str):
     return chunk
 
 
-def archive_event_stdout(run_id: int, sequence: int, event: dict) -> None:
+def queue_event_stdout_archive(run_id: int, sequence: int, event: dict) -> None:
+    """Stage redacted output inside the caller's event transaction.
+
+    加密内容与字节预留在事件事务内一并提交，落盘交给 Celery worker，
+    事件生产者不做存储 I/O。字节预算在这里按“已预留 + 已落盘”软性裁剪，
+    最终以 _reserve_chunk 的落盘复核为准。
+    """
     if event.get("no_log"):
         return
     result = event.get("result") or {}
     parts = [str(result[key]) for key in ("stdout", "stderr", "msg") if result.get(key)]
     if not parts:
         return
+    requests = RunLogArchiveRequest.objects.filter(workflow_run_id=run_id)
+    if requests.filter(sequence=sequence).exists():
+        return
+    reserved = requests.aggregate(total=Sum("reserved_bytes"))["total"] or 0
+    stored = (
+        RunLogChunk.objects.filter(workflow_run_id=run_id)
+        .exclude(sequence__in=requests.values("sequence"))
+        .aggregate(total=Sum("byte_count"))["total"]
+        or 0
+    )
+    remaining = max(int(settings.JOBS_LOG_MAX_BYTES) - reserved - stored, 0)
+    if not remaining:
+        RunLogChunk.objects.filter(workflow_run_id=run_id).update(truncated=True)
+        return
+    text = redact_text("\n".join(parts))
+    if not text.endswith("\n"):
+        text += "\n"
+    raw = text[:remaining].encode("utf-8")
+    truncated = len(text) > remaining or len(raw) > remaining
+    text = raw[:remaining].decode("utf-8", errors="ignore")
+    encrypted = encrypt_secret(text)
     try:
-        text = "\n".join(parts)
-        if not text.endswith("\n"):
-            text += "\n"
-        archive_stdout(run_id=run_id, sequence=sequence, text=text)
+        # savepoint：唯一约束兜底并发，撞车说明该 sequence 已入队
+        with transaction.atomic():
+            request = RunLogArchiveRequest.objects.create(
+                workflow_run_id=run_id,
+                sequence=sequence,
+                content_encrypted=encrypted,
+                reserved_bytes=len(text.encode("utf-8")),
+                content_truncated=truncated,
+            )
+    except IntegrityError:
+        return
+    transaction.on_commit(
+        lambda request_id=request.id: _publish_archive_request(request_id)
+    )
+
+
+def _publish_archive_request(request_id: int) -> None:
+    from apps.jobs.tasks import archive_pending_run_logs
+
+    try:
+        archive_pending_run_logs.delay(request_id)
     except Exception as exc:
+        logger.warning("Run output archive dispatch unavailable: %s", type(exc).__name__)
+
+
+def process_archive_request(request_id: int) -> bool:
+    now = timezone.now()
+    claimed = RunLogArchiveRequest.objects.filter(
+        pk=request_id,
+        status=RunLogArchiveRequest.Status.PENDING,
+        next_attempt_at__lte=now,
+    ).update(status=RunLogArchiveRequest.Status.PROCESSING, updated_at=now)
+    if not claimed:
+        return False
+    request = RunLogArchiveRequest.objects.get(pk=request_id)
+    try:
+        chunk = archive_stdout(
+            run_id=request.workflow_run_id,
+            sequence=request.sequence,
+            text=decrypt_secret(request.content_encrypted),
+        )
+        if chunk and request.content_truncated:
+            RunLogChunk.objects.filter(pk=chunk.id).update(truncated=True)
+    except Exception as exc:
+        retries = request.retry_count + 1
+        RunLogArchiveRequest.objects.filter(
+            pk=request.id, status=RunLogArchiveRequest.Status.PROCESSING, updated_at=now
+        ).update(
+            status=(
+                RunLogArchiveRequest.Status.FAILED
+                if retries >= 8
+                else RunLogArchiveRequest.Status.PENDING
+            ),
+            retry_count=retries,
+            next_attempt_at=now + timedelta(seconds=min(2**retries, 300)),
+            last_error_type=type(exc).__name__[:128],
+            updated_at=timezone.now(),
+        )
         logger.warning("Run output archive unavailable: %s", type(exc).__name__)
+        return False
+    RunLogArchiveRequest.objects.filter(
+        pk=request.id, status=RunLogArchiveRequest.Status.PROCESSING, updated_at=now
+    ).update(
+        status=RunLogArchiveRequest.Status.STORED,
+        content_encrypted="",
+        last_error_type="",
+        updated_at=timezone.now(),
+    )
+    return True
+
+
+def recover_pending_archives(now=None, limit=RECOVER_BATCH_SIZE):
+    """Compensate abandoned archive requests: reset stale claims, drain due rows."""
+    now = now or timezone.now()
+    stale_processing = RunLogArchiveRequest.objects.filter(
+        status=RunLogArchiveRequest.Status.PROCESSING,
+        updated_at__lt=now - timedelta(minutes=5),
+    )
+    stale_processing.filter(retry_count__gte=7).update(
+        status=RunLogArchiveRequest.Status.FAILED,
+        retry_count=F("retry_count") + 1,
+        last_error_type="WorkerLost",
+    )
+    stale_processing.filter(retry_count__lt=7).update(
+        status=RunLogArchiveRequest.Status.PENDING,
+        retry_count=F("retry_count") + 1,
+        next_attempt_at=now,
+        last_error_type="WorkerLost",
+    )
+    ids = list(
+        RunLogArchiveRequest.objects.filter(
+            status=RunLogArchiveRequest.Status.PENDING,
+            next_attempt_at__lte=now,
+        )
+        .order_by("next_attempt_at", "id")
+        .values_list("id", flat=True)[:limit]
+    )
+    return sum(int(process_archive_request(request_id)) for request_id in ids)
 
 
 def rearchive_failed_chunks(now=None):
@@ -219,7 +339,7 @@ def purge_expired_archives(now=None):
             created_at__lt=cutoff,
         )
         .order_by("created_at")
-        .select("workflow_run_id", "sequence", "storage_name")[:RECOVER_BATCH_SIZE]
+        .only("workflow_run_id", "sequence", "storage_name")[:RECOVER_BATCH_SIZE]
     )
     if not expired:
         return 0

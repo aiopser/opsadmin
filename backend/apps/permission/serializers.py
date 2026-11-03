@@ -1,8 +1,10 @@
 from common.api.serializers import StandardModelSerializer
 from rest_framework import serializers
+from django.db import transaction
 
 from .models import DictItem, DictType, Role, Menu, MenuButton, Permission, SystemConfig
 from .services import infer_system_setting_category
+from .menu_links import is_valid_menu_link
 
 
 class RoleSerializer(StandardModelSerializer):
@@ -22,6 +24,8 @@ class RoleSerializer(StandardModelSerializer):
 
     def to_internal_value(self, data):
         mutable = data.copy()
+        if "jobDataScope" in mutable:
+            mutable["job_data_scope"] = mutable.pop("jobDataScope")
         # soybean 前端 camelCase 字段映射
         if "roleName" in mutable and "name" not in mutable:
             mutable["name"] = mutable.get("roleName")
@@ -61,10 +65,13 @@ class RoleSerializer(StandardModelSerializer):
         representation["status"] = "1" if instance.is_active else "2"
         representation["homePath"] = instance.home_path
         representation["sort"] = instance.id
-        # The backend currently restricts non-superusers to their own runs;
-        # report scope 5 ("self only") so the UI matches enforced behaviour.
-        representation["dataScope"] = 5
-        representation["dataScopeLabel"] = "Self data"
+        # Report the enforced run data scope (own/department/all) so the UI
+        # matches the access decisions made by apps.jobs.run_access.
+        representation["jobDataScope"] = instance.job_data_scope
+        representation["dataScope"] = {"all": 1, "department": 3, "own": 5}[
+            instance.job_data_scope
+        ]
+        representation["dataScopeLabel"] = instance.get_job_data_scope_display()
         representation["updateTime"] = instance.updated_at
         return representation
 
@@ -206,6 +213,9 @@ class MenuSerializer(StandardModelSerializer):
         path = attrs.get("path", getattr(self.instance, "path", None))
         component = attrs.get("component", getattr(self.instance, "component", None))
         route_name = attrs.get("name", getattr(self.instance, "name", None))
+        href = attrs.get("href", getattr(self.instance, "href", None))
+        if not is_valid_menu_link(href):
+            raise serializers.ValidationError({"href": "外链必须为完整的 http:// 或 https:// 地址；内部页面请留空"})
         if menu_type == Menu.MenuType.CATALOG and not path:
             raise serializers.ValidationError({"routePath": "目录类型必须设置路由路径"})
         if menu_type == Menu.MenuType.MENU:
@@ -219,7 +229,32 @@ class MenuSerializer(StandardModelSerializer):
         icon = attrs.get("icon", getattr(self.instance, "icon", ""))
         if show_icon and not (icon or "").strip():
             raise serializers.ValidationError({"icon": "启用图标显示时必须选择图标"})
+        code = self._get_perm_code()
+        if code:
+            if not isinstance(code, str) or len(code) > 128:
+                raise serializers.ValidationError({"perm": "权限编码必须为不超过128字的文本"})
+            self._check_permission_binding(code, Permission.PermissionType.MENU, "perm")
+        for button in self._normalize_buttons_payload(self._get_buttons_payload() or []):
+            self._check_permission_binding(
+                button["code"], Permission.PermissionType.BUTTON, "buttons"
+            )
         return attrs
+
+    def _check_permission_binding(self, code, expected_type, field):
+        permission = Permission.objects.filter(code=code).first()
+        if permission is None:
+            return
+        menu_id = self.instance.pk if self.instance else None
+        if (
+            permission.type != expected_type
+            or Menu.objects.filter(permission=permission).exclude(pk=menu_id).exists()
+            or MenuButton.objects.filter(permission=permission)
+            .exclude(menu_id=menu_id)
+            .exists()
+        ):
+            raise serializers.ValidationError(
+                {field: f"权限编码 {code} 已被其他类型或菜单占用，请使用独立编码"}
+            )
 
     def _get_perm_code(self):
         if not hasattr(self, "initial_data"):
@@ -249,7 +284,7 @@ class MenuSerializer(StandardModelSerializer):
         )
         if not code:
             return
-        permission, _ = Permission.objects.update_or_create(
+        permission, _ = Permission.objects.select_for_update().get_or_create(
             code=code,
             defaults={
                 "name": instance.title or instance.name or code,
@@ -260,6 +295,12 @@ class MenuSerializer(StandardModelSerializer):
                 "is_active": True,
             },
         )
+        self._check_permission_binding(code, Permission.PermissionType.MENU, "perm")
+        permission.name = instance.title or instance.name or code
+        permission.path = instance.path
+        permission.method = "GET"
+        permission.is_active = True
+        permission.save(update_fields=["name", "path", "method", "is_active"])
         api_permission_ids = self._get_api_permission_ids()
         if api_permission_ids is None:
             api_permissions = instance.permission.filter(
@@ -332,19 +373,15 @@ class MenuSerializer(StandardModelSerializer):
             elif button.desc != item["desc"]:
                 button.desc = item["desc"]
                 button.save(update_fields=["desc"])
-            permission = Permission.objects.filter(code=code).first()
-            if permission is None:
-                permission = Permission.objects.create(
-                    name=item["desc"] or code,
-                    code=code,
-                    type=Permission.PermissionType.BUTTON,
-                    is_active=True,
-                )
-            elif permission.type != Permission.PermissionType.BUTTON:
-                permission.type = Permission.PermissionType.BUTTON
-                permission.path = None
-                permission.method = None
-                permission.save(update_fields=["type", "path", "method"])
+            permission, _ = Permission.objects.select_for_update().get_or_create(
+                code=code,
+                defaults={
+                    "name": item["desc"] or code,
+                    "type": Permission.PermissionType.BUTTON,
+                    "is_active": True,
+                },
+            )
+            self._check_permission_binding(code, Permission.PermissionType.BUTTON, "buttons")
             api_permission_ids = item["apiPermissionIds"]
             if api_permission_ids is None:
                 api_permissions = list(
@@ -366,12 +403,14 @@ class MenuSerializer(StandardModelSerializer):
             if code not in {item["code"] for item in buttons}:
                 button.delete()
 
+    @transaction.atomic
     def create(self, validated_data):
         instance = super().create(validated_data)
         self._sync_permission(instance)
         self._sync_buttons(instance)
         return instance
 
+    @transaction.atomic
     def update(self, instance, validated_data):
         instance = super().update(instance, validated_data)
         self._sync_permission(instance)

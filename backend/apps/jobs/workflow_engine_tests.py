@@ -67,7 +67,7 @@ class WorkflowGraphRuntimeTests(TestCase):
         )
         self.host = AssetHost.objects.create(
             hostname="graph-host",
-            primary_ip="10.10.0.10",
+            internal_ip="10.10.0.10",
             os_family=AssetHost.OSFamily.LINUX,
             connection_type=AssetHost.ConnectionType.SSH,
             connection_port=22,
@@ -99,7 +99,7 @@ class WorkflowGraphRuntimeTests(TestCase):
         CasbinEnforcerService.reload()
         self.sequence = 0
 
-    def create_graph_run(self, nodes, edges, input_vars=None):
+    def create_graph_run(self, nodes, edges, input_vars=None, failure_alert=None):
         self.sequence += 1
         workflow = WorkflowTemplate.objects.create(
             name=f"Graph {self.sequence}",
@@ -107,6 +107,7 @@ class WorkflowGraphRuntimeTests(TestCase):
             status=WorkflowTemplate.Status.PUBLISHED,
             created_by=self.user,
             updated_by=self.user,
+            failure_alert=failure_alert or {},
         )
         version = WorkflowVersion.objects.create(
             workflow=workflow,
@@ -149,6 +150,18 @@ class WorkflowGraphRuntimeTests(TestCase):
             worker_pool=self.worker_pool,
             triggered_by=self.user,
         )
+
+    def test_failure_alert_is_frozen_on_run_creation(self):
+        run = self.create_graph_run(
+            nodes=[{"id": "start", "type": "start"}, {"id": "end", "type": "end"}],
+            edges=[{"id": "start_end", "source": "start", "target": "end"}],
+            failure_alert={"templateId": 17, "receivers": "ops@example.test"},
+        )
+        workflow = run.workflow_version.workflow
+        workflow.failure_alert = {}
+        workflow.save(update_fields=["failure_alert"])
+        run.refresh_from_db()
+        self.assertEqual(run.failure_alert, {"templateId": 17, "receivers": "ops@example.test"})
 
     def test_conditional_branch_and_default_join_only_selected_paths(self):
         for environment, chosen in (("test", "a"), ("other", "b")):
@@ -320,3 +333,58 @@ class WorkflowGraphRuntimeTests(TestCase):
             NodeRunAttempt.objects.filter(node_run=node_run).count(),
             2,
         )
+
+    def test_failed_first_step_marks_remaining_steps_not_executed(self):
+        run = self.create_graph_run(
+            nodes=[
+                {"id": "start", "type": "start"},
+                {"id": "one", "type": "command"},
+                {"id": "two", "type": "command"},
+                {"id": "three", "type": "command"},
+                {"id": "end", "type": "end"},
+            ],
+            edges=[
+                {"id": "start_one", "source": "start", "target": "one"},
+                {"id": "one_two", "source": "one", "target": "two"},
+                {"id": "two_three", "source": "two", "target": "three"},
+                {"id": "three_end", "source": "three", "target": "end"},
+            ],
+        )
+        [first_id] = plan_dispatch(run.id)
+        first = NodeRun.objects.get(id=first_id)
+        first.status = NodeRun.Status.FAILED
+        first.failure_reason = "command failed"
+        first.save(update_fields=["status", "failure_reason", "updated_at"])
+
+        self.assertEqual(plan_dispatch(run.id), [])
+        run.refresh_from_db()
+        self.assertEqual(run.status, WorkflowRun.Status.FAILED)
+        for key in ("two", "three"):
+            step = run.node_runs.get(node_key=key)
+            self.assertEqual(step.status, NodeRun.Status.SKIPPED)
+            self.assertEqual(step.failure_reason, "前序步骤失败，未执行")
+
+    def test_timed_out_step_keeps_timeout_reason_and_stops_following_steps(self):
+        run = self.create_graph_run(
+            nodes=[
+                {"id": "start", "type": "start"},
+                {"id": "one", "type": "command"},
+                {"id": "two", "type": "command"},
+                {"id": "end", "type": "end"},
+            ],
+            edges=[
+                {"id": "start_one", "source": "start", "target": "one"},
+                {"id": "one_two", "source": "one", "target": "two"},
+                {"id": "two_end", "source": "two", "target": "end"},
+            ],
+        )
+        [first_id] = plan_dispatch(run.id)
+        first = NodeRun.objects.get(pk=first_id)
+        first.status = NodeRun.Status.TIMEOUT
+        first.failure_reason = "Step exceeded 60 seconds"
+        first.save(update_fields=["status", "failure_reason", "updated_at"])
+        self.assertEqual(plan_dispatch(run.id), [])
+        run.refresh_from_db()
+        self.assertEqual(run.status, WorkflowRun.Status.TIMEOUT)
+        self.assertEqual(run.failure_reason, "Step exceeded 60 seconds")
+        self.assertEqual(run.node_runs.get(node_key="two").status, NodeRun.Status.SKIPPED)

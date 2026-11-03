@@ -138,13 +138,18 @@ class CommandVersion(FrozenVersionMixin, StandardModelMixin):
         default=Status.DRAFT,
     )
     command_type = models.CharField(max_length=32, choices=CommandType.choices)
-    content = models.TextField()
+    content = models.TextField(blank=True, default="")
+    module_name = models.CharField(max_length=255, blank=True, default="")
+    parameter_docs = models.JSONField(default=list, blank=True)
     argument_schema = models.JSONField(default=dict, blank=True)
     default_vars = models.JSONField(default=dict, blank=True)
     timeout_seconds = models.IntegerField(default=60)
     become_enabled = models.BooleanField(default=False)
     check_mode_supported = models.BooleanField(default=False)
     output_extractors = models.JSONField(default=list, blank=True)
+    remark = models.CharField(
+        max_length=255, blank=True, default="", verbose_name="版本备注"
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -195,6 +200,7 @@ class WorkflowTemplate(StandardModelMixin):
     name = models.CharField(max_length=128)
     code = models.CharField(max_length=128, unique=True, db_index=True)
     description = models.TextField(blank=True, default="")
+    failure_alert = models.JSONField(default=dict, blank=True)
     status = models.CharField(
         max_length=16,
         choices=Status.choices,
@@ -247,7 +253,6 @@ class WorkflowVersion(FrozenVersionMixin, StandardModelMixin):
         default=Status.DRAFT,
     )
     input_schema = models.JSONField(default=dict, blank=True)
-    global_vars = models.JSONField(default=dict, blank=True)
     target_selector_schema = models.JSONField(default=dict, blank=True)
     editor_mode = models.CharField(
         max_length=16,
@@ -347,7 +352,7 @@ class WorkflowNode(StandardModelMixin):
     condition_expression = models.TextField(blank=True, default="")
     on_success_next = models.CharField(max_length=64, blank=True, default="")
     on_failure_next = models.CharField(max_length=64, blank=True, default="")
-    timeout_seconds = models.IntegerField(default=60)
+    timeout_seconds = models.IntegerField(default=None, null=True, blank=True)
     continue_on_error = models.BooleanField(default=False)
 
     def __str__(self):
@@ -446,6 +451,36 @@ class ApiEndpoint(StandardModelMixin):
         ordering = ["name", "id"]
 
 
+class GitRepository(StandardModelMixin):
+    name = models.CharField(max_length=128)
+    repo_url = models.URLField(max_length=2048)
+    # 访问令牌用户名（GitLab 私有令牌通常填 oauth2；留空则令牌直接作为用户名嵌入 URL）
+    username = models.CharField(max_length=128, blank=True, default="")
+    # 默认分支/标签，加载时可被请求参数覆盖
+    branch = models.CharField(max_length=128, blank=True, default="main")
+    token_encrypted = models.TextField(blank=True, default="")
+    verify_ssl = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_git_repositories",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="updated_git_repositories",
+    )
+
+    class Meta:
+        db_table = "automation_git_repository"
+        ordering = ["name", "id"]
+
+
 class JenkinsServer(StandardModelMixin):
     name = models.CharField(max_length=128)
     base_url = models.URLField(max_length=2048)
@@ -535,12 +570,14 @@ class NotificationChannel(StandardModelMixin):
         WEBHOOK = "webhook", "Webhook"
         WECOM = "wecom", "WeCom"
         DINGTALK = "dingtalk", "DingTalk"
+        FEISHU = "feishu", "Feishu"
         EMAIL = "email", "Email"
 
     name = models.CharField(max_length=128)
     channel_type = models.CharField(max_length=16, choices=ChannelType.choices)
     config = models.JSONField(default=dict, blank=True)
     secret_encrypted = models.TextField(blank=True, default="")
+    signing_secret_encrypted = models.TextField(blank=True, default="")
     is_active = models.BooleanField(default=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -600,6 +637,7 @@ class NotificationRecord(StandardModelMixin):
         PENDING = "pending", "Pending"
         SUCCESS = "success", "Success"
         FAILED = "failed", "Failed"
+        SENDING = "sending", "Sending"
 
     template = models.ForeignKey(
         NotificationTemplate,
@@ -639,7 +677,16 @@ class NotificationRecord(StandardModelMixin):
     response_body = models.TextField(blank=True, default="")
     failure_reason = models.TextField(blank=True, default="")
     sent_at = models.DateTimeField(null=True, blank=True)
+    alert_key = models.CharField(max_length=128, unique=True, null=True, blank=True)
+    attempt_count = models.PositiveIntegerField(default=0)
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    next_retry_at = models.DateTimeField(null=True, blank=True)
+    context = models.JSONField(default=dict, blank=True)
+    template_snapshot = models.JSONField(default=dict, blank=True)
 
     class Meta:
         db_table = "automation_notification_record"
         ordering = ["-id"]
+        indexes = [
+            models.Index(fields=["status", "sent_at"], name="notif_status_sent_idx"),
+        ]

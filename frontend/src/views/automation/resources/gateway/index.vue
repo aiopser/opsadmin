@@ -50,28 +50,6 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
     { prop: 'address', label: '地址', minWidth: 170, showOverflowTooltip: true },
     { prop: 'cloud', label: '云厂商', width: 100, formatter: row => row.cloud || '-' },
     {
-      prop: 'network',
-      label: '网段 (CIDR)',
-      minWidth: 220,
-      formatter: row =>
-        String(row.network || '')
-          .split(',')
-          .filter((item: string) => item.trim()).length ? (
-          <>
-            {String(row.network)
-              .split(',')
-              .filter((item: string) => item.trim())
-              .map((item: string) => (
-                <ElTag key={item} size="small" class="mr-4px">
-                  {item.trim()}
-                </ElTag>
-              ))}
-          </>
-        ) : (
-          '-'
-        )
-    },
-    {
       prop: 'auth_type',
       label: '认证方式',
       width: 100,
@@ -140,7 +118,6 @@ interface FormModel {
   name: string;
   address: string;
   cloud: string;
-  network: string;
   auth_type: 'password' | 'key';
   username: string;
   secret: string;
@@ -151,7 +128,6 @@ function createDefaultForm(): FormModel {
     name: '',
     address: '',
     cloud: '',
-    network: '',
     auth_type: 'password',
     username: '',
     secret: ''
@@ -177,7 +153,6 @@ function openOperateDrawer(type: OperateType, row?: Api.Jobs.GatewayRecord) {
         name: row.name,
         address: row.address,
         cloud: row.cloud || '',
-        network: row.network || '',
         auth_type: row.auth_type,
         username: row.username || '',
         secret: ''
@@ -187,14 +162,14 @@ function openOperateDrawer(type: OperateType, row?: Api.Jobs.GatewayRecord) {
 }
 
 async function handleSubmit() {
-  await formRef.value?.validate();
+  const valid = await formRef.value?.validate().catch(() => false);
+  if (!valid) return;
 
   submitting.value = true;
   const payload: Api.Jobs.GatewayPayload = {
     name: formModel.value.name,
     address: formModel.value.address,
     cloud: formModel.value.cloud,
-    network: formModel.value.network.trim(),
     auth_type: formModel.value.auth_type,
     username: formModel.value.username
   };
@@ -209,7 +184,7 @@ async function handleSubmit() {
   submitting.value = false;
 
   if (!error) {
-    window.$message?.success(operateType.value === 'add' ? '新增成功' : '修改成功');
+    window.$notification?.success(operateType.value === 'add' ? '新增成功' : '修改成功');
     drawerVisible.value = false;
     getData();
   }
@@ -221,7 +196,7 @@ async function handleTest(row: Api.Jobs.GatewayRecord) {
   testingId.value = null;
 
   if (!error) {
-    window.$message?.success(`网关「${row.name}」连接正常`);
+    window.$notification?.success(`网关「${row.name}」连接正常`);
     getData();
   }
 }
@@ -230,7 +205,7 @@ async function handleDelete(id: number) {
   const { error } = await fetchDeleteGateway(id);
 
   if (!error) {
-    window.$message?.success('删除成功');
+    window.$notification?.success('删除成功');
     getData();
   }
 }
@@ -238,23 +213,13 @@ async function handleDelete(id: number) {
 
 <template>
   <div class="min-h-500px flex-col-stretch gap-16px overflow-hidden lt-sm:overflow-auto">
-    <ElCard class="card-wrapper">
-      <ElForm :model="searchParams" label-width="70px" inline @submit.prevent>
+    <SearchPanel @reset="resetSearchParams" @search="getDataByPage">
+      <ElForm :model="searchParams" label-width="80px" @submit.prevent="getDataByPage">
         <ElFormItem label="关键词">
-          <ElInput
-            v-model="searchParams.search"
-            clearable
-            placeholder="名称/地址/网段"
-            class="w-240px"
-            @keyup.enter="getDataByPage()"
-          />
-        </ElFormItem>
-        <ElFormItem>
-          <ElButton type="primary" @click="getDataByPage()">查询</ElButton>
-          <ElButton :disabled="!hasFilter" @click="resetSearchParams">重置</ElButton>
+          <ElInput v-model="searchParams.search" clearable placeholder="名称或地址" @keyup.enter="getDataByPage()" />
         </ElFormItem>
       </ElForm>
-    </ElCard>
+    </SearchPanel>
 
     <ElCard class="card-wrapper sm:flex-1-hidden">
       <template #header>
@@ -279,7 +244,16 @@ async function handleDelete(id: number) {
       </template>
       <div class="h-[calc(100%-52px)]">
         <ElTable v-loading="loading" height="100%" border class="sm:h-full" :data="data" row-key="id">
-          <ElTableColumn v-for="col in columns" :key="col.prop" v-bind="(col as any)" />
+          <ElTableColumn v-for="col in columns" :key="col.prop" v-bind="col" />
+          <template #empty>
+            <ElEmpty
+              v-if="!loading"
+              :description="hasFilter ? '没有符合条件的网关代理' : '暂无网关代理'"
+              :image-size="80"
+            >
+              <ElButton v-if="!hasFilter" type="primary" @click="openOperateDrawer('add')">新增网关</ElButton>
+            </ElEmpty>
+          </template>
         </ElTable>
       </div>
       <div class="mt-20px flex justify-end">
@@ -294,34 +268,57 @@ async function handleDelete(id: number) {
     </ElCard>
 
     <ElDrawer v-model="drawerVisible" :title="operateType === 'add' ? '新增网关' : '编辑网关'" size="440px">
-      <ElForm ref="formRef" :model="formModel" :rules="formRules" label-width="90px">
+      <ElForm
+        ref="formRef"
+        :model="formModel"
+        :rules="formRules"
+        label-width="120px"
+        label-suffix="："
+        require-asterisk-position="left"
+      >
         <ElFormItem label="名称" prop="name">
           <ElInput v-model="formModel.name" placeholder="网关名称" />
         </ElFormItem>
-        <ElFormItem label="地址" prop="address">
+        <ElFormItem prop="address">
+          <template #label>
+            <FormLabelHelp label="地址" :help="['网关机的 SSH 地址，格式 host:port；', '端口缺省为 22。']" />
+          </template>
           <ElInput v-model="formModel.address" placeholder="host:port，端口默认 22" />
         </ElFormItem>
-        <ElFormItem label="云厂商">
+        <ElFormItem>
+          <template #label>
+            <FormLabelHelp
+              label="云厂商"
+              :help="['仅作分组与筛选标注，如 aliyun / aws；', '可留空，不影响代理逻辑。']"
+            />
+          </template>
           <ElInput v-model="formModel.cloud" placeholder="如 aliyun / aws，可留空" />
         </ElFormItem>
-        <ElFormItem label="网段">
-          <ElInput
-            v-model="formModel.network"
-            type="textarea"
-            :rows="2"
-            placeholder="逗号分隔的 CIDR，如 10.0.0.0/8,172.16.0.0/12；目标主机 IP 命中时自动经此网关代理"
-          />
-        </ElFormItem>
-        <ElFormItem label="认证方式">
+        <ElFormItem>
+          <template #label>
+            <FormLabelHelp
+              label="认证方式"
+              :help="['密码：下方「密钥/密码」填写 SSH 登录密码；', '密钥：填写对应私钥内容。']"
+            />
+          </template>
           <ElSelect v-model="formModel.auth_type" class="w-full">
             <ElOption label="密码" value="password" />
             <ElOption label="密钥" value="key" />
           </ElSelect>
         </ElFormItem>
-        <ElFormItem label="用户名">
+        <ElFormItem>
+          <template #label>
+            <FormLabelHelp label="用户名" :help="['登录网关机的 SSH 用户名；', '留空默认使用 root。']" />
+          </template>
           <ElInput v-model="formModel.username" placeholder="SSH 用户名" />
         </ElFormItem>
-        <ElFormItem label="密钥/密码">
+        <ElFormItem>
+          <template #label>
+            <FormLabelHelp
+              label="密钥/密码"
+              :help="['按认证方式填写 SSH 密码或私钥内容，加密存储；', '编辑时留空表示不修改。']"
+            />
+          </template>
           <ElInput
             v-model="formModel.secret"
             type="password"

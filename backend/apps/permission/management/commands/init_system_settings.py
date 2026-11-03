@@ -16,9 +16,10 @@ class Command(BaseCommand):
             "--sync-menu-layout",
             action="store_true",
             help=(
-                "Overwrite existing menu order, icons, and icon visibility with "
-                "the SYSTEM_MENUS seed definitions. By default, existing layout "
-                "changes made in the menu administration page are preserved."
+                "Synchronize built-in menu order with SYSTEM_MENUS. Existing "
+                "icons, icon types, and icon visibility are always preserved; "
+                "new menus receive seed defaults. Without this flag, existing "
+                "menu order is also preserved."
             ),
         )
 

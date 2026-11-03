@@ -77,7 +77,7 @@ async function handleSubmit() {
     props.operateType === 'add' ? await addDict(model.value) : await updateDict(props.rowData!.id, model.value);
 
   if (!error) {
-    window.$message?.success($t(props.operateType === 'add' ? 'common.addSuccess' : 'common.updateSuccess'));
+    window.$notification?.success($t(props.operateType === 'add' ? 'common.addSuccess' : 'common.updateSuccess'));
     closeDrawer();
     emit('submitted');
   }
@@ -93,11 +93,24 @@ watch(visible, () => {
 
 <template>
   <ElDrawer v-model="visible" :title="title" :size="360">
-    <ElForm ref="formRef" :model="model" :rules="rules" label-position="top">
+    <ElForm
+      ref="formRef"
+      :model="model"
+      :rules="rules"
+      label-position="top"
+      label-suffix="："
+      require-asterisk-position="left"
+    >
       <ElFormItem :label="$t('page.manage.dict.dictName')" prop="dictName">
         <ElInput v-model="model.dictName" :placeholder="$t('page.manage.dict.form.dictName')" />
       </ElFormItem>
-      <ElFormItem :label="$t('page.manage.dict.dictCode')" prop="dictCode">
+      <ElFormItem prop="dictCode">
+        <template #label>
+          <FormLabelHelp
+            :label="$t('page.manage.dict.dictCode')"
+            :help="['字典编码，全局唯一，创建后不可修改；', '程序按此编码获取对应字典项（如 gender）。']"
+          />
+        </template>
         <ElInput
           v-model="model.dictCode"
           :disabled="props.operateType === 'edit'"

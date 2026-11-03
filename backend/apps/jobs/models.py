@@ -1,11 +1,26 @@
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 from common.models import StandardModelMixin
+from apps.jobs.input_secrets import ProtectedDefinitionInputsMixin
 
 
 def worker_execution_kinds():
     return ["workflow", "quick_command", "playbook", "module"]
+
+
+class ExecutionRequestKey(models.Model):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    key = models.CharField(max_length=128)
+    path = models.CharField(max_length=255)
+    request_hash = models.CharField(max_length=64)
+    response_encrypted = models.TextField(blank=True, default="")
+    status_code = models.PositiveSmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["owner", "key", "path"], name="unique_execution_request_key")]
 
 
 class WorkerPool(StandardModelMixin):
@@ -72,6 +87,8 @@ class WorkflowRun(StandardModelMixin):
         default=ExecutionKind.WORKFLOW,
         db_index=True,
     )
+    # 运行显示名（快速执行等场景可由用户填写或自动生成）；空则回退到工作流模板名
+    name = models.CharField(max_length=128, blank=True, default="")
     status = models.CharField(
         max_length=16,
         choices=Status.choices,
@@ -89,11 +106,22 @@ class WorkflowRun(StandardModelMixin):
         blank=True,
         related_name="triggered_workflow_runs",
     )
+    ticket = models.ForeignKey(
+        "jobs.WorkflowTaskTicket",
+        on_delete=models.SET_NULL,
+        related_name="runs",
+        null=True,
+        blank=True,
+    )
     input_vars = models.JSONField(default=dict, blank=True)
     secret_input_vars_encrypted = models.TextField(blank=True, default="")
     context_vars = models.JSONField(default=dict, blank=True)
     graph_snapshot = models.JSONField(default=dict, blank=True)
+    failure_alert = models.JSONField(default=dict, blank=True)
+    failure_alert_context = models.JSONField(default=dict, blank=True)
+    execution_settings = models.JSONField(default=dict, blank=True)
     target_snapshot = models.JSONField(default=list, blank=True)
+    target_selector = models.JSONField(default=dict, blank=True)
     event_sequence = models.PositiveBigIntegerField(default=0)
     worker_pool = models.ForeignKey(
         "jobs.WorkerPool",
@@ -126,7 +154,78 @@ class WorkflowRun(StandardModelMixin):
         ]
 
 
-class ScheduledJob(StandardModelMixin):
+class WorkflowTaskTicket(ProtectedDefinitionInputsMixin, StandardModelMixin):
+    """任务单：一次创建、可反复运行的任务定义（参考流程单概念）。"""
+
+    class HostStrategy(models.TextChoices):
+        PARALLEL = "parallel", "Parallel"
+        SERIAL = "serial", "Serial"
+        ROLLING = "rolling", "Rolling"
+
+    name = models.CharField(max_length=128)
+    failure_alert = models.JSONField(default=None, null=True, blank=True)
+    workflow_version = models.ForeignKey(
+        "automation.WorkflowVersion",
+        on_delete=models.SET_NULL,
+        related_name="task_tickets",
+        null=True,
+        blank=True,
+    )
+    input_vars = models.JSONField(default=dict, blank=True)
+    secret_input_vars_encrypted = models.TextField(blank=True, default="")
+    host_ids = models.JSONField(default=list, blank=True)
+    group_ids = models.JSONField(default=list, blank=True)
+    tag_ids = models.JSONField(default=list, blank=True)
+    worker_pool = models.ForeignKey(
+        "jobs.WorkerPool",
+        on_delete=models.SET_NULL,
+        related_name="task_tickets",
+        null=True,
+        blank=True,
+    )
+    gateway = models.ForeignKey(
+        "jobs.Gateway",
+        on_delete=models.PROTECT,
+        related_name="task_tickets",
+        null=True,
+        blank=True,
+    )
+    host_strategy = models.CharField(
+        max_length=16,
+        choices=HostStrategy.choices,
+        default=None, null=True, blank=True,
+    )
+    forks = models.PositiveIntegerField(default=None, null=True, blank=True)
+    serial_batch = models.PositiveIntegerField(default=None, null=True, blank=True)
+    max_fail_percentage = models.PositiveIntegerField(default=None, null=True, blank=True)
+    timeout_seconds = models.PositiveIntegerField(default=None, null=True, blank=True)
+    remark = models.CharField(max_length=255, blank=True, default="")
+    run_count = models.PositiveIntegerField(default=0)
+    last_run = models.ForeignKey(
+        WorkflowRun,
+        on_delete=models.SET_NULL,
+        related_name="ticket_records",
+        null=True,
+        blank=True,
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_task_tickets",
+    )
+
+    class Meta:
+        db_table = "jobs_workflow_task_ticket"
+        ordering = ["-id"]
+
+
+class ScheduledJob(ProtectedDefinitionInputsMixin, StandardModelMixin):
+    class ScheduleType(models.TextChoices):
+        PERIODIC = "periodic", "Recurring by cron expression"
+        ONCE = "once", "Run a single time at run_at"
+
     class HostStrategy(models.TextChoices):
         PARALLEL = "parallel", "Parallel"
         SERIAL = "serial", "Serial"
@@ -154,21 +253,41 @@ class ScheduledJob(StandardModelMixin):
         on_delete=models.PROTECT,
         related_name="scheduled_jobs",
     )
+    gateway = models.ForeignKey(
+        "jobs.Gateway",
+        on_delete=models.PROTECT,
+        related_name="scheduled_jobs",
+        null=True,
+        blank=True,
+    )
     host_ids = models.JSONField(default=list, blank=True)
+    group_ids = models.JSONField(default=list, blank=True)
+    tag_ids = models.JSONField(default=list, blank=True)
     cron_expression = models.CharField(max_length=128, default="0 * * * *")
     timezone = models.CharField(max_length=64, default="Asia/Shanghai")
+    # 调度类型：periodic 按 cron 循环触发；once 在 run_at 触发一次后自动停用。
+    schedule_type = models.CharField(
+        max_length=16,
+        choices=ScheduleType.choices,
+        default=ScheduleType.PERIODIC,
+    )
+    # 一次性任务的计划执行时间（应用侧按本地时区存储，写入 beat 时转 naive-UTC）。
+    run_at = models.DateTimeField(null=True, blank=True)
+    # 过期时间：周期性任务超过后停止调度，一次性任务超过后取消未执行的那一次。
+    expires_at = models.DateTimeField(null=True, blank=True)
+    remark = models.CharField(max_length=255, blank=True, default="")
     input_vars = models.JSONField(default=dict, blank=True)
+    secret_input_vars_encrypted = models.TextField(blank=True, default="")
     host_strategy = models.CharField(
         max_length=16,
         choices=HostStrategy.choices,
-        default=HostStrategy.PARALLEL,
+        default=None, null=True, blank=True,
     )
-    forks = models.PositiveIntegerField(default=10)
-    serial_batch = models.PositiveIntegerField(default=5)
-    max_fail_percentage = models.PositiveIntegerField(default=0)
-    timeout_seconds = models.PositiveIntegerField(default=300)
+    forks = models.PositiveIntegerField(default=None, null=True, blank=True)
+    serial_batch = models.PositiveIntegerField(default=None, null=True, blank=True)
+    max_fail_percentage = models.PositiveIntegerField(default=None, null=True, blank=True)
+    timeout_seconds = models.PositiveIntegerField(default=None, null=True, blank=True)
     queue_timeout_seconds = models.PositiveIntegerField(default=120)
-    bypass_host_gateway = models.BooleanField(default=False)
     enabled = models.BooleanField(default=True)
     # 调度策略：overlap 控制上次运行未结束时本次是否派发；misfire 控制
     # 错过调度窗口（beat 停机等）超过宽限期后补跑还是跳过。
@@ -258,6 +377,8 @@ class NodeRun(StandardModelMixin):
     )
     input_vars = models.JSONField(default=dict, blank=True)
     output_vars = models.JSONField(default=dict, blank=True)
+    # ansible-runner 原生控制台输出（PLAY/TASK/RECAP），脱敏截断后存储
+    console_output = models.TextField(blank=True, default="")
     attempt_count = models.PositiveIntegerField(default=0)
     celery_task_id = models.CharField(max_length=255, blank=True, default="")
     queued_at = models.DateTimeField(null=True, blank=True)
@@ -486,6 +607,88 @@ class RunLogChunk(StandardModelMixin):
         ]
 
 
+class RunLogArchiveRequest(StandardModelMixin):
+    """Durable archive request staged inside the event transaction.
+
+    The encrypted, redacted output and its byte reservation commit atomically
+    with the event; a Celery worker performs the storage write afterwards so
+    event producers never block on storage I/O.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        PROCESSING = "processing", "Processing"
+        STORED = "stored", "Stored"
+        FAILED = "failed", "Failed"
+
+    workflow_run = models.ForeignKey(
+        WorkflowRun, on_delete=models.CASCADE, related_name="log_archive_requests"
+    )
+    sequence = models.PositiveBigIntegerField()
+    content_encrypted = models.TextField()
+    reserved_bytes = models.PositiveIntegerField(default=0)
+    content_truncated = models.BooleanField(default=False)
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.PENDING,
+        db_index=True,
+    )
+    retry_count = models.PositiveIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(default=timezone.now, db_index=True)
+    last_error_type = models.CharField(max_length=128, blank=True, default="")
+
+    class Meta:
+        db_table = "jobs_run_log_archive_request"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["workflow_run", "sequence"],
+                name="jobs_archive_request_unique",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["status", "next_attempt_at"], name="jobs_archive_due_idx"
+            )
+        ]
+
+
+class ScheduledJobOutcome(StandardModelMixin):
+    """One dispatch outcome row per scheduled occurrence (audit trail)."""
+
+    class Outcome(models.TextChoices):
+        DISPATCHED = "dispatched", "Dispatched"
+        OVERLAP_SKIPPED = "overlap_skipped", "Overlap skipped"
+        OVERLAP_QUEUED = "overlap_queued", "Overlap queued"
+        MISFIRE_SKIPPED = "misfire_skipped", "Misfire skipped"
+        EXPIRED = "expired", "Expired"
+        INVALID = "invalid", "Invalid"
+
+    scheduled_job = models.ForeignKey(
+        ScheduledJob, on_delete=models.CASCADE, related_name="outcomes"
+    )
+    scheduled_for = models.DateTimeField()
+    outcome = models.CharField(max_length=32, choices=Outcome.choices)
+    workflow_run = models.ForeignKey(
+        WorkflowRun,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="schedule_outcomes",
+    )
+    reason = models.CharField(max_length=255, blank=True, default="")
+
+    class Meta:
+        db_table = "jobs_scheduled_job_outcome"
+        ordering = ["-scheduled_for", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["scheduled_job", "scheduled_for"],
+                name="jobs_schedule_outcome_unique",
+            )
+        ]
+
+
 class SecurityRule(StandardModelMixin):
     class MatchMode(models.TextChoices):
         CONTAINS = "contains", "Contains"
@@ -574,8 +777,6 @@ class Gateway(StandardModelMixin):
     name = models.CharField(max_length=128)
     address = models.CharField(max_length=255)
     cloud = models.CharField(max_length=64, blank=True, default="")
-    # 逗号分隔的 CIDR 网段列表（如 10.0.0.0/8,172.16.0.0/12），目标地址命中时自动经该网关代理
-    network = models.CharField(max_length=512, blank=True, default="")
     auth_type = models.CharField(
         max_length=16,
         choices=AuthType.choices,

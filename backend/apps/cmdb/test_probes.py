@@ -39,7 +39,7 @@ def pool():
 def host():
     return AssetHost.objects.create(
         hostname="probe-target",
-        primary_ip="192.0.2.30",
+        internal_ip="192.0.2.30",
         os_family="linux",
         connection_type="ssh",
     )
@@ -76,7 +76,7 @@ def test_schedule_creates_pending_probe_routed_to_default_pool(actor, host, pool
 def test_schedule_uses_windows_module_for_winrm_host(actor, pool):
     host = AssetHost.objects.create(
         hostname="win-box",
-        primary_ip="192.0.2.31",
+        internal_ip="192.0.2.31",
         os_family="windows",
         connection_type="winrm",
     )
@@ -101,7 +101,7 @@ def test_schedule_routes_probe_to_region_pool(actor, pool):
     )
     host = AssetHost.objects.create(
         hostname="east-host",
-        primary_ip="192.0.2.32",
+        internal_ip="192.0.2.32",
         os_family="linux",
         connection_type="ssh",
         region="cn-east",

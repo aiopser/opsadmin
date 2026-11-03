@@ -3,24 +3,55 @@ from common.workflow.node_types import CONTROL_NODE_TYPES
 from common.workflow.schema import validate_graph
 from django.db import transaction
 from django.db.models.deletion import ProtectedError
-from django.db.models import Count, Max
+from django.db.models import Count, Max, Q
 from django.utils import timezone
 from rest_framework.decorators import action
 from rest_framework.views import APIView
+from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
+
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from common.api.responses import api_error_response, api_ok_response
+from common.api.schema import api_envelope_serializer
 from common.api.viewsets import StandardModelViewSet
 from apps.audit_center.services import create_domain_audit_event
+from apps.cmdb.crypto import decrypt_secret
 
 import logging
 
 logger = logging.getLogger(__name__)
 
 from .audit import build_automation_audit_snapshot
+from .email_settings import (
+    check_email_connection,
+    get_email_settings,
+    save_email_settings,
+    send_test_email,
+)
+from .notification_apps import (
+    PROVIDER_DINGTALK,
+    PROVIDER_FEISHU,
+    PROVIDER_WECOM,
+    check_app_connection,
+    get_app_settings,
+    save_app_settings,
+)
+from .notification_history import (
+    get_history_settings,
+    parse_retention_days,
+    purge_notification_history,
+    save_history_settings,
+)
 from .models import (
     ApiEndpoint,
     CommandAtom,
     CommandVersion,
+    GitRepository,
     JenkinsServer,
     JenkinsBuild,
     JenkinsJob,
@@ -38,11 +69,13 @@ from .serializers import (
     AutomationTemplateSerializer,
     CommandAtomSerializer,
     CommandVersionSerializer,
+    GitRepositorySerializer,
     JenkinsServerSerializer,
     JenkinsBuildSerializer,
     JenkinsJobSerializer,
     NotificationChannelSerializer,
     NotificationRecordSerializer,
+    NotificationPreviewSerializer,
     NotificationTemplateSerializer,
     WorkflowEdgeSerializer,
     WorkflowNodeSerializer,
@@ -50,13 +83,55 @@ from .serializers import (
     WorkflowVersionSerializer,
 )
 from .node_resources import node_resource_catalog
+from .schema_serializers import (
+    DingtalkSettingsInputSerializer,
+    EmailConnectionInputSerializer,
+    EmailSettingsInputSerializer,
+    EmailSettingsReadSerializer,
+    EmailTestRecipientSerializer,
+    NodeResourceCatalogSerializer,
+    NodeResourceCreatedSerializer,
+    NotificationAppConnectionInputSerializer,
+    NotificationAppReadSerializer,
+    NotificationConnectionResultSerializer,
+    NotificationHistoryPurgeInputSerializer,
+    NotificationHistoryPurgeResultSerializer,
+    NotificationHistorySettingsSerializer,
+    WecomSettingsInputSerializer,
+    automation_template_list,
+)
 from .workflow_graph import (
     replace_graph,
     serialize_graph,
 )
 
 
+_EMAIL_SETTINGS_RESPONSE = api_envelope_serializer(
+    "NotificationEmailSettingsResponse", EmailSettingsReadSerializer
+)
+_NOTIFICATION_CONNECTION_RESPONSE = api_envelope_serializer(
+    "NotificationConnectionResultResponse", NotificationConnectionResultSerializer
+)
+_NOTIFICATION_HISTORY_SETTINGS_RESPONSE = api_envelope_serializer(
+    "NotificationHistorySettingsResponse", NotificationHistorySettingsSerializer
+)
+_NOTIFICATION_APP_SETTINGS_RESPONSE = api_envelope_serializer(
+    "NotificationAppSettingsResponse", NotificationAppReadSerializer
+)
+
+
 class AutomationTemplateView(APIView):
+    @extend_schema(
+        parameters=[
+            OpenApiParameter("type", str, enum=["command", "workflow"]),
+            OpenApiParameter(
+                "resource_kind", str, enum=CommandAtom.ResourceKind.values
+            ),
+        ],
+        responses=api_envelope_serializer(
+            "AutomationTemplateListResponse", automation_template_list
+        ),
+    )
     def get(self, request):
         template_type = request.query_params.get("type")
         resource_kind = request.query_params.get("resource_kind")
@@ -89,11 +164,29 @@ class AutomationTemplateView(APIView):
 
 
 class NodeResourceView(APIView):
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                "node_type",
+                str,
+                enum=[*CommandAtom.ResourceKind.values, "api", "jenkins", "notify"],
+            )
+        ],
+        responses=api_envelope_serializer(
+            "NodeResourceCatalogResponse", NodeResourceCatalogSerializer
+        ),
+    )
     def get(self, request):
         return api_ok_response(
             node_resource_catalog(request.query_params.get("node_type") or "")
         )
 
+    @extend_schema(
+        request=AnsibleNodeResourceCreateSerializer,
+        responses=api_envelope_serializer(
+            "NodeResourceCreatedResponse", NodeResourceCreatedSerializer
+        ),
+    )
     def post(self, request):
         serializer = AnsibleNodeResourceCreateSerializer(
             data=request.data,
@@ -179,6 +272,7 @@ class CommandAtomViewSet(AutomationAuditModelViewSet):
         return response
 
     @action(methods=["GET", "POST"], detail=True, url_path="versions")
+    @transaction.atomic
     def versions(self, request, pk=None):
         command = self.get_object()
         if request.method == "GET":
@@ -190,11 +284,12 @@ class CommandAtomViewSet(AutomationAuditModelViewSet):
             )
             return api_ok_response(serializer.data)
 
+        command = CommandAtom.objects.select_for_update().get(pk=command.pk)
         latest = command.versions.order_by("-version").first()
         next_version = latest.version + 1 if latest else 1
         mutable = request.data.copy()
         mutable["command"] = command.id
-        mutable.setdefault("version", next_version)
+        mutable["version"] = next_version
         serializer = CommandVersionSerializer(data=mutable)
         serializer.is_valid(raise_exception=True)
         serializer.save(request=request)
@@ -222,22 +317,36 @@ class CommandVersionViewSet(AutomationAuditModelViewSet):
     filterset_fields = ("command", "status", "command_type", "command__resource_kind")
     search_fields = ("command__name", "command__code", "content")
 
+    @transaction.atomic
     def update(self, request, *args, **kwargs):
+        selected = self.get_object()
+        CommandAtom.objects.select_for_update().get(pk=selected.command_id)
         instance = self.get_object()
-        if instance.status == instance.Status.PUBLISHED:
-            return api_error_response("Published command versions cannot be modified")
+        if instance.status != instance.Status.DRAFT:
+            return api_error_response("只有草稿版本可以修改")
         return super().update(request, *args, **kwargs)
 
+    @transaction.atomic
     def destroy(self, request, *args, **kwargs):
+        selected = self.get_object()
+        CommandAtom.objects.select_for_update().get(pk=selected.command_id)
         instance = self.get_object()
+        if instance.status != CommandVersion.Status.DRAFT:
+            return api_error_response("只有草稿版本可以删除，历史版本请保留或归档")
         # 业务层保护：检查是否有流程节点引用了该命令版本
         if WorkflowNode.objects.filter(command_version=instance).exists():
             return api_error_response("该命令版本已被流程节点引用，无法删除。可将其状态设为「归档」。")
         return super().destroy(request, *args, **kwargs)
 
     @action(methods=["POST"], detail=True, url_path="publish")
+    @transaction.atomic
     def publish(self, request, pk=None):
-        instance = self.get_object()
+        selected = self.get_object()
+        command = CommandAtom.objects.select_for_update().get(pk=selected.command_id)
+        instance = CommandVersion.objects.select_for_update().get(pk=selected.pk)
+        instance.command = command
+        if instance.status != CommandVersion.Status.DRAFT:
+            return api_error_response("只有草稿版本可以发布")
         validator = self.get_serializer(instance, data={}, partial=True)
         validator.is_valid(raise_exception=True)
         previous_status = instance.status
@@ -247,7 +356,7 @@ class CommandVersionViewSet(AutomationAuditModelViewSet):
             status=CommandVersion.Status.PUBLISHED,
         ).exclude(pk=instance.pk).update(status=CommandVersion.Status.ARCHIVED)
         instance.publish(request.user)
-        if instance.command.status != CommandAtom.Status.PUBLISHED:
+        if instance.command.status == CommandAtom.Status.DRAFT:
             instance.command.status = CommandAtom.Status.PUBLISHED
             instance.command.updated_by = request.user
             instance.command.save(update_fields=["status", "updated_by", "updated_at"])
@@ -264,8 +373,11 @@ class CommandVersionViewSet(AutomationAuditModelViewSet):
         return api_ok_response(serializer.data)
 
     @action(methods=["POST"], detail=True, url_path="archive")
+    @transaction.atomic
     def archive(self, request, pk=None):
-        instance = self.get_object()
+        selected = self.get_object()
+        CommandAtom.objects.select_for_update().get(pk=selected.command_id)
+        instance = CommandVersion.objects.select_for_update().get(pk=selected.pk)
         previous_status = instance.status
         instance.archive()
         create_domain_audit_event(
@@ -298,8 +410,17 @@ class WorkflowTemplateViewSet(AutomationAuditModelViewSet):
     filterset_fields = ("status", "owner_team")
     search_fields = ("name", "code", "description", "owner_team")
 
+    @transaction.atomic
     def destroy(self, request, *args, **kwargs):
+        from django.db.models import Q
+
         instance = self.get_object()
+        if instance.versions.filter(
+            Q(scheduled_jobs__isnull=False)
+            | Q(task_tickets__isnull=False)
+            | Q(runs__isnull=False)
+        ).exists():
+            return api_error_response("该流程已被定时任务、任务单或运行记录引用，不能删除，可将其停用")
         before = build_automation_audit_snapshot(instance)
         try:
             response = super().destroy(request, *args, **kwargs)
@@ -366,7 +487,6 @@ class WorkflowTemplateViewSet(AutomationAuditModelViewSet):
                     version=1,
                     status=WorkflowVersion.Status.DRAFT,
                     input_schema=source_version.input_schema,
-                    global_vars=source_version.global_vars,
                     target_selector_schema=source_version.target_selector_schema,
                     created_by=request.user,
                 )
@@ -384,7 +504,7 @@ class WorkflowVersionViewSet(AutomationAuditModelViewSet):
     ).all()
     serializer_class = WorkflowVersionSerializer
     ordering_fields = ("id", "version", "published_at", "updated_at")
-    filterset_fields = ("workflow", "status")
+    filterset_fields = ("workflow", "status", "workflow__status")
     search_fields = ("workflow__name", "workflow__code")
 
     def update(self, request, *args, **kwargs):
@@ -392,6 +512,12 @@ class WorkflowVersionViewSet(AutomationAuditModelViewSet):
         if instance.status != instance.Status.DRAFT:
             return api_error_response("Only draft workflow versions can be modified")
         return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.status != instance.Status.DRAFT:
+            return api_error_response("只有草稿版本可以删除")
+        return super().destroy(request, *args, **kwargs)
 
     def _validate_workflow_version(self, instance):
         node_keys = set()
@@ -405,9 +531,9 @@ class WorkflowVersionViewSet(AutomationAuditModelViewSet):
             ).order_by("order_index", "id")
         )
         if not nodes:
-            errors.append("工作流版本至少需要一个节点")
+            errors.append("流程版本至少需要一个节点")
         elif not any(node.node_type not in CONTROL_NODE_TYPES for node in nodes):
-            errors.append("工作流版本至少需要一个可执行任务节点")
+            errors.append("流程版本至少需要一个可执行任务节点")
         for node in nodes:
             if node.node_key in node_keys:
                 errors.append(f"节点标识重复：{node.node_key}")
@@ -464,7 +590,7 @@ class WorkflowVersionViewSet(AutomationAuditModelViewSet):
                 and not node.condition_expression.strip()
             ):
                 errors.append(f"节点 {node.node_key} 使用表达式策略时必须填写条件表达式")
-            if node.timeout_seconds <= 0:
+            if node.timeout_seconds is not None and node.timeout_seconds <= 0:
                 errors.append(f"节点 {node.node_key} 超时时间必须大于 0")
         return list(dict.fromkeys(errors))
 
@@ -473,7 +599,7 @@ class WorkflowVersionViewSet(AutomationAuditModelViewSet):
     def publish(self, request, pk=None):
         instance = self.get_object()
         if instance.status != instance.Status.DRAFT:
-            return api_error_response("只有草稿工作流版本可以发布")
+            return api_error_response("只有草稿流程版本可以发布")
         errors = self._validate_workflow_version(instance)
         if errors:
             return api_error_response({"valid": False, "errors": errors})
@@ -532,7 +658,7 @@ class WorkflowVersionViewSet(AutomationAuditModelViewSet):
                 }
             )
         if instance.status != WorkflowVersion.Status.DRAFT:
-            return api_error_response("只有草稿工作流版本可以修改")
+            return api_error_response("只有草稿流程版本可以修改")
         graph = request.data.get("graph") or {}
         errors = replace_graph(instance, graph)
         if errors:
@@ -571,19 +697,19 @@ class WorkflowNodeViewSet(AutomationAuditModelViewSet):
                 id=workflow_version_id
             ).first()
             if workflow_version and self._is_immutable_version(workflow_version):
-                return api_error_response("只有草稿工作流版本可以新增节点")
+                return api_error_response("只有草稿流程版本可以新增节点")
         return super().create(request, *args, **kwargs)
 
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
         if self._is_immutable_version(instance.workflow_version):
-            return api_error_response("只有草稿工作流版本可以编辑节点")
+            return api_error_response("只有草稿流程版本可以编辑节点")
         return super().update(request, *args, **kwargs)
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         if self._is_immutable_version(instance.workflow_version):
-            return api_error_response("只有草稿工作流版本可以删除节点")
+            return api_error_response("只有草稿流程版本可以删除节点")
         return super().destroy(request, *args, **kwargs)
 
 
@@ -609,19 +735,19 @@ class WorkflowEdgeViewSet(AutomationAuditModelViewSet):
             id=workflow_version_id
         ).first()
         if workflow_version and self._is_immutable_version(workflow_version):
-            return api_error_response("只有草稿工作流版本可以新增连线")
+            return api_error_response("只有草稿流程版本可以新增连线")
         return super().create(request, *args, **kwargs)
 
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
         if self._is_immutable_version(instance.workflow_version):
-            return api_error_response("只有草稿工作流版本可以编辑连线")
+            return api_error_response("只有草稿流程版本可以编辑连线")
         return super().update(request, *args, **kwargs)
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         if self._is_immutable_version(instance.workflow_version):
-            return api_error_response("只有草稿工作流版本可以删除连线")
+            return api_error_response("只有草稿流程版本可以删除连线")
         return super().destroy(request, *args, **kwargs)
 
 
@@ -662,7 +788,6 @@ class ApiEndpointViewSet(WorkflowResourceProtectionMixin, AutomationAuditModelVi
                 endpoint,
                 {
                     "inputs": request.data.get("inputVars") or {},
-                    "global": {},
                     "system": {"test": True},
                     "nodes": {},
                 },
@@ -692,6 +817,49 @@ class JenkinsServerViewSet(AutomationAuditModelViewSet):
         if JenkinsBuild.objects.filter(job__server=instance).exists():
             return api_error_response("该 Jenkins 实例已有 Build 记录，不能删除，可将实例停用")
         return super().destroy(request, *args, **kwargs)
+
+    @action(methods=["POST"], detail=False, url_path="test-connection")
+    def test_connection(self, request):
+        """测试 Jenkins 连通性：已保存实例在 secret 留空时使用存量 Token，新增表单直接用填写值。"""
+        from apps.cmdb.crypto import decrypt_secret
+        from apps.jobs.node_executors import _jenkins_basic_auth, _request
+
+        data = request.data or {}
+        server = None
+        server_id = data.get("id")
+        if server_id:
+            server = self.get_queryset().filter(pk=server_id).first()
+            if server is None:
+                return api_error_response("Jenkins 服务不存在")
+        base_url = str(data.get("baseUrl") or "").strip() or (
+            server.base_url if server else ""
+        )
+        username = str(data.get("username") or "").strip() or (
+            server.username if server else ""
+        )
+        secret = str(data.get("secret") or "")
+        if not secret and server:
+            secret = decrypt_secret(server.token_encrypted)
+        if data.get("verifySsl") is not None:
+            verify_ssl = bool(data.get("verifySsl"))
+        else:
+            verify_ssl = server.verify_ssl if server else True
+        if not base_url or not username or not secret:
+            return api_error_response("请先填写服务地址、用户名与 API Token")
+
+        status, _, _ = _request(
+            "GET",
+            base_url.rstrip("/") + "/api/json?tree=mode",
+            _jenkins_basic_auth(username, secret),
+            None,
+            15,
+            verify_ssl,
+        )
+        if status == 200:
+            return api_ok_response({"reachable": True})
+        if status in (401, 403):
+            return api_error_response(f"连接失败：认证被拒绝（HTTP {status}），请检查用户名与 API Token")
+        return api_error_response(f"连接失败：HTTP {status}，请检查服务地址与网络")
 
     @action(methods=["GET"], detail=True, url_path="jobs")
     def jobs(self, request, pk=None):
@@ -811,6 +979,164 @@ class JenkinsServerViewSet(AutomationAuditModelViewSet):
         )
 
 
+class GitRepoError(Exception):
+    """git 操作失败（携带可读错误信息）"""
+
+
+def _git_plain_token(repo):
+    return decrypt_secret(repo.token_encrypted) if repo.token_encrypted else ""
+
+
+def _git_remote_url(repo):
+    """构造克隆 URL：配置令牌时按「用户名:令牌@」嵌入 http(s) 地址（用户名留空则仅令牌）。"""
+    url = (repo.repo_url or "").strip()
+    token = _git_plain_token(repo)
+    if not token:
+        return url
+    parsed = urlsplit(url)
+    if parsed.scheme not in ("http", "https"):
+        return url
+    if repo.username:
+        netloc = (
+            f"{quote(repo.username, safe='')}:{quote(token, safe='')}@{parsed.netloc}"
+        )
+    else:
+        netloc = f"{quote(token, safe='')}@{parsed.netloc}"
+    return urlunsplit(parsed._replace(netloc=netloc))
+
+
+def _sanitize_git_error(message, repo):
+    """错误信息可能回显带令牌的 URL，替换令牌避免泄漏。"""
+    token = _git_plain_token(repo)
+    if token:
+        message = message.replace(quote(token, safe=""), "***").replace(token, "***")
+    return message
+
+
+def _run_git(repo, args, timeout=90):
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except FileNotFoundError as exc:
+        raise GitRepoError("服务器未安装 git") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise GitRepoError("git 操作超时") from exc
+    if proc.returncode != 0:
+        raise GitRepoError(
+            _sanitize_git_error(
+                (proc.stderr or proc.stdout or "git 执行失败").strip(), repo
+            )
+        )
+    return proc.stdout
+
+
+def _git_shallow_clone(repo, ref):
+    """浅克隆指定分支/标签到临时目录并返回路径；失败时自动清理。"""
+    repo_dir = tempfile.mkdtemp(prefix="auto-git-")
+    args = ["clone", "--depth", "1", "--single-branch"]
+    if ref and ref != "HEAD":
+        args += ["--branch", ref]
+    args += [_git_remote_url(repo), repo_dir]
+    if not repo.verify_ssl:
+        args = ["-c", "http.sslVerify=false"] + args
+    try:
+        _run_git(repo, args)
+    except GitRepoError:
+        shutil.rmtree(repo_dir, ignore_errors=True)
+        raise
+    return repo_dir
+
+
+def _validated_ref(repo, ref):
+    value = str(ref or "").strip() or (repo.branch or "").strip() or "HEAD"
+    if value.startswith("-") or " " in value:
+        raise GitRepoError("分支/标签名不合法")
+    return value
+
+
+def _resolve_repo_file(repo_dir, file_path):
+    """校验相对路径安全并返回绝对路径（禁止越出仓库目录）。"""
+    if not file_path or file_path.startswith("/") or ".." in file_path.split("/"):
+        raise GitRepoError("文件路径不合法")
+    repo_root = os.path.realpath(repo_dir)
+    full = os.path.realpath(os.path.join(repo_dir, file_path))
+    if not full.startswith(repo_root + os.sep):
+        raise GitRepoError("文件路径不合法")
+    if not os.path.isfile(full):
+        raise GitRepoError("仓库中不存在该文件")
+    if os.path.getsize(full) > 1024 * 1024:
+        raise GitRepoError("文件超过 1MB，无法加载")
+    return full
+
+
+class GitRepositoryViewSet(AutomationAuditModelViewSet):
+    audit_action_prefix = "automation.git_repository"
+    audit_resource_type = "git_repository"
+    queryset = GitRepository.objects.select_related("created_by", "updated_by").all()
+    serializer_class = GitRepositorySerializer
+    ordering_fields = ("id", "name", "updated_at")
+    filterset_fields = ("is_active",)
+    search_fields = ("name", "repo_url", "username")
+
+    @action(methods=["GET"], detail=True, url_path="files")
+    def files(self, request, pk=None):
+        """列出仓库文件（浅克隆后 ls-tree，可按关键字过滤）。"""
+        repo = self.get_object()
+        try:
+            ref = _validated_ref(repo, request.query_params.get("ref"))
+        except GitRepoError as exc:
+            return api_error_response(str(exc))
+        search = str(request.query_params.get("search") or "").strip()
+        try:
+            limit = min(max(int(request.query_params.get("limit") or 100), 1), 500)
+        except (TypeError, ValueError):
+            return api_error_response("limit 参数不合法")
+        try:
+            repo_dir = _git_shallow_clone(repo, ref)
+        except GitRepoError as exc:
+            return api_error_response(str(exc))
+        try:
+            out = _run_git(repo, ["ls-tree", "-r", "--name-only", "-z", "HEAD"])
+        except GitRepoError as exc:
+            return api_error_response(str(exc))
+        finally:
+            shutil.rmtree(repo_dir, ignore_errors=True)
+        files = [name for name in out.split("\0") if name]
+        if search:
+            keyword = search.lower()
+            files = [name for name in files if keyword in name.lower()]
+        return api_ok_response({"ref": ref, "files": files[:limit]})
+
+    @action(methods=["POST"], detail=True, url_path="load")
+    def load(self, request, pk=None):
+        """加载仓库中指定文件内容（供脚本/Playbook/Module 新建时导入）。"""
+        repo = self.get_object()
+        file_path = str(request.data.get("path") or "").strip()
+        if not file_path:
+            return api_error_response("文件路径不能为空")
+        try:
+            ref = _validated_ref(repo, request.data.get("ref"))
+        except GitRepoError as exc:
+            return api_error_response(str(exc))
+        try:
+            repo_dir = _git_shallow_clone(repo, ref)
+        except GitRepoError as exc:
+            return api_error_response(str(exc))
+        try:
+            full = _resolve_repo_file(repo_dir, file_path)
+            with open(full, "r", encoding="utf-8", errors="replace") as fh:
+                content = fh.read()
+        except GitRepoError as exc:
+            return api_error_response(str(exc))
+        finally:
+            shutil.rmtree(repo_dir, ignore_errors=True)
+        return api_ok_response({"ref": ref, "name": file_path, "content": content})
+
+
 class JenkinsJobViewSet(WorkflowResourceProtectionMixin, StandardModelViewSet):
     workflow_node_type = NodeType.JENKINS
     workflow_resource_label = "Jenkins Job"
@@ -820,6 +1146,21 @@ class JenkinsJobViewSet(WorkflowResourceProtectionMixin, StandardModelViewSet):
     ordering_fields = ("id", "name", "last_synced_at", "updated_at")
     filterset_fields = ("server", "is_active")
     search_fields = ("name", "server__name")
+
+    @action(methods=["GET"], detail=True, url_path="parameters")
+    def parameters(self, request, pk=None):
+        """探测 Jenkins 任务定义的构建参数，供流程设计配置参数映射时自动带出。"""
+        from apps.jobs.node_executors import fetch_jenkins_job_parameter_definitions
+
+        job = self.get_object()
+        try:
+            definitions = fetch_jenkins_job_parameter_definitions(job.server, job.name)
+        except Exception as exc:
+            logger.warning("Jenkins Job %s parameter probe failed: %s", job.id, exc)
+            return api_error_response(f"探测 Jenkins 参数失败：{exc}")
+        if definitions is None:
+            return api_error_response("Jenkins 未返回参数定义，请检查任务地址与账号权限后重试")
+        return api_ok_response(definitions)
 
     @action(methods=["POST"], detail=True, url_path="run")
     def run_job(self, request, pk=None):
@@ -980,19 +1321,112 @@ class NotificationTemplateViewSet(
     filterset_fields = ("channel", "is_active")
     search_fields = ("name", "code", "description")
 
+    def _notification_graph(self, data):
+        from django.shortcuts import get_object_or_404
+
+        version_id = data.get("workflowVersionId")
+        if data["scenario"] != "workflow" or version_id is None:
+            return None
+        graph = serialize_graph(
+            get_object_or_404(
+                WorkflowVersion,
+                pk=version_id,
+                status=WorkflowVersion.Status.PUBLISHED,
+                workflow__status=WorkflowTemplate.Status.PUBLISHED,
+            )
+        )
+        api_ids = [
+            node["resourceId"]
+            for node in graph["nodes"]
+            if node["type"] == "api" and str(node.get("resourceId", "")).isdigit()
+        ]
+        extractors = dict(
+            ApiEndpoint.objects.filter(pk__in=api_ids).values_list(
+                "pk", "output_extractors"
+            )
+        )
+        for node in graph["nodes"]:
+            if node["type"] == "api" and str(node.get("resourceId", "")).isdigit():
+                node["resourceSnapshot"] = {
+                    "definition": {
+                        "output_extractors": extractors.get(int(node["resourceId"]), [])
+                    }
+                }
+        return graph
+
+    @action(methods=["GET"], detail=False, url_path="variables")
+    def variables(self, request):
+        from .notification_preview import notification_catalog
+
+        serializer = NotificationPreviewSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        result = notification_catalog(data["scenario"], self._notification_graph(data))
+        result["workflowVersions"] = [
+            {
+                "id": version.pk,
+                "workflowName": version.workflow.name,
+                "version": version.version,
+            }
+            for version in WorkflowVersion.objects.select_related("workflow")
+            .filter(
+                status=WorkflowVersion.Status.PUBLISHED,
+                workflow__status=WorkflowTemplate.Status.PUBLISHED,
+            )
+            .order_by("workflow__name", "-version")
+        ]
+        return api_ok_response(result)
+
+    @action(methods=["POST"], detail=False, url_path="preview")
+    def preview(self, request):
+        from .notification_preview import preview_notification
+
+        serializer = NotificationPreviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            result = preview_notification(
+                scenario=data["scenario"],
+                subject=data["subjectTemplate"],
+                body=data["bodyTemplate"],
+                receivers=data["receiverTemplate"],
+                sample_context=data["sampleContext"],
+                graph=self._notification_graph(data),
+            )
+        except ValueError as exc:
+            return api_error_response(str(exc))
+        return api_ok_response(result)
+
     @action(methods=["POST"], detail=True, url_path="test-send")
     def test_send(self, request, pk=None):
         from apps.jobs.application.runs import create_trial_run
+        from .notification_preview import notification_context, preview_notification
 
         template = self.get_object()
+        serializer = NotificationPreviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
         receivers = request.data.get("receivers") or []
         try:
+            graph = self._notification_graph(data)
+            context = notification_context(
+                data["scenario"], data["sampleContext"], graph
+            )
+            preview = preview_notification(
+                scenario=data["scenario"],
+                subject=template.subject_template,
+                body=template.body_template,
+                receivers=template.receiver_template,
+                sample_context=context,
+                graph=graph,
+            )
+            if not preview["valid"]:
+                return api_error_response("；".join(preview["errors"].values()))
             run = create_trial_run(
                 node_type=NodeType.NOTIFY,
                 resource_id=template.id,
                 node_name=f"Notification test: {template.name}",
-                config={"receivers": receivers},
-                input_vars=request.data.get("inputVars") or {},
+                config={"receivers": receivers, "notificationTestContext": context},
                 triggered_by=request.user,
             )
         except Exception as exc:
@@ -1020,5 +1454,217 @@ class NotificationRecordViewSet(StandardModelViewSet):
     filterset_fields = ("status", "template", "channel", "workflow_run", "node_run")
     search_fields = ("subject", "body", "failure_reason")
 
+    def get_queryset(self):
+        from apps.jobs.run_access import visible_runs
 
-# End of automation API viewsets.
+        base = super().get_queryset()
+        runs = visible_runs(
+            base.filter(workflow_run__isnull=False),
+            self.request.user,
+            owner="workflow_run__triggered_by",
+        )
+        if self.request.user.is_superuser:
+            return base.filter(
+                Q(pk__in=runs.values("pk"))
+                | Q(alert_key__startswith="cmdb-sync-failure:")
+                | Q(alert_key__startswith="provisioning:")
+                | Q(alert_key__startswith="security:")
+            )
+        from apps.provisioning.models import ProvisioningRequest
+
+        own_requests = ProvisioningRequest.objects.filter(
+            created_by=self.request.user
+        ).values_list("pk", flat=True)
+        return base.filter(
+            Q(pk__in=runs.values("pk"))
+            | Q(
+                alert_key__startswith="security:",
+                context__delivery__actorId=self.request.user.pk,
+            )
+            | Q(
+                alert_key__startswith="provisioning:",
+                context__delivery__requestId__in=own_requests,
+            )
+        )
+
+
+class NotificationEmailSettingsView(APIView):
+    """系统设置：SMTP 邮件服务器配置。"""
+
+    @extend_schema(responses=_EMAIL_SETTINGS_RESPONSE)
+    def get(self, request):
+        return api_ok_response(get_email_settings())
+
+    @extend_schema(
+        request=EmailSettingsInputSerializer,
+        responses=_EMAIL_SETTINGS_RESPONSE,
+    )
+    def put(self, request):
+        try:
+            data = save_email_settings(request.data or {})
+        except ValueError as exc:
+            return api_error_response(str(exc))
+        return api_ok_response(data)
+
+
+class NotificationEmailTestView(APIView):
+    """系统设置：发送测试邮件。"""
+
+    @extend_schema(
+        request=EmailTestRecipientSerializer,
+        responses=api_envelope_serializer(
+            "NotificationEmailTestResponse", EmailTestRecipientSerializer
+        ),
+    )
+    def post(self, request):
+        recipient = str((request.data or {}).get("recipient") or "").strip()
+        if "@" not in recipient:
+            return api_error_response("请输入有效的收件人邮箱")
+        try:
+            send_test_email(recipient)
+        except Exception as exc:
+            logger.exception("Notification email test failed")
+            return api_error_response(f"测试邮件发送失败：{exc}")
+        return api_ok_response({"recipient": recipient})
+
+
+class NotificationEmailConnectionTestView(APIView):
+    """系统设置：使用表单值测试 SMTP 连接。"""
+
+    @extend_schema(
+        request=EmailConnectionInputSerializer,
+        responses=_NOTIFICATION_CONNECTION_RESPONSE,
+    )
+    def post(self, request):
+        try:
+            check_email_connection(request.data or {})
+        except ValueError as exc:
+            return api_error_response(str(exc))
+        except Exception as exc:
+            logger.exception("Notification email connection test failed")
+            return api_error_response(f"连接失败：{exc}")
+        return api_ok_response({"connected": True})
+
+
+class NotificationHistorySettingsView(APIView):
+    """系统设置：通知历史记录清理配置。"""
+
+    @extend_schema(responses=_NOTIFICATION_HISTORY_SETTINGS_RESPONSE)
+    def get(self, request):
+        return api_ok_response(get_history_settings())
+
+    @extend_schema(
+        request=NotificationHistorySettingsSerializer,
+        responses=_NOTIFICATION_HISTORY_SETTINGS_RESPONSE,
+    )
+    def put(self, request):
+        try:
+            data = save_history_settings(request.data or {})
+        except ValueError as exc:
+            return api_error_response(str(exc))
+        return api_ok_response(data)
+
+
+class NotificationHistoryPurgeView(APIView):
+    """系统设置：立即清理通知历史记录。"""
+
+    @extend_schema(
+        request=NotificationHistoryPurgeInputSerializer,
+        responses=api_envelope_serializer(
+            "NotificationHistoryPurgeResponse", NotificationHistoryPurgeResultSerializer
+        ),
+    )
+    def post(self, request):
+        payload = request.data or {}
+        dry_run = bool(payload.get("dryRun"))
+        raw_days = payload.get("retentionDays")
+        retention_days = None
+        if raw_days is not None:
+            try:
+                retention_days = parse_retention_days(raw_days)
+            except ValueError as exc:
+                return api_error_response(str(exc))
+        return api_ok_response(
+            purge_notification_history(dry_run=dry_run, retention_days=retention_days)
+        )
+
+
+class NotificationAppSettingsView(APIView):
+    """系统设置：企业微信 / 钉钉 / 飞书应用凭据。"""
+
+    provider = ""
+
+    def get(self, request):
+        return api_ok_response(get_app_settings(self.provider))
+
+    def put(self, request):
+        try:
+            data = save_app_settings(self.provider, request.data or {})
+        except ValueError as exc:
+            return api_error_response(str(exc))
+        return api_ok_response(data)
+
+
+class NotificationAppConnectionTestView(APIView):
+    """系统设置：使用表单值测试应用凭据。"""
+
+    provider = ""
+
+    @extend_schema(
+        request=NotificationAppConnectionInputSerializer,
+        responses=_NOTIFICATION_CONNECTION_RESPONSE,
+    )
+    def post(self, request):
+        try:
+            check_app_connection(self.provider, request.data or {})
+        except ValueError as exc:
+            return api_error_response(str(exc))
+        except Exception:
+            logger.exception("Notification app connection test failed")
+            return api_error_response("连接失败，请稍后重试")
+        return api_ok_response({"connected": True})
+
+
+@extend_schema_view(
+    get=extend_schema(responses=_NOTIFICATION_APP_SETTINGS_RESPONSE),
+    put=extend_schema(
+        request=WecomSettingsInputSerializer,
+        responses=_NOTIFICATION_APP_SETTINGS_RESPONSE,
+    ),
+)
+class WecomSettingsView(NotificationAppSettingsView):
+    provider = PROVIDER_WECOM
+
+
+@extend_schema_view(
+    get=extend_schema(responses=_NOTIFICATION_APP_SETTINGS_RESPONSE),
+    put=extend_schema(
+        request=DingtalkSettingsInputSerializer,
+        responses=_NOTIFICATION_APP_SETTINGS_RESPONSE,
+    ),
+)
+class DingtalkSettingsView(NotificationAppSettingsView):
+    provider = PROVIDER_DINGTALK
+
+
+@extend_schema_view(
+    get=extend_schema(responses=_NOTIFICATION_APP_SETTINGS_RESPONSE),
+    put=extend_schema(
+        request=NotificationAppConnectionInputSerializer,
+        responses=_NOTIFICATION_APP_SETTINGS_RESPONSE,
+    ),
+)
+class FeishuSettingsView(NotificationAppSettingsView):
+    provider = PROVIDER_FEISHU
+
+
+class WecomConnectionTestView(NotificationAppConnectionTestView):
+    provider = PROVIDER_WECOM
+
+
+class DingtalkConnectionTestView(NotificationAppConnectionTestView):
+    provider = PROVIDER_DINGTALK
+
+
+class FeishuConnectionTestView(NotificationAppConnectionTestView):
+    provider = PROVIDER_FEISHU

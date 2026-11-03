@@ -1,4 +1,11 @@
+import dayjs from 'dayjs';
 import { $t } from '@/locales';
+
+export function formatLocalDateTime(value: string | null | undefined): string {
+  if (!value) return '-';
+  const date = dayjs(value);
+  return date.isValid() ? date.format('YYYY-MM-DD HH:mm:ss') : '-';
+}
 
 /**
  * Transform record to option

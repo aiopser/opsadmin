@@ -3,9 +3,16 @@ from datetime import date, datetime, time, timedelta
 from django.db.models import Count, Q
 from django.db.models.functions import TruncDate
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema
 
-from common.api.responses import api_error_response, api_ok_response
+from common.api.responses import api_ok_response
 from common.api.views import StandardApiView
+from common.api.schema import api_envelope_serializer
+from common.api.schema_serializers import (
+    OperationLogPageSerializer,
+    VisitOverviewSerializer,
+    VisitTrendSerializer,
+)
 from apps.permission.models import OperationLog
 
 
@@ -70,8 +77,11 @@ def _format_operation_log(log):
 
 
 class LogListApiView(StandardApiView):
-    serializer_class = serializers.Serializer
-
+    @extend_schema(
+        responses=api_envelope_serializer(
+            "OperationLogPageResponse", OperationLogPageSerializer
+        )
+    )
     def get(self, request, *args, **kwargs):
         start_date, end_date = _get_date_range(request)
         keywords = request.query_params.get("keywords", "")
@@ -115,26 +125,12 @@ class LogListApiView(StandardApiView):
         )
 
 
-class LogBatchDeleteApiView(StandardApiView):
-    """批量删除操作日志（ids 以逗号分隔放在路径中，如 /api/v1/logs/delete/1,2,3）"""
-
-    serializer_class = serializers.Serializer
-
-    def delete(self, request, *args, **kwargs):
-        ids = kwargs.get("ids", "")
-        try:
-            id_list = [int(i) for i in ids.split(",") if i]
-        except (TypeError, ValueError):
-            return api_error_response("ids 格式错误")
-        if not id_list:
-            return api_error_response("ids 不能为空")
-        deleted, _ = OperationLog.objects.filter(id__in=id_list).delete()
-        return api_ok_response({"deleted": deleted})
-
-
 class VisitOverviewApiView(StandardApiView):
-    serializer_class = serializers.Serializer
-
+    @extend_schema(
+        responses=api_envelope_serializer(
+            "VisitOverviewResponse", VisitOverviewSerializer
+        )
+    )
     def get(self, request, *args, **kwargs):
         today = date.today()
         yesterday = today - timedelta(days=1)
@@ -168,8 +164,9 @@ class VisitOverviewApiView(StandardApiView):
 
 
 class VisitTrendApiView(StandardApiView):
-    serializer_class = serializers.Serializer
-
+    @extend_schema(
+        responses=api_envelope_serializer("VisitTrendResponse", VisitTrendSerializer)
+    )
     def get(self, request, *args, **kwargs):
         today = date.today()
         start_date = _parse_date(

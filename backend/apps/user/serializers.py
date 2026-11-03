@@ -9,7 +9,28 @@ from .models import Department, UserProfile
 class UserProfileSerializer(StandardModelSerializer):
     class Meta:
         model = UserProfile
-        exclude = ("password",)
+        fields = (
+            "id",
+            "username",
+            "name",
+            "phone",
+            "email",
+            "icon",
+            "gender",
+            "position",
+            "department",
+            "staff_id",
+            "job_status",
+            "remarks",
+            "role",
+            "is_active",
+            "first_name",
+            "last_name",
+            "last_login",
+            "date_joined",
+            "must_change_password",
+        )
+        read_only_fields = ("last_login", "date_joined", "must_change_password")
         extra_kwargs = {
             "name": {"required": False, "allow_blank": True},
             "phone": {"required": False, "allow_blank": True},
@@ -19,6 +40,20 @@ class UserProfileSerializer(StandardModelSerializer):
         }
 
     def to_internal_value(self, data):
+        forbidden = {
+            "is_superuser",
+            "is_staff",
+            "groups",
+            "user_permissions",
+            "auth_version",
+            "must_change_password",
+            "login_failure_count",
+            "login_locked_until",
+        } & set(data)
+        if forbidden:
+            raise serializers.ValidationError(
+                {field: "用户管理不能修改此安全字段" for field in sorted(forbidden)}
+            )
         self._avatar_path = None
         mutable = data.copy()
         if "nickname" in mutable:
@@ -51,6 +86,37 @@ class UserProfileSerializer(StandardModelSerializer):
             mutable["job_status"] = enabled
             mutable["is_active"] = enabled
         return super().to_internal_value(mutable)
+
+    def validate_role(self, roles):
+        actor = getattr(self.context.get("request"), "user", None)
+        if getattr(actor, "is_superuser", False):
+            return roles
+        from rest_framework.exceptions import PermissionDenied
+
+        if actor is None:
+            raise PermissionDenied("角色分配需要明确操作者")
+        active_roles = actor.role.filter(is_active=True)
+        allowed = set(active_roles.values_list("permission__id", flat=True))
+        scope_order = {"own": 0, "department": 1, "all": 2}
+        maximum_scope = max(
+            (
+                scope_order.get(value, 0)
+                for value in active_roles.values_list("job_data_scope", flat=True)
+            ),
+            default=0,
+        )
+        for role in roles:
+            if (
+                role.code == "admin"
+                or role.name == "admin"
+                or not set(role.permission.values_list("id", flat=True)).issubset(
+                    allowed
+                )
+            ):
+                raise PermissionDenied("不能授予超出当前操作者权限的角色")
+            if scope_order.get(role.job_data_scope, 0) > maximum_scope:
+                raise PermissionDenied("不能授予超出当前操作者数据范围的角色")
+        return roles
 
     def create(self, validated_data):
         instance = super().create(validated_data)
@@ -113,6 +179,23 @@ class UserProfileSerializer(StandardModelSerializer):
         )
         representation["updateTime"] = getattr(instance, "updated_at", None)
         return representation
+
+
+class UserProfileUpdateSerializer(UserProfileSerializer):
+    """Allow users to maintain contact details without changing access."""
+
+    class Meta(UserProfileSerializer.Meta):
+        fields = ("name", "phone", "email", "icon", "gender")
+        exclude = None
+
+    def to_internal_value(self, data):
+        allowed_fields = {*self.Meta.fields, "nickname", "mobile", "avatar"}
+        forbidden_fields = set(data) - allowed_fields
+        if forbidden_fields:
+            raise serializers.ValidationError(
+                {field: "个人资料不能修改此字段" for field in sorted(forbidden_fields)}
+            )
+        return super().to_internal_value(data)
 
 
 class DepartmentSerializer(StandardModelSerializer):

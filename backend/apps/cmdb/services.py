@@ -8,7 +8,6 @@ SUPPORTED_DYNAMIC_FIELDS = {
     "environment",
     "status",
     "app_code",
-    "service_node",
     "asset_source",
     "connection_type",
 }
@@ -32,6 +31,19 @@ def _apply_dynamic_rule(queryset, rule):
             return queryset.none()
         matched_fields += 1
     return queryset.filter(query) if matched_fields else queryset.none()
+
+
+def collect_group_tree_ids(group_ids):
+    """Collect the given group IDs plus all descendant group IDs (BFS)."""
+    ids = {int(gid) for gid in group_ids if str(gid).strip().isdigit()}
+    frontier = list(ids)
+    while frontier:
+        children = HostGroup.objects.filter(
+            parent_id__in=frontier
+        ).values_list("id", flat=True)
+        frontier = [cid for cid in children if cid not in ids]
+        ids.update(frontier)
+    return ids
 
 
 def resolve_group_host_ids(group_ids):

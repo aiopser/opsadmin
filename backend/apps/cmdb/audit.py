@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 
-SENSITIVE_FIELD_NAMES = {"secret_ref"}
+SENSITIVE_FIELD_NAMES = {"secret_ref", "encrypted_secret", "credentials_encrypted"}
 
 
 def _to_audit_value(value):

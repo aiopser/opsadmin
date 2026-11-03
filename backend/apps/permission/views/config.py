@@ -1,10 +1,11 @@
 from django.core.cache import cache
 from django.db.models import Q
 from rest_framework.decorators import action
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import extend_schema, inline_serializer
+from rest_framework import serializers
 
-from common.api.responses import api_ok_response
-from common.api.schema import generate_crud_schema
+from common.api.responses import api_error_response, api_ok_response
+from common.api.schema import generate_crud_schema, api_envelope_serializer
 from common.api.viewsets import StandardModelViewSet
 from common.api.views import StandardOpenApiView
 from ..models import SystemConfig
@@ -36,7 +37,8 @@ def get_system_config_snapshot(force_refresh=False):
         try:
             cache.set(CONFIG_CACHE_KEY, snapshot, 60 * 10)
         except Exception:
-            pass
+            if force_refresh:
+                raise
     return snapshot
 
 
@@ -93,7 +95,10 @@ class SystemConfigViewSet(StandardModelViewSet):
     @extend_schema(summary="刷新系统配置缓存", tags=["系统配置"])
     @action(methods=["PUT"], detail=False, url_path="refresh")
     def refresh(self, request):
-        snapshot = get_system_config_snapshot(force_refresh=True)
+        try:
+            snapshot = get_system_config_snapshot(force_refresh=True)
+        except Exception:
+            return api_error_response("刷新配置缓存失败，请检查缓存服务后重试", http_status=503)
         return api_ok_response({"count": len(snapshot)})
 
     @extend_schema(summary="获取系统配置快照", tags=["系统配置"])
@@ -109,6 +114,16 @@ class PublicConfigApiView(StandardOpenApiView):
         summary="获取公开站点配置",
         tags=["系统配置"],
         auth=[],
+        responses=api_envelope_serializer(
+            "PublicConfigResponse",
+            inline_serializer(
+                name="PublicSiteConfig",
+                fields={
+                    key: serializers.CharField(allow_blank=True)
+                    for key in PUBLIC_CONFIG_KEYS
+                },
+            ),
+        ),
     )
     def get(self, request, *args, **kwargs):
         snapshot = get_system_config_snapshot()

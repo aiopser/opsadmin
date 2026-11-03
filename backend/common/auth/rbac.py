@@ -5,6 +5,8 @@ from apps.permission.services import CasbinEnforcerService
 
 
 def verify_permission(user, path, method):
+    if not getattr(user, "is_active", True) or not getattr(user, "job_status", True):
+        return False, "account_disabled"
     if getattr(user, "is_superuser", False):
         return True, ""
     username = getattr(user, "username", None)

@@ -5,6 +5,7 @@ from collections import OrderedDict
 import casbin
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Max
 
 from apps.permission.models import CasbinRule, Menu, Permission, Role
 
@@ -84,7 +85,7 @@ def _normalize_policy_item(item):
 
 def build_policy_rows():
     rows = []
-    for role in Role.objects.prefetch_related("user", "permission").all():
+    for role in Role.objects.filter(is_active=True).prefetch_related("user", "permission"):
         rows.extend(_normalize_policy_item(item) for item in role.adapter())
         for permission in role.get_api_permissions():
             rows.append(
@@ -115,6 +116,13 @@ def sync_casbin_rules():
 class CasbinEnforcerService:
     _lock = threading.RLock()
     _enforcer = None
+    _policy_revision = None
+
+    @staticmethod
+    def _current_revision():
+        # Policy rewrites allocate new primary keys. Reading the indexed maximum
+        # also invalidates cached enforcers in other API/Worker processes.
+        return CasbinRule.objects.aggregate(revision=Max("id"))["revision"]
 
     @classmethod
     def _build_enforcer(cls):
@@ -126,12 +134,16 @@ class CasbinEnforcerService:
     @classmethod
     def get_enforcer(cls):
         with cls._lock:
-            if cls._enforcer is None:
+            revision = cls._current_revision()
+            if cls._enforcer is None or cls._policy_revision != revision:
                 cls._enforcer = cls._build_enforcer()
+                cls._policy_revision = revision
             return cls._enforcer
 
     @classmethod
     def reload(cls):
         with cls._lock:
+            revision = cls._current_revision()
             cls._enforcer = cls._build_enforcer()
+            cls._policy_revision = revision
             return cls._enforcer

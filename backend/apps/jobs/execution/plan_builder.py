@@ -1,3 +1,5 @@
+from common.workflow.native_parameters import native_variable_values
+from apps.automation.module_fields import module_name_for
 from common.workflow.node_types import NodeType
 import json
 import os
@@ -6,7 +8,11 @@ import shlex
 import shutil
 import tempfile
 from types import SimpleNamespace
+from copy import copy, deepcopy
 import yaml
+from jinja2 import Undefined
+from jinja2.nodes import Output, TemplateData
+from jinja2.exceptions import UndefinedError
 from apps.automation.models import CommandVersion, WorkflowNode
 from apps.cmdb.credentials import DatabaseCredentialProvider
 from apps.cmdb.crypto import decrypt_secret
@@ -15,10 +21,11 @@ from apps.ops.workflow.playbooks import build_playbook
 from apps.jobs.input_secrets import resolve_workflow_inputs
 from apps.jobs.models import Gateway
 from apps.jobs.quick_commands import is_quick_command_workflow_version
-from apps.jobs.settings_service import get_engine_settings
+from .settings_snapshot import node_execution_settings, effective_node_timeout
 
 
 FREE_FORM_MODULES = frozenset({"shell", "command", "script", "raw"})
+PURE_MAPPING_EXPRESSION = re.compile(r"^\s*{{\s*(.*?)\s*}}\s*$", re.DOTALL)
 
 
 INTERNAL_INPUT_VAR_KEYS = frozenset(
@@ -33,7 +40,6 @@ INTERNAL_INPUT_VAR_KEYS = frozenset(
         "module",
         "module_args",
         "gateway_id",
-        "bypass_host_gateway",
         "host_strategy",
         "ansible_forks",
         "serial_batch",
@@ -48,13 +54,56 @@ class InvalidSourcePlaybook(ValueError):
 
 def parse_module_args(module_args):
     """解析 Ansible ad-hoc 风格参数字符串（k=v k2=v2）为 dict。"""
+    if str(module_args or "").lstrip().startswith("{"):
+        try:
+            values = json.loads(module_args, object_pairs_hook=_unique_module_pairs)
+        except (TypeError, ValueError) as exc:
+            raise InvalidSourcePlaybook(f"Module JSON 参数格式不合法: {exc}") from exc
+        if not isinstance(values, dict):
+            raise InvalidSourcePlaybook("Module JSON 参数必须是对象")
+        return values
     parsed = {}
     for token in shlex.split(module_args or ""):
         key, separator, value = token.partition("=")
         if not separator or not key:
             raise InvalidSourcePlaybook(f"Module 参数格式不合法: {token}")
-        parsed[key] = value
+        if key in parsed:
+            raise InvalidSourcePlaybook(f"Module 参数名重复: {key}")
+        try:
+            structured = json.loads(value)
+        except (TypeError, ValueError):
+            structured = None
+        parsed[key] = structured if isinstance(structured, (dict, list)) else value
     return parsed
+
+
+def _unique_module_pairs(pairs):
+    values = {}
+    for key, value in pairs:
+        if key in values:
+            raise InvalidSourcePlaybook(f"Module 参数名重复: {key}")
+        values[key] = value
+    return values
+
+
+def serialize_module_args(values):
+    """Use native JSON so booleans, numbers, null and strings round-trip exactly."""
+    return json.dumps(values, ensure_ascii=False, separators=(",", ":"))
+
+
+def resolve_module_arguments(module, arguments):
+    """Accept native JSON objects, legacy key=value input and free-form commands."""
+    if isinstance(arguments, dict):
+        return deepcopy(arguments)
+    text = str(arguments or "")
+    free_form = module.rsplit(".", 1)[-1] in FREE_FORM_MODULES
+    if free_form and not re.match(r'^\s*\{\s*(?:"|}|$)', text):
+        return {"_raw_params": text}
+    if text.lstrip().startswith("{"):
+        return parse_module_args(text)
+    if free_form:
+        return {"_raw_params": text}
+    return parse_module_args(text)
 
 
 def build_source_playbook(run):
@@ -90,10 +139,7 @@ def build_source_playbook(run):
         module_args = str(input_vars.get("module_args") or "")
         if not module:
             raise InvalidSourcePlaybook("缺少 Module 名称")
-        if module in FREE_FORM_MODULES:
-            task_args = {"_raw_params": module_args}
-        else:
-            task_args = parse_module_args(module_args)
+        task_args = resolve_module_arguments(module, module_args)
         return [
             {
                 "hosts": "all",
@@ -195,9 +241,6 @@ def prepare_host_gateway_execution(host_snapshots, input_vars=None):
     注入，一台清单里混布多网段主机时互不影响；非 SSH 主机不支持网关代理。
     """
     snapshots = [dict(host) for host in (host_snapshots or [])]
-    if (input_vars or {}).get("bypass_host_gateway"):
-        return snapshots, {}, ""
-
     gateway_id = (input_vars or {}).get("gateway_id")
     if not gateway_id:
         return snapshots, {}, ""
@@ -283,16 +326,62 @@ def _merge_node_vars(run, node):
     resolved_inputs = resolve_workflow_inputs(run)
     if isinstance(resolved_inputs, dict):
         extra_vars.update(resolved_inputs)
+        overrides = resolved_inputs.get("extra_vars")
+        if run.execution_kind in {"quick_command", "playbook", "module"} and isinstance(
+            overrides, dict
+        ):
+            extra_vars.update(overrides)
+            extra_vars.pop("extra_vars", None)
     if isinstance(node.input_mapping, dict):
-        from apps.jobs.node_executors import render_value
+        from apps.jobs.node_executors import JINJA_ENV, render_value
         from apps.jobs.workflow_engine import runtime_context
 
         node_runs = {
             item.node_key: item for item in run.node_runs.all() if item.node_key
         }
-        extra_vars.update(
-            render_value(node.input_mapping, runtime_context(run, node_runs))
+        context = runtime_context(run, node_runs)
+        # Resource defaults and run inputs are usable by their own names in
+        # step mappings, while the explicit namespaces remain authoritative.
+        context.update(
+            {key: value for key, value in extra_vars.items() if key not in context}
         )
+        for name, value in node.input_mapping.items():
+            try:
+                expression = (
+                    PURE_MAPPING_EXPRESSION.fullmatch(value)
+                    if isinstance(value, str)
+                    else None
+                )
+                if expression:
+                    body = JINJA_ENV.parse(value.strip()).body
+                    pure_expression = (
+                        len(body) == 1
+                        and isinstance(body[0], Output)
+                        and len(body[0].nodes) == 1
+                        and not isinstance(body[0].nodes[0], TemplateData)
+                    )
+                    if not pure_expression:
+                        expression = None
+                if expression:
+                    rendered = JINJA_ENV.compile_expression(
+                        expression.group(1), undefined_to_none=False
+                    )(context)
+                    if isinstance(rendered, Undefined):
+                        raise UndefinedError(f"'{expression.group(1)}' is undefined")
+                else:
+                    rendered = render_value(value, context)
+            except UndefinedError as exc:
+                raise ValueError(
+                    f"步骤参数映射「{name}」引用了未提供的变量：{exc}；" "请检查任务单参数、资源默认变量或使用 inputs.变量名"
+                ) from exc
+            extra_vars[name] = rendered
+
+    # Native per-step values override inherited inputs; Ansible resolves its own expressions.
+    extra_vars.update(
+        native_variable_values(
+            getattr(node, "node_type", ""), getattr(node, "config", {}) or {}
+        )
+    )
     if command_version:
         # Resource source is immutable after publish. Runtime inputs may override
         # declared variables, but never the executable body itself.
@@ -311,7 +400,11 @@ def _merge_node_vars(run, node):
 
 def _node_command_spec(node):
     if node.command_version:
-        return node.command_version
+        if "outputExtractors" not in (node.config or {}):
+            return node.command_version
+        spec = copy(node.command_version)
+        spec.output_extractors = deepcopy(node.config["outputExtractors"])
+        return spec
     config = node.config or {}
     node_type = node.node_type
     if node_type in {NodeType.COMMAND, NodeType.SCRIPT}:
@@ -326,18 +419,21 @@ def _node_command_spec(node):
             command_type=command_type,
             content=config.get("content") or "",
             default_vars={},
+            output_extractors=deepcopy(config.get("outputExtractors") or []),
         )
     if node_type == NodeType.PLAYBOOK:
         return SimpleNamespace(
             command_type=CommandVersion.CommandType.PLAYBOOK,
             content=config.get("content") or "",
             default_vars={},
+            output_extractors=deepcopy(config.get("outputExtractors") or []),
         )
     if node_type == NodeType.MODULE:
         return SimpleNamespace(
             command_type=CommandVersion.CommandType.ANSIBLE_MODULE,
             content=config.get("module") or "",
             default_vars={},
+            output_extractors=deepcopy(config.get("outputExtractors") or []),
         )
     raise ValueError(f"Node type {node_type} is not an Ansible node")
 
@@ -368,22 +464,17 @@ def _node_playbook(run, node, command_spec, extra_vars):
         return normalized_plays
     if node.node_type == NodeType.MODULE:
         module = str(
-            command_spec.content
+            module_name_for(command_spec)
             if has_version
-            else config.get("module") or command_spec.content
+            else config.get("module") or module_name_for(command_spec)
         ).strip()
-        module_args = (
-            config.get("args")
-            or config.get("moduleArgs")
-            or command_spec.default_vars.get("module_args")
-            or {}
-        )
-        if isinstance(module_args, str):
-            module_args = (
-                {"_raw_params": module_args}
-                if module in FREE_FORM_MODULES
-                else parse_module_args(module_args)
-            )
+        if "args" in config:
+            arguments = config["args"]
+        elif "moduleArgs" in config:
+            arguments = config["moduleArgs"]
+        else:
+            arguments = command_spec.default_vars.get("module_args", {})
+        module_args = resolve_module_arguments(module, arguments)
         extra_vars["module_name"] = module
         extra_vars["module_args"] = module_args
     if resolve_workflow_inputs(run).get("execution_source") in {"playbook", "module"}:
@@ -417,52 +508,25 @@ def _quick_command_adhoc_spec(run, command_spec, extra_vars):
 
 
 def _effective_ansible_timeout(run, node, command_spec):
-    candidates = [run.timeout_seconds, node.timeout_seconds]
-    version_timeout = getattr(command_spec, "timeout_seconds", None)
-    if version_timeout:
-        candidates.append(version_timeout)
-    return max(min(int(value) for value in candidates if value), 1)
+    return effective_node_timeout(run, node.node_key)
 
 
 def _ansible_execution_options(run, node):
-    """Resolve per-node host execution settings with system defaults."""
-    settings = get_engine_settings()
-    config = node.config or {}
-    runtime = resolve_workflow_inputs(run)
-    strategy = str(
-        config.get("hostStrategy")
-        or runtime.get("host_strategy")
-        or settings["host_strategy"]
-    )
-    if strategy not in {"parallel", "serial", "rolling"}:
-        raise ValueError("主机执行策略必须是 parallel、serial 或 rolling")
-    forks = int(
-        config.get("forks") or runtime.get("ansible_forks") or settings["forks"]
-    )
-    serial_batch = int(
-        config.get("serialBatch")
-        or runtime.get("serial_batch")
-        or settings["serial_batch"]
-    )
-    max_fail_percentage = int(
-        config.get("maxFailPercentage")
-        if config.get("maxFailPercentage") is not None
-        else runtime.get("max_fail_percentage", settings["max_fail_percentage"])
-    )
-    if forks <= 0 or serial_batch <= 0:
-        raise ValueError("Forks 和滚动批次必须大于 0")
-    if not 0 <= max_fail_percentage <= 100:
-        raise ValueError("最大失败比例必须在 0 到 100 之间")
+    values = node_execution_settings(run, node.node_key)
     return {
-        "strategy": strategy,
-        "forks": 1 if strategy == "serial" else forks,
-        "serial_batch": serial_batch,
-        "max_fail_percentage": max_fail_percentage,
+        "host_policy": values["hostPolicy"],
+        "strategy": values["hostStrategy"],
+        "forks": values["forks"],
+        "serial_batch": values["serialBatch"],
+        "max_fail_percentage": values["maxFailPercentage"],
+        "check_mode": values["checkMode"],
     }
 
 
 def _apply_host_execution_options(playbook, options):
     """Apply host batching rules to every generated or user-authored play."""
+    if options.get("host_policy") == "native":
+        return playbook
     for play in playbook:
         if not isinstance(play, dict):
             continue
@@ -472,10 +536,12 @@ def _apply_host_execution_options(playbook, options):
             play["serial"] = options["serial_batch"]
         else:
             play.pop("serial", None)
-        if options["max_fail_percentage"]:
-            play["max_fail_percentage"] = options["max_fail_percentage"]
-        else:
+        if options["max_fail_percentage"] == 0:
+            play["any_errors_fatal"] = True
             play.pop("max_fail_percentage", None)
+        else:
+            play["max_fail_percentage"] = options["max_fail_percentage"]
+            play.pop("any_errors_fatal", None)
     return playbook
 
 

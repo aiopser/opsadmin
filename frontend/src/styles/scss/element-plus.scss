@@ -1,5 +1,82 @@
 $radius: 6px;
 
+// 统一限制横向弹层，避免固定像素宽度在窄窗口裁切表单。
+.el-drawer.ltr,
+.el-drawer.rtl {
+  max-width: 100vw;
+}
+
+.el-dialog:not(.is-fullscreen) {
+  max-width: calc(100vw - 32px);
+}
+
+// 左右两栏工作台卡片：让卡片 body 撑满并纵向排列，内容区才能用 flex-1 占高
+.workspace-card > .el-card__body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+@media (max-width: 639px) {
+  .workspace-card > .el-card__body {
+    height: auto;
+  }
+
+  .responsive-form .el-form-item {
+    display: block;
+  }
+
+  .responsive-form .el-form-item__label {
+    width: auto !important;
+    justify-content: flex-start;
+    margin-bottom: 8px;
+  }
+
+  .responsive-form .el-form-item__content {
+    margin-left: 0 !important;
+  }
+}
+
+// 抽屉统一：标题下方分隔线，与正文内容区分
+.el-drawer__header {
+  margin-bottom: 0;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.notification-template-help {
+  .el-table {
+    --el-table-bg-color: transparent;
+    --el-table-tr-bg-color: transparent;
+    --el-table-header-bg-color: transparent;
+    --el-table-border-color: var(--el-color-primary-light-7);
+    --el-table-row-hover-bg-color: var(--el-color-primary-light-9);
+
+    font-size: 12px;
+
+    th.el-table__cell {
+      font-weight: 400;
+    }
+  }
+
+  .el-collapse {
+    --el-collapse-header-bg-color: transparent;
+    --el-collapse-content-bg-color: transparent;
+    --el-collapse-border-color: var(--el-color-primary-light-7);
+  }
+
+  .el-tabs__header {
+    margin-bottom: 0;
+  }
+
+  .el-tabs__item,
+  .el-collapse-item__header {
+    font-size: 13px;
+    font-weight: 400;
+  }
+}
+
 html:root,
 html.dark:root {
   @each $color in (primary, success, warning, info) {
@@ -102,6 +179,36 @@ html .el-collapse {
   }
 }
 
+/** 表单折叠分组区（高级配置/属性分组等）：主题色标题、箭头紧贴文字 */
+html .advanced-collapse {
+  --el-collapse-header-height: 36px;
+
+  .el-collapse-item__header {
+    color: var(--el-color-primary);
+    font-size: 15px;
+  }
+
+  /** EP 2.13 中箭头靠右是因标题 span flex:auto 撑满，改为仅占内容宽度后箭头紧贴文字 */
+  .el-collapse-item__title {
+    flex: none;
+  }
+
+  .el-collapse-item__arrow {
+    margin: 0 0 0 8px;
+  }
+
+  .el-collapse-item__content {
+    padding-bottom: 8px;
+  }
+}
+
+/** 运行详情的输出折叠区使用正文色，避免与可操作的主题色按钮竞争。 */
+html .advanced-collapse.run-detail-collapse .el-collapse-item__header {
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+  font-weight: 500;
+}
+
 .el-card {
   --el-card-padding: 16px;
   .el-card__header {
@@ -147,6 +254,20 @@ html .el-collapse {
   .header {
     border-top-left-radius: 3px;
   }
+
+  // 表格单元格默认居中：EP 的 td/th 默认 text-align:left，仅显式 align 的列才加 is-center/is-right。
+  // 用 元素+类 提一级特异性，确保无论样式加载顺序如何都能压过 EP 默认 left；
+  // 显式 align="right"（.is-right，0,3,0）仍高于本规则，按列配置右对齐；显式 left 经 .is-left 回到左对齐。
+  td.el-table__cell,
+  th.el-table__cell {
+    text-align: center;
+  }
+
+  td.el-table__cell.is-left,
+  th.el-table__cell.is-left {
+    text-align: left;
+  }
+
   .cell {
     padding: 0;
   }
@@ -187,4 +308,43 @@ html .el-collapse {
   .el-segmented__item-selected {
     border-radius: $radius;
   }
+}
+
+// 轻盈表单皮肤：仅调整 label 观感，输入框等保持 EP 默认直角描边（ElForm 加 class="el-form--light"）
+.el-form--light {
+  .el-form-item__label {
+    color: var(--el-text-color-secondary);
+    font-weight: 500;
+  }
+}
+
+// label-top 表单中与控件同行的 label 文本（如"上传脚本 + 选择文件"）
+.el-form--light .inline-label {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 32px;
+  color: var(--el-text-color-secondary);
+}
+
+// label-position="top" 时 label 左对齐（上方全局右对齐规则仅针对 side 布局）
+.el-form--label-top .el-form-item__label {
+  text-align: left;
+  justify-content: flex-start;
+}
+
+.config-group-view .group-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+
+  > .el-card__body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+  }
+}
+
+.config-group-view .group-nav > .el-card__body {
+  padding: 12px;
 }

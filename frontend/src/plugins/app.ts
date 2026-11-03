@@ -1,5 +1,6 @@
 import { h } from 'vue';
 import type { App } from 'vue';
+import { ElNotification } from 'element-plus';
 import { $t } from '@/locales';
 
 export function setupAppErrorHandle(app: App) {
@@ -33,7 +34,7 @@ export function setupAppVersionNotification() {
     isShow = true;
 
     // Show update notification
-    const n = window.$notification!({
+    const n = ElNotification!({
       duration: 0,
       title: $t('system.updateTitle'),
       message: h('div', {}, [

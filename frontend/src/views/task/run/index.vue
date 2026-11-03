@@ -1,334 +1,264 @@
 <script setup lang="tsx">
-import { computed, onScopeDispose, ref } from 'vue';
+import { nextTick, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { executionKindRecord, runDomainRecord, runStatusRecord } from '@/constants/business';
+import { ElButton, ElTag } from 'element-plus';
+import { runStatusRecord, runStatusTagType } from '@/constants/business';
 import {
-  fetchCancelRun,
-  fetchGetTaskRunList,
-  fetchRerunRun,
-  fetchRetryFailedRun,
-  fetchRunLogFile
+  fetchDeleteTaskTicket,
+  fetchGetTaskTicketList,
+  fetchPreviewTaskTicket,
+  fetchRunTaskTicket
 } from '@/service/api';
 import { defaultTransform, useUIPaginatedTable } from '@/hooks/common/table';
 import { useAuth } from '@/hooks/business/auth';
 import { $t } from '@/locales';
-import RunCreateDrawer from './modules/run-create-drawer.vue';
+import RunPreviewDialog from '@/components/business/run-preview-dialog/index.vue';
+import TicketCreateDrawer from './modules/ticket-create-drawer.vue';
+import TicketDetailDrawer from './modules/ticket-detail-drawer.vue';
 
 defineOptions({ name: 'TaskRun' });
 
 const router = useRouter();
-const createVisible = ref(false);
-const requestScope = new AbortController();
-onScopeDispose(() => requestScope.abort());
-function openCreate() {
-  createVisible.value = true;
-}
-function onCreated(run: Api.Jobs.RunRecord) {
-  goDetail(run.id, run.runDomain);
-}
 const { hasAuth } = useAuth();
 
-const runStatusOptions = (Object.keys(runStatusRecord) as Api.Jobs.RunStatus[]).map(value => ({
-  value,
-  label: $t(runStatusRecord[value])
-}));
+/** ============ 任务单 ============ */
 
-const executionKindOptions = (Object.keys(executionKindRecord) as Api.Jobs.ExecutionKind[]).map(value => ({
-  value,
-  label: $t(executionKindRecord[value])
-}));
+const ticketSearch = ref<Api.Jobs.TaskTicketSearchParams>({ current: 1, size: 10 });
 
-const runDomainOptions = (Object.keys(runDomainRecord) as Api.Jobs.RunDomain[]).map(value => ({
-  value,
-  label: $t(runDomainRecord[value])
-}));
+const ticketCreateVisible = ref(false);
+const ticketDetailVisible = ref(false);
+/** 编辑目标；null 表示新增 */
+const ticketEditTarget = ref<Api.Jobs.TaskTicketRecord | null>(null);
+const ticketDetailId = ref<number | null>(null);
+const ticketOperatingId = ref<number | null>(null);
+const previewVisible = ref(false);
+const preview = ref<Api.Jobs.RunPreview | null>(null);
+const previewTicketId = ref<number | null>(null);
 
-function getInitSearchParams(): Api.Jobs.RunSearchParams {
-  return {
-    current: 1,
-    size: 10,
-    status: undefined,
-    executionKind: undefined,
-    runDomain: undefined,
-    search: undefined
-  };
-}
-
-const searchParams = ref<Api.Jobs.RunSearchParams>(getInitSearchParams());
-
-const runStatusTagType: Record<Api.Jobs.RunStatus, UI.ThemeColor> = {
-  pending: 'info',
-  queued: 'info',
-  running: 'primary',
-  waiting: 'primary',
-  cancel_requested: 'warning',
-  success: 'success',
-  failed: 'danger',
-  timeout: 'danger',
-  canceled: 'info'
-};
-
-const activeStatuses = new Set<Api.Jobs.RunStatus>(['pending', 'queued', 'running', 'waiting', 'cancel_requested']);
-const finishedStatuses = new Set<Api.Jobs.RunStatus>(['success', 'failed', 'timeout', 'canceled']);
-
-const canCancel = (status: Api.Jobs.RunStatus) => activeStatuses.has(status);
-const canRerun = (status: Api.Jobs.RunStatus) => finishedStatuses.has(status);
-
-const operatingId = ref<number | null>(null);
-
-const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagination } = useUIPaginatedTable({
+const {
+  columns: ticketColumns,
+  columnChecks: ticketColumnChecks,
+  data: ticketRecords,
+  loading: ticketLoading,
+  getData: getTickets,
+  getDataByPage: getTicketsByPage,
+  mobilePagination: ticketPagination
+} = useUIPaginatedTable({
   paginationProps: {
-    currentPage: searchParams.value.current,
-    pageSize: searchParams.value.size
+    currentPage: ticketSearch.value.current,
+    pageSize: ticketSearch.value.size
   },
-  api: () => fetchGetTaskRunList(searchParams.value),
+  api: () => fetchGetTaskTicketList(ticketSearch.value),
   transform: response => defaultTransform(response),
   onPaginationParamsChange: params => {
-    searchParams.value.current = params.currentPage ?? 1;
-    searchParams.value.size = params.pageSize ?? 10;
+    ticketSearch.value.current = params.currentPage ?? 1;
+    ticketSearch.value.size = params.pageSize ?? 10;
   },
   columns: () => [
-    { prop: 'id', label: $t('page.task.run.id'), width: 80 },
-    { prop: 'workflowName', label: $t('page.task.run.workflowName'), minWidth: 140, showOverflowTooltip: true },
+    { prop: 'id', label: 'ID', width: 70, align: 'center', className: 'tabular-nums' },
+    { prop: 'name', label: '任务名称', minWidth: 150, showOverflowTooltip: true },
     {
-      prop: 'status',
-      label: $t('page.task.run.statusLabel'),
+      prop: 'workflowName',
+      label: '流程版本',
+      minWidth: 150,
+      showOverflowTooltip: true,
+      formatter: row => `${row.workflowName || '-'} · v${row.workflowVersion ?? '-'}`
+    },
+    {
+      prop: 'hostIds',
+      label: '目标选择',
+      minWidth: 200,
+      align: 'center',
+      formatter: row => `主机 ${row.hostIds.length} · 分组 ${row.groupIds.length} · 标签 ${row.tagIds.length}`
+    },
+    { prop: 'runCount', label: '运行次数', width: 90, align: 'center', className: 'tabular-nums' },
+    {
+      prop: 'lastRunStatus',
+      label: '最近状态',
       width: 110,
       align: 'center',
-      formatter: row => <ElTag type={runStatusTagType[row.status] ?? 'info'}>{$t(runStatusRecord[row.status])}</ElTag>
+      formatter: row =>
+        row.lastRunStatus ? (
+          <ElTag type={runStatusTagType[row.lastRunStatus] ?? 'info'}>{$t(runStatusRecord[row.lastRunStatus])}</ElTag>
+        ) : (
+          '-'
+        )
     },
     {
-      prop: 'executionKind',
-      label: $t('page.task.run.executionKind'),
-      width: 100,
-      align: 'center',
-      formatter: row => $t(executionKindRecord[row.executionKind])
+      prop: 'lastRunStartedAt',
+      label: '最近运行时间',
+      width: 170,
+      formatter: row => row.lastRunStartedAt || '-'
     },
-    {
-      prop: 'runDomain',
-      label: $t('page.task.run.runDomain'),
-      width: 90,
-      align: 'center',
-      formatter: row => $t(runDomainRecord[row.runDomain])
-    },
-    { prop: 'targetCount', label: $t('page.task.run.targetCount'), width: 80, align: 'center' },
-    { prop: 'triggeredByName', label: $t('page.task.run.triggeredBy'), width: 100 },
-    { prop: 'startedAt', label: $t('page.task.run.startedAt'), width: 170, formatter: row => row.startedAt || '-' },
-    {
-      prop: 'durationMs',
-      label: $t('page.task.run.duration'),
-      width: 100,
-      align: 'center',
-      formatter: row => (row.durationMs === null ? '-' : `${(row.durationMs / 1000).toFixed(1)}s`)
-    },
+    { prop: 'createdByName', label: '创建人', width: 100, formatter: row => row.createdByName || '-' },
     {
       prop: 'operate',
       label: $t('common.operate'),
+      width: 200,
       align: 'center',
-      width: 230,
       fixed: 'right',
       formatter: row => (
         <div class="flex justify-center gap-4px">
-          <ElButton type="primary" plain size="small" onClick={() => goDetail(row.id)}>
+          {hasAuth('jobs.workflow_ticket:run') ? (
+            <ElButton
+              type="primary"
+              plain
+              size="small"
+              disabled={row.runCount > 0 && !row.workflowVersionId}
+              loading={ticketOperatingId.value === row.id}
+              onClick={() => onRunTicket(row)}
+            >
+              运行
+            </ElButton>
+          ) : null}
+          <ElButton type="primary" plain size="small" onClick={() => openTicketDetail(row.id)}>
             {$t('common.detail')}
           </ElButton>
-          {canCancel(row.status) && hasAuth(`${row.runDomain === 'ops' ? 'ops' : 'jobs'}.workflow_run:cancel`) ? (
-            <ElButton
-              type="warning"
-              plain
-              size="small"
-              loading={operatingId.value === row.id}
-              onClick={() => onCancel(row.id)}
-            >
-              {$t('page.task.run.cancel')}
+          {hasAuth('jobs.workflow_ticket:delete') ? (
+            <ElButton type="danger" plain size="small" onClick={() => onDeleteTicket(row)}>
+              {$t('common.delete')}
             </ElButton>
           ) : null}
-          {row.status === 'failed' && hasAuth(`${row.runDomain === 'ops' ? 'ops' : 'jobs'}.workflow_run:retry`) ? (
-            <ElButton
-              type="danger"
-              plain
-              size="small"
-              loading={operatingId.value === row.id}
-              onClick={() => onRetry(row.id)}
-            >
-              {$t('page.task.run.retry')}
-            </ElButton>
-          ) : null}
-          {canRerun(row.status) && hasAuth(`${row.runDomain === 'ops' ? 'ops' : 'jobs'}.workflow_run:retry`) ? (
-            <ElButton plain size="small" loading={operatingId.value === row.id} onClick={() => onRerun(row.id)}>
-              {$t('page.task.run.rerun')}
-            </ElButton>
-          ) : null}
-          <ElButton plain size="small" onClick={() => onDownloadLog(row.id)}>
-            {$t('page.task.run.log')}
-          </ElButton>
         </div>
       )
     }
   ]
 });
 
-function domainFor(id: number): Api.Jobs.RunDomain {
-  return data.value.find(run => run.id === id)?.runDomain ?? searchParams.value.runDomain ?? 'task';
+function resetTicketSearch() {
+  ticketSearch.value = { current: 1, size: 10, search: undefined };
+  getTicketsByPage();
 }
 
-function goDetail(id: number, domain = domainFor(id)) {
-  router.push({ name: 'task_run-detail', params: { id }, query: { domain } });
+function openTicketCreate() {
+  ticketEditTarget.value = null;
+  ticketCreateVisible.value = true;
 }
 
-async function onCancel(id: number) {
-  operatingId.value = id;
+function openTicketDetail(id: number) {
+  ticketDetailId.value = id;
+  ticketDetailVisible.value = true;
+}
+
+async function onRunTicket(row: Api.Jobs.TaskTicketRecord) {
+  ticketOperatingId.value = row.id;
   try {
-    const { error } = await fetchCancelRun(id, domainFor(id));
-    if (!error) {
-      window.$message?.success($t('common.updateSuccess'));
-      getData();
+    const { data, error } = await fetchPreviewTaskTicket(row.id);
+    if (error || !data) return;
+    preview.value = data;
+    previewTicketId.value = row.id;
+    previewVisible.value = true;
+  } finally {
+    ticketOperatingId.value = null;
+  }
+}
+
+async function confirmRunTicket() {
+  if (!previewTicketId.value || !preview.value) return;
+  ticketOperatingId.value = previewTicketId.value;
+  try {
+    const { data, error } = await fetchRunTaskTicket(previewTicketId.value, preview.value);
+    if (!error && data) {
+      previewVisible.value = false;
+      window.$notification?.success('任务单已发起运行');
+      getTickets();
+      router.push({ name: 'task_run-detail', params: { id: data.id }, query: { domain: 'task' } });
     }
   } finally {
-    operatingId.value = null;
+    ticketOperatingId.value = null;
   }
 }
 
-async function onRetry(id: number) {
-  operatingId.value = id;
+async function onDeleteTicket(row: Api.Jobs.TaskTicketRecord) {
   try {
-    const { data: newRun, error } = await fetchRetryFailedRun(id, domainFor(id));
-    if (!error && newRun) {
-      window.$message?.success($t('page.task.run.retryCreated'));
-      goDetail(newRun.id, newRun.runDomain);
-    }
-  } finally {
-    operatingId.value = null;
+    await window.$messageBox?.confirm(`确认删除任务单「${row.name}」？运行历史不受影响。`, '删除确认', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消'
+    });
+  } catch {
+    return;
+  }
+  const { error } = await fetchDeleteTaskTicket(row.id);
+  if (!error) {
+    window.$notification?.success('删除成功');
+    getTickets();
   }
 }
 
-async function onRerun(id: number) {
-  operatingId.value = id;
-  try {
-    const { data: newRun, error } = await fetchRerunRun(id, domainFor(id));
-    if (!error && newRun) {
-      window.$message?.success($t('page.task.run.retryCreated'));
-      goDetail(newRun.id, newRun.runDomain);
-    }
-  } finally {
-    operatingId.value = null;
-  }
+function onTicketSaved() {
+  getTickets();
 }
 
-async function onDownloadLog(id: number) {
-  const result = await fetchRunLogFile(id, domainFor(id), requestScope.signal);
-  if (!result) return;
-  const url = URL.createObjectURL(result.blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `run-${id}.log`;
-  link.click();
-  URL.revokeObjectURL(url);
-  if (result.truncated) {
-    window.$message?.warning($t('page.task.run.logTruncated'));
-  }
-}
-
-const hasFilter = computed(() =>
-  Boolean(
-    searchParams.value.status ||
-    searchParams.value.executionKind ||
-    searchParams.value.runDomain ||
-    searchParams.value.search
-  )
-);
-
-function resetSearchParams() {
-  searchParams.value = getInitSearchParams();
-  getDataByPage();
+async function onTicketEditRequested(ticket: Api.Jobs.TaskTicketRecord) {
+  ticketDetailVisible.value = false;
+  await nextTick();
+  ticketEditTarget.value = ticket;
+  ticketCreateVisible.value = true;
 }
 </script>
 
 <template>
   <div class="min-h-500px flex-col-stretch gap-16px overflow-hidden lt-sm:overflow-auto">
-    <ElCard class="card-wrapper">
-      <ElForm :model="searchParams" label-width="80px" inline>
-        <ElFormItem :label="$t('page.task.run.statusLabel')">
-          <ElSelect
-            v-model="searchParams.status"
-            clearable
-            :placeholder="$t('page.task.run.statusLabel')"
-            class="w-160px"
-          >
-            <ElOption v-for="item in runStatusOptions" :key="item.value" :label="item.label" :value="item.value" />
-          </ElSelect>
-        </ElFormItem>
-        <ElFormItem :label="$t('page.task.run.executionKind')">
-          <ElSelect
-            v-model="searchParams.executionKind"
-            clearable
-            :placeholder="$t('page.task.run.executionKind')"
-            class="w-150px"
-          >
-            <ElOption v-for="item in executionKindOptions" :key="item.value" :label="item.label" :value="item.value" />
-          </ElSelect>
-        </ElFormItem>
-        <ElFormItem :label="$t('page.task.run.runDomain')">
-          <ElSelect
-            v-model="searchParams.runDomain"
-            clearable
-            :placeholder="$t('page.task.run.runDomain')"
-            class="w-140px"
-          >
-            <ElOption v-for="item in runDomainOptions" :key="item.value" :label="item.label" :value="item.value" />
-          </ElSelect>
-        </ElFormItem>
-        <ElFormItem :label="$t('page.task.run.keyword')">
+    <SearchPanel @reset="resetTicketSearch" @search="getTicketsByPage">
+      <ElForm :model="ticketSearch" label-width="80px" @submit.prevent="getTicketsByPage">
+        <ElFormItem label="关键词">
           <ElInput
-            v-model="searchParams.search"
+            v-model="ticketSearch.search"
             clearable
-            :placeholder="$t('common.keywordSearch')"
-            class="w-220px"
-            @keyup.enter="getDataByPage()"
+            placeholder="任务名称 / 流程名称"
+            @keyup.enter="getTicketsByPage()"
           />
         </ElFormItem>
-        <ElFormItem>
-          <ElButton type="primary" @click="getDataByPage()">
-            {{ $t('common.search') }}
-          </ElButton>
-          <ElButton :disabled="!hasFilter" @click="resetSearchParams">
-            {{ $t('common.reset') }}
-          </ElButton>
-        </ElFormItem>
       </ElForm>
-    </ElCard>
+    </SearchPanel>
 
     <ElCard class="card-wrapper sm:flex-1-hidden">
       <template #header>
         <div class="flex items-center justify-between">
-          <p>{{ $t('page.task.run.title') }}</p>
-          <ElButton v-if="hasAuth('jobs.workflow_run:create')" type="primary" @click="openCreate">发起任务</ElButton>
-          <TableHeaderOperation
-            v-model:columns="columnChecks"
-            :loading="loading"
-            :show-add="false"
-            :show-batch-delete="false"
-            @refresh="getData"
-          />
+          <p>任务单</p>
+          <div class="flex items-center gap-8px">
+            <ElButton v-if="hasAuth('jobs.workflow_ticket:create')" type="primary" @click="openTicketCreate">
+              新增任务单
+            </ElButton>
+            <TableHeaderOperation
+              v-model:columns="ticketColumnChecks"
+              :loading="ticketLoading"
+              :show-add="false"
+              :show-batch-delete="false"
+              @refresh="getTickets"
+            />
+          </div>
         </div>
       </template>
       <div class="h-[calc(100%-52px)]">
-        <ElTable v-loading="loading" height="100%" border class="sm:h-full" :data="data" row-key="id">
-          <ElTableColumn v-for="col in columns" :key="col.prop" v-bind="col" />
+        <ElTable v-loading="ticketLoading" height="100%" border class="sm:h-full" :data="ticketRecords" row-key="id">
+          <ElTableColumn v-for="col in ticketColumns" :key="col.prop" v-bind="col" />
         </ElTable>
       </div>
       <div class="mt-20px flex justify-end">
         <ElPagination
-          v-if="mobilePagination.total"
+          v-if="ticketPagination.total"
           layout="total,prev,pager,next,sizes"
-          v-bind="mobilePagination"
-          @current-change="mobilePagination['current-change']"
-          @size-change="mobilePagination['size-change']"
+          v-bind="ticketPagination"
+          @current-change="ticketPagination['current-change']"
+          @size-change="ticketPagination['size-change']"
         />
       </div>
     </ElCard>
-    <RunCreateDrawer v-model:visible="createVisible" @created="onCreated" />
+
+    <TicketCreateDrawer v-model:visible="ticketCreateVisible" :edit-ticket="ticketEditTarget" @saved="onTicketSaved" />
+    <TicketDetailDrawer
+      v-model:visible="ticketDetailVisible"
+      :ticket-id="ticketDetailId"
+      :can-edit="hasAuth('jobs.workflow_ticket:update')"
+      @edit="onTicketEditRequested"
+    />
+    <RunPreviewDialog
+      v-model:visible="previewVisible"
+      :preview="preview"
+      :loading="ticketOperatingId !== null"
+      @confirm="confirmRunTicket"
+    />
   </div>
 </template>
-
-<style scoped></style>

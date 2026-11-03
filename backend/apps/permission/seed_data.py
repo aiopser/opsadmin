@@ -136,13 +136,12 @@ def _upsert_menu(
         menu = Menu.objects.create(**defaults)
         _get_seed_cache().menus[menu.name] = menu
     else:
-        # Menu layout is user-managed through the menu administration page.
-        # Keep the current order/icon/visibility when the initializer is run,
-        # unless an operator explicitly requests a seed layout sync.
+        # Icons are user-managed, including an intentionally cleared icon.
+        # Layout synchronization repairs structure/order, not visual choices.
+        defaults["icon"] = menu.icon
+        defaults["show_icon"] = menu.show_icon
         if not sync_menu_layout:
             defaults["order"] = menu.order
-            defaults["icon"] = menu.icon
-            defaults["show_icon"] = menu.show_icon
         if any(getattr(menu, field) != value for field, value in defaults.items()):
             for field, value in defaults.items():
                 setattr(menu, field, value)
@@ -362,9 +361,14 @@ def _seed_dicts():
     return items
 
 
-def _prune_stale_seed_data(seed_permission_codes, seed_menu_names, seed_button_codes):
+def _prune_stale_seed_data(seed_permission_codes, seed_menu_names, seed_button_assignments):
     Menu.objects.exclude(name__in=seed_menu_names).delete()
-    MenuButton.objects.exclude(code__in=seed_button_codes).delete()
+    cache = _get_seed_cache()
+    valid_button_ids = {
+        cache.menu_buttons[(cache.menus[menu_name].id, code)].id
+        for menu_name, code in seed_button_assignments
+    }
+    MenuButton.objects.exclude(id__in=valid_button_ids).delete()
     Permission.objects.filter(is_system=True).exclude(
         code__in=seed_permission_codes
     ).delete()
@@ -384,6 +388,20 @@ def _migrate_legacy_menu_role_permissions():
             role.permission.add(*replacement_permissions)
 
 
+def _migrate_moved_cmdb_button_roles():
+    """保留已有来源写权限角色在拆分菜单后的页面访问权。"""
+    for menu_name, button_prefix in (
+        ("cmdb_source", "cmdb.asset_source:"),
+    ):
+        menu = _get_seed_cache().menus[menu_name]
+        read_permissions = list(menu.permission.all())
+        roles = Role.objects.filter(
+            permission__code__startswith=button_prefix
+        ).distinct()
+        for role in roles:
+            role.permission.add(*read_permissions)
+
+
 def _seed_menu_names():
     names = []
 
@@ -399,17 +417,20 @@ def _seed_menu_names():
     return names
 
 
-def _seed_button_codes():
-    codes = []
+def _seed_button_assignments():
+    assignments = []
 
     def collect(definition):
-        codes.extend(item["code"] for item in definition.get("buttons") or [])
+        assignments.extend(
+            (definition["route_name"], item["code"])
+            for item in definition.get("buttons") or []
+        )
         for child in definition.get("children", []):
             collect(child)
 
     for definition in SYSTEM_MENUS:
         collect(definition)
-    return codes
+    return assignments
 
 
 def _seed_permission_codes():
@@ -417,6 +438,7 @@ def _seed_permission_codes():
 
     def collect(definition):
         codes.append(definition["code"])
+        codes.extend(button["code"] for button in definition.get("buttons") or [])
         for child in definition.get("children", []):
             collect(child)
 
@@ -485,14 +507,15 @@ def seed_system_settings(bind_superusers=True, sync_menu_layout=False):
 
     with suspend_permission_signals():
         seed_menu_names = _seed_menu_names()
-        seed_button_codes = _seed_button_codes()
+        seed_button_assignments = _seed_button_assignments()
         seed_permission_codes = _seed_permission_codes()
         api_permissions = _seed_api_permissions()
         menu_permissions = _seed_menu_permissions()
         _seed_menus(menu_permissions, sync_menu_layout=sync_menu_layout)
         _migrate_legacy_menu_role_permissions()
+        _migrate_moved_cmdb_button_roles()
         _prune_stale_seed_data(
-            seed_permission_codes, seed_menu_names, seed_button_codes
+            seed_permission_codes, seed_menu_names, seed_button_assignments
         )
         system_configs = _seed_system_configs()
         dict_items = _seed_dicts()

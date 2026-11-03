@@ -16,7 +16,7 @@ def test_asset_probe_owns_key_lifetime(user, crash, settings):
     settings.JOBS_CREDENTIAL_ENV_ALLOWLIST = ("ISOLATED_TEST_KEY",)
     credential = CredentialRef.objects.create(name="probe-key", type=CredentialRef.CredentialType.SSH_KEY,
         secret_ref="env:ISOLATED_TEST_KEY")
-    host = AssetHost.objects.create(hostname="probe", primary_ip="192.0.2.10", credential_ref=credential,
+    host = AssetHost.objects.create(hostname="probe", internal_ip="192.0.2.10", credential_ref=credential,
         connection_type="ssh", os_family="linux")
     directories = []
     def execute(plan, on_event, should_cancel):
@@ -43,7 +43,7 @@ def test_asset_probe_owns_key_lifetime(user, crash, settings):
 @pytest.mark.django_db
 def test_asset_probe_rejects_unauthorized_execution(user):
     from rest_framework.exceptions import PermissionDenied
-    host = AssetHost.objects.create(hostname="probe", primary_ip="192.0.2.10", connection_type="ssh", os_family="linux")
+    host = AssetHost.objects.create(hostname="probe", internal_ip="192.0.2.10", connection_type="ssh", os_family="linux")
     with patch("apps.cmdb.execution.AnsibleExecutor.execute") as execute:
         with pytest.raises(PermissionDenied):
             execute_asset_module(actor=user, host_id=host.id, module="ping", on_event=lambda event: None)

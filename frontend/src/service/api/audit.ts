@@ -38,7 +38,7 @@ export interface AuditEventSearchParams {
   action?: string | null;
   /** 按资源类型精确过滤 */
   resourceType?: string | null;
-  /** 关键词（动作/资源类型/资源ID/操作人/IP/UA 模糊搜索） */
+  /** 关键词（操作内容/操作对象/资源ID/操作人/IP/UA 模糊搜索，支持中文名） */
   keywords?: string | null;
 }
 
@@ -99,4 +99,56 @@ export async function fetchGetAuditEventList(params?: AuditEventSearchParams) {
   });
 
   return mapFlatResponse(res, transformPaginated);
+}
+
+export interface LoginEvent {
+  id: number;
+  username: string;
+  result: 'success' | 'failure';
+  reason: string;
+  ipAddress: string | null;
+  userAgent: string;
+  createdAt: string;
+}
+
+export interface LoginEventSearchParams {
+  current: number;
+  size: number;
+  username?: string;
+  result?: 'success' | 'failure';
+  ipAddress?: string;
+  dateRange?: [string, string] | null;
+}
+
+export async function fetchGetLoginEventList(params: LoginEventSearchParams) {
+  const query: Record<string, string | number> = { pageNum: params.current, pageSize: params.size };
+  if (params.username) query.username = params.username;
+  if (params.result) query.result = params.result;
+  if (params.ipAddress) query.ipAddress = params.ipAddress;
+  if (params.dateRange) {
+    query.startDate = params.dateRange[0];
+    query.endDate = params.dateRange[1];
+  }
+
+  const res = await request<BackendPaginated<LoginEvent>>({
+    url: '/api/v1/audit/login-events',
+    method: 'get',
+    params: query
+  });
+
+  if (res.error || res.data === null) {
+    return { data: null, error: res.error, response: res.response };
+  }
+
+  const records = res.data.list ?? [];
+  return {
+    data: {
+      records,
+      current: res.data.page ?? params.current,
+      size: res.data.size ?? params.size,
+      total: res.data.total ?? records.length
+    },
+    error: null,
+    response: res.response
+  };
 }

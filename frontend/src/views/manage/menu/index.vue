@@ -7,9 +7,10 @@ import { enableStatusRecord, menuTypeRecord } from '@/constants/business';
 import { deleteMenu, fetchGetAllPages, fetchGetMenuTableTree } from '@/service/api';
 import { useMenuStore } from '@/store/modules/menu';
 import { defaultTransform, useTableOperate, useUIPaginatedTable } from '@/hooks/common/table';
-import { $t } from '@/locales';
+import { $t, $te } from '@/locales';
 import SvgIcon from '@/components/custom/svg-icon.vue';
 import MenuOperateModal, { type OperateType } from './modules/menu-operate-modal.vue';
+import { resolveMenuLabel } from './modules/shared';
 
 const { bool: visible, setTrue: openModal } = useBoolean();
 
@@ -43,7 +44,7 @@ const { columns, columnChecks, data, loading, getData } = useUIPaginatedTable({
       formatter: row => {
         const { i18nKey, menuName } = row;
 
-        const label = i18nKey ? $t(i18nKey) : menuName;
+        const label = resolveMenuLabel(i18nKey, menuName, { translate: $t, exists: $te });
 
         return <span>{label}</span>;
       }

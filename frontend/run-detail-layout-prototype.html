@@ -1,0 +1,797 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>运行详情 · 布局原型</title>
+    <style>
+      :root {
+        font-family: Inter, 'Microsoft YaHei', sans-serif;
+        color: #303133;
+        background: #f5f7fa;
+        font-size: 14px;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+      }
+      button {
+        font: inherit;
+        cursor: pointer;
+      }
+      button:focus-visible {
+        outline: 2px solid #409eff;
+        outline-offset: 2px;
+      }
+      .shell {
+        max-width: 1500px;
+        margin: auto;
+        padding: 24px;
+      }
+      .crumb {
+        color: #909399;
+        font-size: 13px;
+        margin-bottom: 16px;
+      }
+      .crumb b {
+        color: #606266;
+        font-weight: 500;
+      }
+      .top,
+      .panel {
+        background: #fff;
+        border: 1px solid #e4e7ed;
+      }
+      .top {
+        padding: 24px;
+      }
+      .heading {
+        display: flex;
+        justify-content: space-between;
+        gap: 24px;
+        align-items: flex-start;
+      }
+      .title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .title h1 {
+        font-size: 22px;
+        margin: 0;
+        font-weight: 650;
+      }
+      .run-id {
+        color: #909399;
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+      }
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 8px;
+        font-size: 12px;
+        border-radius: 3px;
+        background: #fef0f0;
+        color: #f56c6c;
+      }
+      .tag.ok {
+        background: #f0f9eb;
+        color: #67c23a;
+      }
+      .tag.wait {
+        background: #ecf5ff;
+        color: #409eff;
+      }
+      .tag::before {
+        content: '';
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: currentColor;
+      }
+      .subtitle {
+        margin-top: 8px;
+        color: #606266;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .btn {
+        height: 32px;
+        padding: 0 12px;
+        border: 1px solid #dcdfe6;
+        background: #fff;
+        color: #606266;
+      }
+      .btn:hover {
+        border-color: #409eff;
+        color: #409eff;
+      }
+      .btn.primary {
+        background: #409eff;
+        border-color: #409eff;
+        color: #fff;
+      }
+      .btn.danger {
+        color: #f56c6c;
+      }
+      .progress {
+        height: 6px;
+        background: #ebeef5;
+        margin: 23px 0 22px;
+      }
+      .progress span {
+        display: block;
+        width: 66%;
+        height: 100%;
+        background: #f56c6c;
+      }
+      .summary {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 24px;
+      }
+      .metric small {
+        display: block;
+        color: #909399;
+        margin-bottom: 6px;
+      }
+      .metric strong {
+        font-size: 15px;
+        font-weight: 550;
+        font-variant-numeric: tabular-nums;
+        overflow-wrap: anywhere;
+      }
+      .metric strong.danger {
+        color: #f56c6c;
+      }
+      .notice {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-top: 20px;
+        padding: 10px 14px;
+        background: #fef0f0;
+        color: #c45656;
+        border-left: 3px solid #f56c6c;
+      }
+      .notice button {
+        margin-left: auto;
+        color: #c45656;
+        background: none;
+        border: 0;
+        text-decoration: underline;
+      }
+      .workspace {
+        display: grid;
+        grid-template-columns: 300px minmax(0, 1fr);
+        gap: 16px;
+        margin-top: 16px;
+        min-height: 590px;
+      }
+      .panel-title {
+        padding: 18px 20px;
+        border-bottom: 1px solid #ebeef5;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .panel-title h2 {
+        font-size: 15px;
+        margin: 0;
+      }
+      .muted {
+        font-size: 12px;
+        color: #909399;
+      }
+      .steps {
+        padding: 10px;
+      }
+      .step {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr);
+        gap: 12px;
+        width: 100%;
+        text-align: left;
+        background: #fff;
+        border: 1px solid transparent;
+        padding: 13px 11px;
+        min-height: 82px;
+      }
+      .step:hover {
+        background: #f5f7fa;
+      }
+      .step.selected {
+        background: #f5f7fa;
+        border-color: #d9ecff;
+      }
+      .step .num {
+        width: 25px;
+        height: 25px;
+        display: grid;
+        place-items: center;
+        background: #e1f3d8;
+        color: #67c23a;
+        border-radius: 50%;
+        font-size: 12px;
+      }
+      .step.failed .num {
+        background: #fef0f0;
+        color: #f56c6c;
+      }
+      .step.pending .num {
+        background: #ecf5ff;
+        color: #409eff;
+      }
+      .step-title {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        font-weight: 550;
+      }
+      .step-desc {
+        display: block;
+        color: #909399;
+        font-size: 12px;
+        margin-top: 7px;
+        line-height: 1.4;
+      }
+      .step-state {
+        font-size: 12px;
+        white-space: nowrap;
+        color: #67c23a;
+      }
+      .step.failed .step-state {
+        color: #f56c6c;
+      }
+      .step.pending .step-state {
+        color: #409eff;
+      }
+      .step-time {
+        font-size: 12px;
+        color: #909399;
+        margin-top: 5px;
+        font-variant-numeric: tabular-nums;
+      }
+      .content {
+        min-width: 0;
+      }
+      .detail-head {
+        padding: 19px 22px 16px;
+      }
+      .detail-head h2 {
+        font-size: 17px;
+        margin: 0 0 7px;
+      }
+      .detail-head p {
+        margin: 0;
+        color: #909399;
+        font-size: 12px;
+      }
+      .counts {
+        display: flex;
+        gap: 22px;
+        padding: 0 22px 18px;
+        border-bottom: 1px solid #ebeef5;
+      }
+      .count strong {
+        font-size: 19px;
+        font-variant-numeric: tabular-nums;
+        margin-right: 5px;
+      }
+      .count small {
+        color: #909399;
+      }
+      .count.fail strong {
+        color: #f56c6c;
+      }
+      .count.ok strong {
+        color: #67c23a;
+      }
+      .count.wait strong {
+        color: #409eff;
+      }
+      .section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 18px 22px 10px;
+        gap: 12px;
+      }
+      .section-head h3 {
+        font-size: 14px;
+        margin: 0;
+      }
+      .filter {
+        display: flex;
+        gap: 5px;
+      }
+      .filter button {
+        height: 28px;
+        padding: 0 10px;
+        border: 1px solid #dcdfe6;
+        background: #fff;
+        color: #606266;
+      }
+      .filter button.active {
+        color: #409eff;
+        border-color: #409eff;
+        background: #ecf5ff;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      th {
+        background: #f5f7fa;
+        color: #606266;
+        font-weight: 500;
+        text-align: left;
+      }
+      td,
+      th {
+        padding: 12px 15px;
+        border-bottom: 1px solid #ebeef5;
+      }
+      td:first-child,
+      th:first-child {
+        padding-left: 22px;
+      }
+      td:last-child,
+      th:last-child {
+        padding-right: 22px;
+      }
+      .numcell {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .host-row {
+        cursor: pointer;
+      }
+      .host-row:hover,
+      .host-row.active {
+        background: #f5f7fa;
+      }
+      .link {
+        border: 0;
+        background: none;
+        color: #409eff;
+        padding: 0;
+      }
+      .state-fail {
+        color: #f56c6c;
+      }
+      .state-ok {
+        color: #67c23a;
+      }
+      .state-wait {
+        color: #409eff;
+      }
+      .output {
+        margin: 20px 22px 22px;
+        border: 1px solid #dcdfe6;
+      }
+      .output-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 11px 14px;
+        border-bottom: 1px solid #e4e7ed;
+      }
+      .output-bar strong {
+        font-size: 13px;
+      }
+      .tabs {
+        display: flex;
+        gap: 16px;
+      }
+      .tabs button {
+        border: 0;
+        background: none;
+        padding: 0;
+        color: #909399;
+      }
+      .tabs button.active {
+        color: #409eff;
+      }
+      .console {
+        background: #1e2632;
+        color: #d9e2ee;
+        padding: 16px;
+        min-height: 115px;
+        max-height: 230px;
+        overflow: auto;
+        font:
+          12px/1.7 Consolas,
+          monospace;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .console.error {
+        color: #ffc4c4;
+      }
+      .footer {
+        margin-top: 16px;
+        padding: 0 18px;
+      }
+      .accordion {
+        width: 100%;
+        border: 0;
+        background: #fff;
+        padding: 17px 4px;
+        display: flex;
+        justify-content: space-between;
+        color: #606266;
+        text-align: left;
+      }
+      .accordion + .accordion {
+        border-top: 1px solid #ebeef5;
+      }
+      .aux {
+        display: none;
+        padding: 0 4px 18px;
+        color: #606266;
+        font-size: 13px;
+        line-height: 1.8;
+      }
+      .aux.open {
+        display: block;
+      }
+      .empty {
+        padding: 24px;
+        color: #909399;
+        text-align: center;
+      }
+      @media (max-width: 1000px) {
+        .summary {
+          grid-template-columns: repeat(3, 1fr);
+        }
+        .workspace {
+          grid-template-columns: 240px minmax(0, 1fr);
+        }
+      }
+      @media (max-width: 760px) {
+        .shell {
+          padding: 12px;
+        }
+        .top {
+          padding: 16px;
+        }
+        .heading {
+          display: block;
+        }
+        .actions {
+          margin-top: 16px;
+        }
+        .summary {
+          grid-template-columns: repeat(2, 1fr);
+          gap: 16px;
+        }
+        .workspace {
+          display: block;
+        }
+        .workspace > .panel:first-child {
+          margin-bottom: 12px;
+        }
+        .steps {
+          display: flex;
+          overflow: auto;
+        }
+        .step {
+          min-width: 210px;
+        }
+        .counts {
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+        table {
+          min-width: 650px;
+        }
+        .table-wrap {
+          overflow: auto;
+        }
+        .notice {
+          align-items: flex-start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <div class="crumb">
+        任务系统 / 执行历史 /
+        <b>运行详情</b>
+      </div>
+      <section class="top">
+        <div class="heading">
+          <div>
+            <div class="title">
+              <h1>生产发布前检查</h1>
+              <span id="run-status" class="tag">执行失败</span>
+              <span class="run-id">运行 #20260923017</span>
+            </div>
+            <div class="subtitle">流程模板「发布检查」v3 · 手动发起 · 发起人 admin</div>
+          </div>
+          <div class="actions">
+            <button class="btn" onclick="alert('原型：返回执行历史')">← 返回</button>
+            <button class="btn danger" onclick="alert('原型：仅失败主机重试，实际页面需二次确认')">重试失败项</button>
+            <button class="btn" onclick="alert('原型：下载本次运行日志')">下载日志</button>
+            <button class="btn" onclick="alert('原型：刷新运行数据')">刷新</button>
+          </div>
+        </div>
+        <div class="progress"><span></span></div>
+        <div class="summary">
+          <div class="metric">
+            <small>执行步骤</small>
+            <strong>2 / 3 完成</strong>
+          </div>
+          <div class="metric">
+            <small>目标主机</small>
+            <strong>12 台</strong>
+          </div>
+          <div class="metric">
+            <small>失败主机</small>
+            <strong class="danger">2 台</strong>
+          </div>
+          <div class="metric">
+            <small>开始时间</small>
+            <strong>09-23 14:01:55</strong>
+          </div>
+          <div class="metric">
+            <small>总耗时</small>
+            <strong>02 分 18 秒</strong>
+          </div>
+          <div class="metric">
+            <small>执行节点</small>
+            <strong>生产 Worker 池</strong>
+          </div>
+        </div>
+        <div class="notice">
+          <b>需要关注</b>
+          <span>第 2 步「检查磁盘空间」有 2 台主机失败，后续步骤未执行。</span>
+          <button onclick="selectStep(1)">定位失败步骤 →</button>
+        </div>
+      </section>
+      <div class="workspace">
+        <aside class="panel">
+          <div class="panel-title">
+            <h2>执行步骤</h2>
+            <span class="muted">共 3 步</span>
+          </div>
+          <div class="steps" id="steps"></div>
+        </aside>
+        <section class="panel content">
+          <div class="detail-head">
+            <h2 id="detail-title"></h2>
+            <p id="detail-subtitle"></p>
+          </div>
+          <div class="counts" id="counts"></div>
+          <div class="section-head">
+            <h3>主机执行结果</h3>
+            <div class="filter">
+              <button data-filter="all" class="active" onclick="setFilter('all')">全部</button>
+              <button data-filter="failed" onclick="setFilter('failed')">失败</button>
+              <button data-filter="success" onclick="setFilter('success')">成功</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>主机</th>
+                  <th>执行地址</th>
+                  <th>状态</th>
+                  <th class="numcell">耗时</th>
+                  <th class="numcell">退出码</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="hosts"></tbody>
+            </table>
+          </div>
+          <div class="output">
+            <div class="output-bar">
+              <strong id="output-host">选择主机查看输出</strong>
+              <div class="tabs">
+                <button class="active" data-tab="stdout" onclick="setTab('stdout')">标准输出</button>
+                <button data-tab="stderr" onclick="setTab('stderr')">错误输出</button>
+              </div>
+            </div>
+            <div class="console" id="console">点击上方主机的“查看输出”，这里显示对应日志。</div>
+          </div>
+        </section>
+      </div>
+      <section class="panel footer">
+        <button class="accordion" onclick="toggleAux('snapshot')">
+          <span>
+            本次运行快照
+            <small class="muted">目标与执行参数已冻结</small>
+          </span>
+          <span>展开 / 收起</span>
+        </button>
+        <div class="aux" id="snapshot">
+          目标选择：生产环境 / Web 服务组　｜　执行策略：并行，批次 5　｜　并发数：10　｜　超时：300 秒
+          <br />
+          实际目标：web-prod-01、web-prod-02、web-prod-03、web-prod-04、web-prod-05 等 12
+          台。历史运行始终使用本次冻结的目标。
+        </div>
+        <button class="accordion" onclick="toggleAux('events')">
+          <span>
+            原始运行事件
+            <small class="muted">排查实时消息与状态变化</small>
+          </span>
+          <span>展开 / 收起</span>
+        </button>
+        <div class="aux" id="events">
+          14:01:55　运行已创建
+          <br />
+          14:02:03　步骤 1 执行成功
+          <br />
+          14:04:13　步骤 2 执行失败，2 台主机返回非零退出码
+          <br />
+          14:04:13　运行结束
+        </div>
+      </section>
+    </main>
+    <script>
+      const steps = [
+        {
+          name: '检查服务状态',
+          type: 'Ansible 模块 · systemd',
+          state: 'success',
+          label: '成功',
+          time: '18 秒',
+          hosts: [
+            {
+              name: 'web-prod-01',
+              ip: '10.20.1.11',
+              state: 'success',
+              duration: '1.8 s',
+              code: '0',
+              stdout: 'nginx.service is active (running)',
+              stderr: ''
+            },
+            {
+              name: 'web-prod-02',
+              ip: '10.20.1.12',
+              state: 'success',
+              duration: '2.1 s',
+              code: '0',
+              stdout: 'nginx.service is active (running)',
+              stderr: ''
+            }
+          ]
+        },
+        {
+          name: '检查磁盘空间',
+          type: '脚本 · check_disk.sh',
+          state: 'failed',
+          label: '失败',
+          time: '1 分 54 秒',
+          hosts: [
+            {
+              name: 'web-prod-01',
+              ip: '10.20.1.11',
+              state: 'failed',
+              duration: '12.4 s',
+              code: '2',
+              stdout: 'Checking /data...\nUsage: 96%',
+              stderr: 'ERROR: /data 使用率超过 90% 阈值'
+            },
+            {
+              name: 'web-prod-02',
+              ip: '10.20.1.12',
+              state: 'failed',
+              duration: '11.8 s',
+              code: '2',
+              stdout: 'Checking /data...\nUsage: 94%',
+              stderr: 'ERROR: /data 使用率超过 90% 阈值'
+            },
+            {
+              name: 'web-prod-03',
+              ip: '10.20.1.13',
+              state: 'success',
+              duration: '9.6 s',
+              code: '0',
+              stdout: 'Checking /data...\nUsage: 62%\nOK',
+              stderr: ''
+            },
+            {
+              name: 'web-prod-04',
+              ip: '10.20.1.14',
+              state: 'success',
+              duration: '9.7 s',
+              code: '0',
+              stdout: 'Checking /data...\nUsage: 58%\nOK',
+              stderr: ''
+            }
+          ]
+        },
+        { name: '生成检查报告', type: '流程步骤 · 汇总', state: 'pending', label: '未执行', time: '—', hosts: [] }
+      ];
+      let selectedStep = 1,
+        selectedHost = 0,
+        filter = 'all',
+        activeTab = 'stdout';
+      const esc = value =>
+        String(value).replace(
+          /[&<>"']/g,
+          char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]
+        );
+      const stateText = { success: '成功', failed: '失败', pending: '未执行' };
+      function render() {
+        const step = steps[selectedStep];
+        document.getElementById('steps').innerHTML = steps
+          .map(
+            (item, index) =>
+              `<button class="step ${item.state} ${index === selectedStep ? 'selected' : ''}" onclick="selectStep(${index})"><span class="num">${item.state === 'success' ? '✓' : index + 1}</span><span><span class="step-title">${esc(item.name)}<span class="step-state">${item.label}</span></span><span class="step-desc">${esc(item.type)}</span><span class="step-time">耗时 ${item.time}</span></span></button>`
+          )
+          .join('');
+        document.getElementById('detail-title').textContent = `步骤 ${selectedStep + 1} · ${step.name}`;
+        document.getElementById('detail-subtitle').textContent = `${step.type}　·　${step.label}　·　耗时 ${step.time}`;
+        const failed = step.hosts.filter(host => host.state === 'failed').length,
+          success = step.hosts.filter(host => host.state === 'success').length;
+        document.getElementById('counts').innerHTML =
+          `<span class="count"><strong>${step.hosts.length}</strong><small>已执行</small></span><span class="count ok"><strong>${success}</strong><small>成功</small></span><span class="count fail"><strong>${failed}</strong><small>失败</small></span>`;
+        const rows = step.hosts
+          .map((host, index) => ({ ...host, index }))
+          .filter(host => filter === 'all' || host.state === filter);
+        document.getElementById('hosts').innerHTML = rows.length
+          ? rows
+              .map(
+                host =>
+                  `<tr class="host-row ${host.index === selectedHost ? 'active' : ''}" onclick="selectHost(${host.index})"><td>${esc(host.name)}</td><td>${esc(host.ip)}</td><td class="state-${host.state}">● ${stateText[host.state]}</td><td class="numcell">${host.duration}</td><td class="numcell">${host.code}</td><td><button class="link" onclick="event.stopPropagation();selectHost(${host.index})">查看输出</button></td></tr>`
+              )
+              .join('')
+          : `<tr><td colspan="6" class="empty">${step.hosts.length ? '当前筛选下没有主机' : '此步骤尚未执行'}</td></tr>`;
+        renderOutput();
+      }
+      function renderOutput() {
+        const host = steps[selectedStep].hosts[selectedHost];
+        document.getElementById('output-host').textContent = host ? `${host.name} · ${host.ip}` : '选择主机查看输出';
+        const output = document.getElementById('console');
+        output.textContent = host ? host[activeTab] || '无输出' : '此步骤没有主机输出';
+        output.classList.toggle('error', activeTab === 'stderr');
+      }
+      function selectStep(index) {
+        selectedStep = index;
+        selectedHost = 0;
+        filter = 'all';
+        document
+          .querySelectorAll('[data-filter]')
+          .forEach(button => button.classList.toggle('active', button.dataset.filter === 'all'));
+        render();
+      }
+      function selectHost(index) {
+        selectedHost = index;
+        render();
+      }
+      function setFilter(value) {
+        filter = value;
+        document
+          .querySelectorAll('[data-filter]')
+          .forEach(button => button.classList.toggle('active', button.dataset.filter === value));
+        render();
+      }
+      function setTab(value) {
+        activeTab = value;
+        document
+          .querySelectorAll('[data-tab]')
+          .forEach(button => button.classList.toggle('active', button.dataset.tab === value));
+        renderOutput();
+      }
+      function toggleAux(id) {
+        document.getElementById(id).classList.toggle('open');
+      }
+      render();
+    </script>
+  </body>
+</html>

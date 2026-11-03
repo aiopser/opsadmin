@@ -1,4 +1,6 @@
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
+from django.db import transaction
 from django.db.models import Q
 from drf_spectacular.utils import extend_schema
 
@@ -52,7 +54,8 @@ class RoleViewSet(StandardModelViewSet):
             protected_count = (
                 self.get_queryset()
                 .filter(
-                    Q(pk__in=ids, is_system=True) | Q(pk__in=ids, name=SYSTEM_ROLE_ADMIN)
+                    Q(pk__in=ids, is_system=True)
+                    | Q(pk__in=ids, name=SYSTEM_ROLE_ADMIN)
                 )
                 .count()
             )
@@ -119,8 +122,11 @@ class RoleViewSet(StandardModelViewSet):
 
     @extend_schema(summary="分配角色菜单", tags=["角色管理"])
     @action(methods=["PUT"], detail=True, url_path="menus")
+    @transaction.atomic
     def menus(self, request, pk=None):
-        role = self.get_object()
+        role = Role.objects.select_for_update().get(pk=self.get_object().pk)
+        if role.is_system and not request.user.is_superuser:
+            raise PermissionDenied("内置角色仅允许超级管理员维护")
         menu_ids = request.data.get("menuIds", [])
         button_ids = request.data.get("buttonIds", [])
         home_path = request.data.get("homePath", None)
@@ -133,9 +139,9 @@ class RoleViewSet(StandardModelViewSet):
         ).prefetch_related("permission")
         for menu in selected_menus:
             permission_ids.extend(menu.permission.values_list("id", flat=True))
-        selected_buttons = MenuButton.objects.filter(id__in=button_ids).prefetch_related(
-            "permission"
-        )
+        selected_buttons = MenuButton.objects.filter(
+            id__in=button_ids
+        ).prefetch_related("permission")
         for button in selected_buttons:
             permission_ids.extend(button.permission.values_list("id", flat=True))
         role.permission.set(set(permission_ids))

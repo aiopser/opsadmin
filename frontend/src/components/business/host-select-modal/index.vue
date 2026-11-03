@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
-import { fetchGetBusinessList, fetchGetHostList } from '@/service/api';
+import { fetchGetHostGroupList, fetchGetHostList } from '@/service/api';
 
 defineOptions({ name: 'HostSelectModal' });
 
@@ -39,40 +39,50 @@ const total = ref(0);
 /** 跨页已选：id → host 对象 */
 const selectedMap = ref(new Map<number, Api.Cmdb.HostRecord>());
 
-/** ============ 左侧业务树 ============ */
+/** ============ 左侧分组树 ============ */
 
-const businessLoading = ref(false);
-const businessList = ref<Api.Cmdb.BusinessRecord[]>([]);
-const activeBusinessId = ref<number | null>(null);
+interface GroupTreeNode {
+  id: number | null;
+  label: string;
+  children: GroupTreeNode[];
+}
 
-const treeData = computed(() => [
-  {
-    id: null,
-    label: `全部主机（${total.value}）`
-  },
-  ...businessList.value.map(item => ({
-    id: item.id,
-    label: `${item.name}（${item.hostCount ?? 0}）`
-  }))
-]);
+const groupLoading = ref(false);
+const groupTree = ref<GroupTreeNode[]>([]);
+const activeGroupId = ref<number | null>(null);
 
-async function loadBusinesses() {
-  businessLoading.value = true;
+function buildGroupTree(rows: Api.Cmdb.HostGroupRecord[], parentKey: string): GroupTreeNode[] {
+  return rows
+    .filter(row => (row.parent ? String(row.parent) : '0') === parentKey)
+    .map(row => ({
+      id: row.id,
+      label: `${row.name}（${row.hostCount ?? 0}）`,
+      children: buildGroupTree(rows, String(row.id))
+    }));
+}
+
+async function loadGroups() {
+  groupLoading.value = true;
   try {
-    const { data, error } = await fetchGetBusinessList({ current: 1, size: 100 });
+    const { data, error } = await fetchGetHostGroupList({ current: 1, size: 500 });
     if (!error && data) {
-      businessList.value = data.records;
+      groupTree.value = buildGroupTree(data.records ?? [], '0');
     }
   } finally {
-    businessLoading.value = false;
+    groupLoading.value = false;
   }
 }
 
-function onTreeNodeClick(data: { id: number | null }) {
-  activeBusinessId.value = data.id;
+function onTreeNodeClick(data: GroupTreeNode) {
+  activeGroupId.value = data.id;
   searchParams.current = 1;
   loadHosts();
 }
+
+/** 根节点「全部主机」+ 分组树 */
+const treeData = computed<GroupTreeNode[]>(() => [
+  { id: null, label: `全部主机（${total.value}）`, children: groupTree.value }
+]);
 
 /** ============ 右侧主机表格 ============ */
 
@@ -87,7 +97,7 @@ async function loadHosts() {
       size: searchParams.size,
       search: searchParams.search || undefined,
       osFamily: (searchParams.osFamily || undefined) as Api.Cmdb.HostSearchParams['osFamily'],
-      business: activeBusinessId.value ?? undefined
+      groupId: activeGroupId.value ?? undefined
     });
     if (!error && data) {
       hosts.value = data.records;
@@ -160,8 +170,8 @@ watch(
     searchParams.current = 1;
     searchParams.search = '';
     searchParams.osFamily = props.defaultOsFamily ?? '';
-    activeBusinessId.value = null;
-    loadBusinesses();
+    activeGroupId.value = null;
+    loadGroups();
     loadHosts();
   }
 );
@@ -171,23 +181,26 @@ watch(
   <ElDialog
     :model-value="visible"
     title="选择主机"
-    width="860px"
+    width="1000px"
+    top="7vh"
     :close-on-click-modal="false"
+    append-to-body
     @update:model-value="handleClose"
   >
     <div class="flex gap-12px">
-      <!-- 左：业务树 -->
-      <div class="w-220px shrink-0 border border-gray-200 rounded-4px p-8px">
-        <div class="mb-4px font-bold">业务系统</div>
+      <!-- 左：分组树 -->
+      <div class="w-280px shrink-0 border border-gray-200 rounded-4px p-12px">
+        <div class="mb-8px font-bold">主机分组</div>
         <ElTree
-          v-loading="businessLoading"
+          v-loading="groupLoading"
           :data="treeData"
           node-key="id"
-          :current-node-key="activeBusinessId ?? undefined"
+          :current-node-key="activeGroupId ?? undefined"
           :expand-on-click-node="false"
+          default-expand-all
           :props="{ label: 'label', children: 'children' }"
           :highlight-current="true"
-          class="max-h-380px overflow-auto"
+          class="max-h-460px overflow-auto"
           @node-click="onTreeNodeClick"
         />
       </div>
@@ -213,14 +226,17 @@ watch(
           </ElSelect>
           <ElButton type="primary" plain @click="onSearch">查询</ElButton>
         </div>
-        <ElTable v-loading="hostsLoading" :data="hosts" border height="380px" row-key="id">
+        <ElTable v-loading="hostsLoading" :data="hosts" height="460px" row-key="id" border class="host-table">
           <ElTableColumn width="50" align="center">
             <template #default="{ row }">
               <ElCheckbox :model-value="isSelected(row.id)" @change="toggleHost(row)" />
             </template>
           </ElTableColumn>
-          <ElTableColumn prop="hostname" label="主机名" min-width="140" show-overflow-tooltip />
-          <ElTableColumn prop="primaryIp" label="IP" min-width="130" show-overflow-tooltip />
+          <ElTableColumn prop="hostname" label="主机名" min-width="140" align="center" show-overflow-tooltip />
+          <ElTableColumn prop="internalIp" label="内网IP" min-width="130" align="center" show-overflow-tooltip />
+          <ElTableColumn prop="externalIp" label="外网IP" min-width="130" align="center" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.externalIp || '-' }}</template>
+          </ElTableColumn>
           <ElTableColumn prop="osFamily" label="系统" width="90" align="center">
             <template #default="{ row }">
               <ElTag size="small" :type="row.osFamily === 'windows' ? 'warning' : 'success'">
@@ -257,7 +273,7 @@ watch(
             >
               {{ host.hostname }}
             </ElTag>
-            <span v-if="selectedCount > selectedPreview.length" class="ml-4px text-gray-400">
+            <span v-if="selectedCount > selectedPreview.length" class="ml-4px text-gray-500">
               +{{ selectedCount - selectedPreview.length }}
             </span>
             <ElButton link size="small" class="ml-8px" @click="clearSelection">清空</ElButton>
@@ -271,3 +287,19 @@ watch(
     </template>
   </ElDialog>
 </template>
+
+<style scoped>
+.host-table :deep(.el-table__row) {
+  height: 40px;
+}
+
+.host-table :deep(th.el-table__cell) {
+  background-color: var(--el-fill-color-light);
+  color: var(--el-text-color-regular);
+  font-weight: 600;
+}
+
+.host-table :deep(.el-table__cell) {
+  padding: 4px 0;
+}
+</style>

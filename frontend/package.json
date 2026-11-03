@@ -30,6 +30,7 @@
     "node": ">=20.19.0",
     "pnpm": ">=8.7.0"
   },
+  "packageManager": "pnpm@10.34.2",
   "scripts": {
     "build": "vite build --mode prod",
     "build:test": "vite build --mode test",
@@ -39,11 +40,13 @@
     "dev": "vite --mode test",
     "dev:prod": "vite --mode prod",
     "gen-route": "sa gen-route",
-    "lint": "eslint . --fix",
+    "lint": "eslint src --max-warnings 0",
+    "lint:fix": "eslint src --fix",
     "postbuild": "sa print-soybean",
     "prepare": "simple-git-hooks",
     "preview": "vite preview",
     "release": "sa release",
+    "test:contracts": "node scripts/run-contract-tests.cjs",
     "typecheck": "vue-tsc --noEmit --skipLibCheck",
     "update-pkg": "sa update-pkg"
   },

@@ -1,108 +1,120 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
-import {
-  fetchGetEngineSettings,
-  fetchGetNotifySettings,
-  fetchSaveEngineSettings,
-  fetchSaveNotifySettings
-} from '@/service/api';
+import { fetchGetEngineSettings, fetchSaveEngineSettings } from '@/service/api';
+import { $t } from '@/locales';
+import CommandFilter from './modules/command-filter.vue';
 
-defineOptions({ name: 'OpsSettings' });
+defineOptions({ name: 'OpsEngineSettings' });
 
-/**
- * 设置结构由后端 get_engine_settings/get_notify_settings 决定，
- * 页面按返回对象的键值动态渲染表单（数值/布尔/字符串），保存时整体提交。
- */
-type SettingValue = string | number | boolean | null | Record<string, unknown> | Array<unknown>;
-
-const activeTab = ref('engine');
-
-const engineSettings = ref<Record<string, SettingValue>>({});
-const notifySettings = ref<Record<string, SettingValue>>({});
+const settings = ref<Api.Jobs.EngineSettings>({
+  timeout: 300,
+  forks: 10,
+  host_strategy: 'parallel',
+  serial_batch: 5,
+  max_fail_percentage: 0
+});
 const loading = ref(false);
 const saving = ref(false);
-
-function isEditablePrimitive(value: SettingValue) {
-  return ['string', 'number', 'boolean'].includes(typeof value) || value === null;
-}
-
-const engineEntries = ref<[string, SettingValue][]>([]);
-const notifyEntries = ref<[string, SettingValue][]>([]);
-
-function toEntries(record: Record<string, SettingValue>) {
-  return Object.entries(record).filter(([, value]) => isEditablePrimitive(value));
-}
+const activeTab = ref('engine');
 
 async function loadSettings() {
   loading.value = true;
-  const [engineRes, notifyRes] = await Promise.all([fetchGetEngineSettings(), fetchGetNotifySettings()]);
-  if (!engineRes.error) {
-    engineSettings.value = (engineRes.data ?? {}) as Record<string, SettingValue>;
-    engineEntries.value = toEntries(engineSettings.value);
+  try {
+    const { data, error } = await fetchGetEngineSettings();
+    if (error || !data) {
+      if (error) window.$message?.error($t('page.ops.engineSettings.loadError'));
+      return;
+    }
+    settings.value = data;
+  } finally {
+    loading.value = false;
   }
-  if (!notifyRes.error) {
-    notifySettings.value = (notifyRes.data ?? {}) as Record<string, SettingValue>;
-    notifyEntries.value = toEntries(notifySettings.value);
-  }
-  loading.value = false;
 }
 
-async function handleSave() {
+async function saveSettings() {
   saving.value = true;
-  const target = activeTab.value === 'engine' ? engineSettings.value : notifySettings.value;
-  const saveFn = activeTab.value === 'engine' ? fetchSaveEngineSettings : fetchSaveNotifySettings;
-  const { error } = await saveFn(target);
-  saving.value = false;
-
-  if (!error) {
-    window.$message?.success('保存成功');
-    loadSettings();
+  try {
+    const { error } = await fetchSaveEngineSettings(settings.value);
+    if (error) return;
+    window.$notification?.success($t('page.ops.engineSettings.saveSuccess'));
+    await loadSettings();
+  } finally {
+    saving.value = false;
   }
-}
-
-function settingLabel(key: string) {
-  return key;
 }
 
 onMounted(loadSettings);
 </script>
 
 <template>
-  <div class="min-h-500px flex-col-stretch gap-16px overflow-hidden lt-sm:overflow-auto">
-    <ElCard v-loading="loading" class="card-wrapper sm:flex-1-hidden">
-      <ElTabs v-model="activeTab">
-        <ElTabPane label="执行引擎" name="engine">
-          <ElForm label-width="220px" class="max-w-720px">
-            <ElFormItem v-for="[key, value] in engineEntries" :key="key" :label="settingLabel(key)">
-              <ElSwitch v-if="typeof value === 'boolean'" v-model="engineSettings[key] as boolean" />
-              <ElInputNumber
-                v-else-if="typeof value === 'number'"
-                v-model="engineSettings[key] as number"
-                class="w-full"
-              />
-              <ElInput v-else v-model="engineSettings[key] as string" :placeholder="`请输入 ${key}`" />
-            </ElFormItem>
-            <ElEmpty v-if="!engineEntries.length" description="暂无可配置项" />
+  <div class="min-h-500px flex-col-stretch gap-16px overflow-y-auto">
+    <ElTabs v-model="activeTab" class="flex-shrink-0">
+      <ElTabPane :label="$t('page.ops.engineSettings.engineTab')" name="engine">
+        <ElCard v-loading="loading" class="mt-16px flex-shrink-0 card-wrapper">
+          <ElAlert :closable="false" show-icon type="info" class="mb-16px">
+            {{ $t('page.ops.engineSettings.overrideHint') }}
+          </ElAlert>
+
+          <ElForm
+            :model="settings"
+            label-position="top"
+            class="max-w-900px"
+            label-suffix="："
+            require-asterisk-position="left"
+          >
+            <div class="grid grid-cols-1 gap-x-20px md:grid-cols-2">
+              <ElFormItem :label="$t('page.ops.engineSettings.timeout')">
+                <ElInputNumber
+                  v-model="settings.timeout"
+                  :min="1"
+                  :step="30"
+                  controls-position="right"
+                  class="w-full"
+                />
+              </ElFormItem>
+              <ElFormItem :label="$t('page.ops.engineSettings.forks')">
+                <ElInputNumber v-model="settings.forks" :min="1" controls-position="right" class="w-full" />
+              </ElFormItem>
+              <ElFormItem :label="$t('page.ops.engineSettings.strategy')" class="md:col-span-2">
+                <ElRadioGroup v-model="settings.host_strategy">
+                  <ElRadio value="parallel">{{ $t('page.ops.engineSettings.parallel') }}</ElRadio>
+                  <ElRadio value="serial">{{ $t('page.ops.engineSettings.serial') }}</ElRadio>
+                  <ElRadio value="rolling">{{ $t('page.ops.engineSettings.rolling') }}</ElRadio>
+                </ElRadioGroup>
+              </ElFormItem>
+              <ElFormItem :label="$t('page.ops.engineSettings.serialBatch')">
+                <ElInputNumber
+                  v-model="settings.serial_batch"
+                  :min="1"
+                  controls-position="right"
+                  :disabled="settings.host_strategy !== 'rolling'"
+                  class="w-full"
+                />
+              </ElFormItem>
+              <ElFormItem :label="$t('page.ops.engineSettings.maxFailPercentage')">
+                <ElInputNumber
+                  v-model="settings.max_fail_percentage"
+                  :min="0"
+                  :max="100"
+                  controls-position="right"
+                  class="w-full"
+                >
+                  <template #suffix>%</template>
+                </ElInputNumber>
+              </ElFormItem>
+            </div>
           </ElForm>
-        </ElTabPane>
-        <ElTabPane label="通知" name="notify">
-          <ElForm label-width="220px" class="max-w-720px">
-            <ElFormItem v-for="[key, value] in notifyEntries" :key="key" :label="settingLabel(key)">
-              <ElSwitch v-if="typeof value === 'boolean'" v-model="notifySettings[key] as boolean" />
-              <ElInputNumber
-                v-else-if="typeof value === 'number'"
-                v-model="notifySettings[key] as number"
-                class="w-full"
-              />
-              <ElInput v-else v-model="notifySettings[key] as string" :placeholder="`请输入 ${key}`" />
-            </ElFormItem>
-            <ElEmpty v-if="!notifyEntries.length" description="暂无可配置项" />
-          </ElForm>
-        </ElTabPane>
-      </ElTabs>
-      <div class="mt-16px">
-        <ElButton type="primary" :loading="saving" @click="handleSave">保存</ElButton>
-      </div>
-    </ElCard>
+
+          <div class="mt-8px flex justify-end">
+            <ElButton type="primary" :loading="saving" @click="saveSettings">
+              {{ $t('page.ops.engineSettings.saveButton') }}
+            </ElButton>
+          </div>
+        </ElCard>
+      </ElTabPane>
+      <ElTabPane :label="$t('page.ops.commandFilter.tab')" name="command-filter" lazy>
+        <CommandFilter class="mt-16px" />
+      </ElTabPane>
+    </ElTabs>
   </div>
 </template>

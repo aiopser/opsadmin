@@ -1,11 +1,27 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 from django.db.models import Q
+from django.db import transaction
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from rest_framework import HTTP_HEADER_ENCODING, authentication, serializers, status
 from rest_framework_simplejwt.exceptions import AuthenticationFailed, TokenError
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.settings import api_settings
+from rest_framework.exceptions import PermissionDenied
+
+
+def request_path_requires_password_change(path):
+    allowed = {
+        "/api/v1/auth/me",
+        "/api/v1/auth/logout",
+        "/api/v1/users/profile",
+        "/api/v1/users/password",
+        "/api/v1/menus/routes",
+        "/api/v1/configs/public",
+    }
+    return bool(path) and path.rstrip("/") not in allowed
+
 
 AUTH_HEADER_TYPES = api_settings.AUTH_HEADER_TYPES
 
@@ -21,18 +37,39 @@ class CustomBackend(ModelBackend):
         ldap = request.data.get("ldap") if request is not None else None
         if ldap:
             return None
-        try:
-            user = get_user_model().objects.get(
-                Q(username=username) | Q(email=username)
-            )
-        except Exception as exc:
-            raise serializers.ValidationError("用户名或密码错误") from exc
+        from common.system_policy import positive_config
 
-        if user.check_password(password):
-            if not user.is_active or not getattr(user, "job_status", True):
-                raise serializers.ValidationError("用户已被禁用，请联系管理员")
-            return user
-        raise serializers.ValidationError("用户名或密码错误")
+        maximum = positive_config("security.login.max_failures", 5)
+        error = None
+        with transaction.atomic():
+            try:
+                user = (
+                    get_user_model()
+                    .objects.select_for_update()
+                    .get(Q(username=username) | Q(email=username))
+                )
+            except get_user_model().DoesNotExist as exc:
+                raise serializers.ValidationError("用户名或密码错误") from exc
+            now = timezone.now()
+            if user.login_locked_until and user.login_locked_until > now:
+                error = "登录失败次数过多，请稍后重试"
+            elif user.check_password(password):
+                user.login_failure_count = 0
+                user.login_locked_until = None
+                user.save(update_fields=["login_failure_count", "login_locked_until"])
+                if not user.is_active or not getattr(user, "job_status", True):
+                    error = "用户已被禁用，请联系管理员"
+            else:
+                if user.login_locked_until and user.login_locked_until <= now:
+                    user.login_failure_count = 0
+                user.login_failure_count += 1
+                if user.login_failure_count >= maximum:
+                    user.login_locked_until = now + timezone.timedelta(minutes=15)
+                user.save(update_fields=["login_failure_count", "login_locked_until"])
+                error = "用户名或密码错误"
+        if error:
+            raise serializers.ValidationError(error)
+        return user
 
 
 class InvalidToken(AuthenticationFailed):
@@ -50,6 +87,7 @@ class JWTAuthentication(authentication.BaseAuthentication):
         self.user_model = get_user_model()
 
     def authenticate(self, request):
+        self.request_path = request.path
         header = self.get_header(request)
         if header is None:
             return None
@@ -125,6 +163,12 @@ class JWTAuthentication(authentication.BaseAuthentication):
 
         if not user.is_active or not getattr(user, "job_status", True):
             raise AuthenticationFailed(_("用户已被禁用，请联系管理员"), code="user_inactive")
+        if validated_token.get("auth_version", 0) != user.auth_version:
+            raise AuthenticationFailed(_("密码已变更，请重新登录"), code="session_revoked")
+        if user.must_change_password and request_path_requires_password_change(
+            getattr(self, "request_path", "")
+        ):
+            raise PermissionDenied(_("请先修改初始密码"), code="password_change_required")
         return user
 
 
@@ -133,6 +177,7 @@ class MyTokenSerializer(TokenObtainPairSerializer):
     def get_token(cls, user):
         token = super().get_token(user)
         token["name"] = user.username
+        token["auth_version"] = user.auth_version
         return token
 
     def validate(self, attrs):

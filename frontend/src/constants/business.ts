@@ -40,6 +40,18 @@ export const runStatusRecord: Record<Api.Jobs.RunStatus, App.I18n.I18nKey> = {
   canceled: 'page.task.run.status.canceled'
 };
 
+export const runStatusTagType: Record<Api.Jobs.RunStatus, UI.ThemeColor> = {
+  pending: 'info',
+  queued: 'info',
+  running: 'primary',
+  waiting: 'primary',
+  cancel_requested: 'warning',
+  success: 'success',
+  failed: 'danger',
+  timeout: 'danger',
+  canceled: 'info'
+};
+
 export const executionKindRecord: Record<Api.Jobs.ExecutionKind, App.I18n.I18nKey> = {
   workflow: 'page.task.run.kind.workflow',
   quick_command: 'page.task.run.kind.quick_command',
@@ -51,6 +63,30 @@ export const runDomainRecord: Record<Api.Jobs.RunDomain, App.I18n.I18nKey> = {
   task: 'page.task.run.domain.task',
   ops: 'page.task.run.domain.ops'
 };
+
+export const triggerTypeLabels: Record<Api.Jobs.TriggerType, string> = {
+  manual: '手动触发',
+  scheduled: '定时触发',
+  api: 'API 触发'
+};
+
+const dashboardRecentTypeLabels: Record<string, string> = {
+  quick_command: '脚本',
+  playbook: 'Playbook',
+  module: 'Ansible 模块',
+  manual: '手动发起',
+  scheduled: '定时触发',
+  scheduled_manual: '手动触发',
+  api: 'API 发起'
+};
+
+export function dashboardRecentTypeText(type: string): string {
+  return dashboardRecentTypeLabels[type] ?? type;
+}
+
+export function dashboardSuccessRateText(rate: number | null | undefined): string {
+  return rate === null || rate === undefined ? '-' : `${rate}%`;
+}
 
 export const nodeStatusRecord: Record<Api.Jobs.NodeStatus, App.I18n.I18nKey> = {
   pending: 'page.task.detail.node.status.pending',

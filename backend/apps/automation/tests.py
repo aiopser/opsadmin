@@ -130,7 +130,6 @@ class WorkflowVersionTests(TestCase):
             [],
         )
         version.publish(user)
-        version.global_vars = {"service": "nginx"}
 
         with self.assertRaises(ValueError):
             version.assert_mutable()
@@ -170,7 +169,7 @@ class WorkflowVersionTests(TestCase):
         serializer = CommandVersionSerializer(version, data={}, partial=True)
 
         self.assertFalse(serializer.is_valid())
-        self.assertIn("content", serializer.errors)
+        self.assertIn("module_name", serializer.errors)
 
         version.content = "ansible.builtin.service"
         version.argument_schema = []
@@ -305,10 +304,23 @@ class WorkflowGraphApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.data["data"]["valid"])
-        self.assertIn("工作流版本至少需要一个可执行任务节点", response.data["data"]["errors"])
+        self.assertIn("流程版本至少需要一个可执行任务节点", response.data["data"]["errors"])
 
 
 class CommandVersionApiTests(TestCase):
+    def test_command_cannot_be_enabled_without_published_version(self):
+        from apps.automation.serializers import CommandAtomSerializer
+
+        command = CommandAtom.objects.create(
+            name="Unpublished script", code="unpublished_script"
+        )
+        serializer = CommandAtomSerializer(
+            command, data={"status": "published"}, partial=True
+        )
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("status", serializer.errors)
+
     def test_publish_command_version(self):
         from apps.automation.views import CommandVersionViewSet
 
@@ -344,6 +356,42 @@ class CommandVersionApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(version.status, CommandVersion.Status.PUBLISHED)
         self.assertEqual(command.status, CommandAtom.Status.PUBLISHED)
+
+    def test_publishing_new_version_does_not_enable_disabled_command(self):
+        from apps.automation.views import CommandVersionViewSet
+
+        user = get_user_model().objects.create_superuser(
+            username="disabled-command-admin",
+            password="123456",
+            email="disabled-command-admin@example.com",
+            phone="13800000003",
+        )
+        command = CommandAtom.objects.create(
+            name="Disabled script",
+            code="disabled_script_version_test",
+            status=CommandAtom.Status.DISABLED,
+        )
+        version = CommandVersion.objects.create(
+            command=command,
+            version=1,
+            command_type=CommandVersion.CommandType.LINUX_SHELL,
+            content="echo ready",
+        )
+        request = APIRequestFactory().post(
+            f"/api/v1/automation/command-versions/{version.id}/publish"
+        )
+        force_authenticate(request, user=user)
+
+        response = CommandVersionViewSet.as_view({"post": "publish"})(
+            request,
+            pk=str(version.id),
+        )
+
+        command.refresh_from_db()
+        version.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(version.status, CommandVersion.Status.PUBLISHED)
+        self.assertEqual(command.status, CommandAtom.Status.DISABLED)
 
 
 class AutomationTemplateApiTests(APITestCase):
@@ -387,6 +435,34 @@ class AutomationTemplateApiTests(APITestCase):
             workflow=workflow,
             version=1,
             status=version_status,
+        )
+
+    def test_published_version_options_exclude_unenabled_templates(self):
+        enabled = self._create_workflow(
+            "enabled_workflow",
+            WorkflowTemplate.Status.PUBLISHED,
+            WorkflowVersion.Status.PUBLISHED,
+        )
+        self._create_workflow(
+            "draft_workflow",
+            WorkflowTemplate.Status.DRAFT,
+            WorkflowVersion.Status.PUBLISHED,
+        )
+        self._create_workflow(
+            "disabled_workflow",
+            WorkflowTemplate.Status.DISABLED,
+            WorkflowVersion.Status.PUBLISHED,
+        )
+
+        response = self.client.get(
+            "/api/v1/automation/workflow-versions",
+            {"status": "published", "workflow__status": "published"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [item["id"] for item in response.data["data"]],
+            [enabled.id],
         )
 
     def test_template_list_returns_published_command_and_workflow_versions(self):

@@ -49,12 +49,12 @@ def runtime_context(run, node_runs, include_secrets=True):
         if node.node_key
     }
     return {
+        "title": f"流程通知：{run.name or f'运行 #{run.pk}'}",
         "inputs": (
             resolve_workflow_inputs(run)
             if include_secrets
             else dict(run.input_vars or {})
         ),
-        "global": (run.graph_snapshot or {}).get("globalVars") or {},
         "system": {
             "workflow_run_id": run.id,
             "triggered_by_id": run.triggered_by_id,
@@ -285,10 +285,22 @@ def plan_dispatch(workflow_run_id):
         )
 
     for node_run in node_runs.values():
-        if node_run.status == NodeRun.Status.FAILED:
+        if node_run.status in {NodeRun.Status.FAILED, NodeRun.Status.TIMEOUT}:
             result = _process_failed_node(run, node_run)
             if result == "stop":
-                run.status = WorkflowRun.Status.FAILED
+                NodeRun.objects.filter(
+                    workflow_run=run, status=NodeRun.Status.PENDING
+                ).exclude(pk=node_run.pk).update(
+                    status=NodeRun.Status.SKIPPED,
+                    failure_reason="前序步骤失败，未执行",
+                    finished_at=now,
+                    updated_at=now,
+                )
+                run.status = (
+                    WorkflowRun.Status.TIMEOUT
+                    if node_run.status == NodeRun.Status.TIMEOUT
+                    else WorkflowRun.Status.FAILED
+                )
                 run.failure_reason = (
                     node_run.failure_reason or f"Node {node_run.node_key} failed"
                 )

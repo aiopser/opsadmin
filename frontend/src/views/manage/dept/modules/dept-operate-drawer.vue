@@ -106,7 +106,7 @@ async function handleSubmit() {
     props.operateType === 'add' ? await addDept(model.value) : await updateDept(props.rowData!.id, model.value);
 
   if (!error) {
-    window.$message?.success($t(props.operateType === 'add' ? 'common.addSuccess' : 'common.updateSuccess'));
+    window.$notification?.success($t(props.operateType === 'add' ? 'common.addSuccess' : 'common.updateSuccess'));
     closeDrawer();
     emit('submitted');
   }
@@ -123,7 +123,14 @@ watch(visible, () => {
 
 <template>
   <ElDrawer v-model="visible" :title="title" :size="360">
-    <ElForm ref="formRef" :model="model" :rules="rules" label-position="top">
+    <ElForm
+      ref="formRef"
+      :model="model"
+      :rules="rules"
+      label-position="top"
+      label-suffix="："
+      require-asterisk-position="left"
+    >
       <ElFormItem :label="$t('page.manage.dept.parentDept')" prop="parentId">
         <ElTreeSelect
           v-model="model.parentId"
@@ -139,7 +146,13 @@ watch(visible, () => {
       <ElFormItem :label="$t('page.manage.dept.deptName')" prop="deptName">
         <ElInput v-model="model.deptName" :placeholder="$t('page.manage.dept.form.deptName')" />
       </ElFormItem>
-      <ElFormItem :label="$t('page.manage.dept.deptCode')" prop="deptCode">
+      <ElFormItem prop="deptCode">
+        <template #label>
+          <FormLabelHelp
+            :label="$t('page.manage.dept.deptCode')"
+            :help="['部门编码，可留空，仅作为部门的标识字段。']"
+          />
+        </template>
         <ElInput v-model="model.deptCode" :placeholder="$t('page.manage.dept.form.deptCode')" />
       </ElFormItem>
       <ElFormItem :label="$t('page.manage.dept.sort')" prop="sort">

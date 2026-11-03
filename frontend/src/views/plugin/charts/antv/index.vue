@@ -25,7 +25,7 @@ const behaviors: CustomBehaviorOption[] = [
       const node = event.target as unknown as HTMLElement;
       const nodeData = flowData.value.nodes.find(item => item.id === node.id);
       selectedNode.value = nodeData?.id;
-      window.$message?.success(`选中节点：[${node.id}]${nodeData?.name}`);
+      window.$notification?.success(`选中节点：[${node.id}]${nodeData?.name}`);
     }
   }
 ];

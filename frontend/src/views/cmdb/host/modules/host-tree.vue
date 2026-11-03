@@ -1,14 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, shallowRef, watch } from 'vue';
 import {
-  fetchAddBusiness,
-  fetchAddServiceNode,
-  fetchDeleteBusiness,
-  fetchDeleteServiceNode,
-  fetchGetBusinessList,
-  fetchGetServiceNodeList,
-  fetchUpdateBusiness,
-  fetchUpdateServiceNode
+  fetchAddHostGroup,
+  fetchDeleteHostGroup,
+  fetchGetHostGroupList,
+  fetchGetHostList,
+  fetchUpdateHostGroup
 } from '@/service/api';
 
 defineOptions({ name: 'CmdbHostTree' });
@@ -21,131 +18,102 @@ interface Emits {
 
 const emit = defineEmits<Emits>();
 
-/** ============ 枚举文案与层级约束 ============ */
-
-const nodeTypeText: Record<string, string> = {
-  environment: '环境',
-  region: '区域',
-  module: '模块'
-};
-
-const nodeTypeTagType: Record<string, UI.ThemeColor> = {
-  environment: 'primary',
-  region: 'warning',
-  module: 'success'
-};
-
-/** 子节点类型约束：业务下挂环境，环境挂区域，区域挂模块，模块不可再挂子节点 */
-const childNodeType: Record<string, Api.Cmdb.ServiceNodeType | null> = {
-  business: 'environment',
-  environment: 'region',
-  region: 'module',
-  module: null
-};
-
 /** ============ 树数据构建（纯函数） ============ */
 
-function bySortOrder<T extends Pick<Api.Cmdb.ServiceTreeNodeRecord, 'sort_order' | 'id'>>(a: T, b: T) {
-  return a.sort_order - b.sort_order || a.id - b.id;
-}
-
-function collectNodeIds(row: Api.Cmdb.HostTreeRow): number[] {
-  return row.children.flatMap(child => [child.id, ...collectNodeIds(child)]);
-}
-
-function groupNodesByParent(nodes: Api.Cmdb.ServiceTreeNodeRecord[]) {
-  return nodes.reduce<Map<number, Api.Cmdb.ServiceTreeNodeRecord[]>>((map, node) => {
-    const parentKey = node.parent ?? 0;
+/** 按上级分组 ID 建索引（parentId 为 null/0 视为顶级） */
+function groupRowsByParent(rows: Api.Cmdb.HostGroupRecord[]) {
+  return rows.reduce<Map<string, Api.Cmdb.HostGroupRecord[]>>((map, row) => {
+    const parentKey = row.parent ? String(row.parent) : '0';
     const list = map.get(parentKey) ?? [];
-    list.push(node);
+    list.push(row);
     map.set(parentKey, list);
     return map;
   }, new Map());
 }
 
-function buildNodeRow(
-  node: Api.Cmdb.ServiceTreeNodeRecord,
-  childMap: Map<number, Api.Cmdb.ServiceTreeNodeRecord[]>
+function buildGroupRow(
+  row: Api.Cmdb.HostGroupRecord,
+  childMap: Map<string, Api.Cmdb.HostGroupRecord[]>
 ): Api.Cmdb.HostTreeRow {
-  const children = (childMap.get(node.id) ?? [])
-    .slice()
-    .sort(bySortOrder)
-    .map(item => buildNodeRow(item, childMap));
+  const children = (childMap.get(String(row.id)) ?? []).map(item => buildGroupRow(item, childMap));
   const childTotal = children.reduce((sum, child) => sum + child.hostCount, 0);
   return {
-    key: `node-${node.id}`,
-    type: 'node',
-    id: node.id,
-    name: node.name,
-    code: node.code,
-    nodeType: node.node_type,
-    description: node.description,
-    sortOrder: node.sort_order,
-    hostCount: node.hostCount + childTotal,
-    businessId: node.business,
-    isActive: node.is_active,
+    key: `group-${row.id}`,
+    type: 'group',
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    groupType: row.group_type,
+    isActive: row.is_active,
+    hostCount: row.hostCount + childTotal,
     children
   };
 }
 
-function buildTreeData(
-  businesses: Api.Cmdb.BusinessRecord[],
-  nodes: Api.Cmdb.ServiceTreeNodeRecord[]
-): Api.Cmdb.HostTreeRow[] {
-  return businesses.map(business => {
-    const childMap = groupNodesByParent(nodes.filter(node => node.business === business.id));
-    const children = (childMap.get(0) ?? [])
-      .slice()
-      .sort(bySortOrder)
-      .map(node => buildNodeRow(node, childMap));
-    return {
-      key: `business-${business.id}`,
-      type: 'business',
-      id: business.id,
-      name: business.name,
-      code: business.code,
-      nodeType: '',
-      description: business.description,
-      sortOrder: 0,
-      hostCount: business.hostCount,
-      businessId: business.id,
-      isActive: business.is_active,
-      children
-    };
-  });
+function buildTreeData(rows: Api.Cmdb.HostGroupRecord[]): Api.Cmdb.HostTreeRow[] {
+  const childMap = groupRowsByParent(rows);
+  return (childMap.get('0') ?? []).map(row => buildGroupRow(row, childMap));
 }
 
 /** ============ 树数据与选中 ============ */
 
 const loading = ref(false);
-const businesses = shallowRef<Api.Cmdb.BusinessRecord[]>([]);
-const nodes = shallowRef<Api.Cmdb.ServiceTreeNodeRecord[]>([]);
+const groups = shallowRef<Api.Cmdb.HostGroupRecord[]>([]);
+/** 全部主机数（含未分组主机，来自主机列表接口 total） */
+const totalHosts = shallowRef(0);
 const filterKeyword = ref('');
 const selectedKey = ref('');
 const treeRef = ref();
 
-const treeData = computed(() => buildTreeData(businesses.value, nodes.value));
+const ROOT_KEY = 'all';
+
+const treeData = computed<Api.Cmdb.HostTreeRow[]>(() => [
+  {
+    key: ROOT_KEY,
+    type: 'all',
+    id: 0,
+    name: '全部主机',
+    description: '',
+    groupType: '',
+    isActive: true,
+    // 根节点计数取主机总数而非各分组计数之和，避免漏掉未分组主机
+    hostCount: totalHosts.value,
+    children: buildTreeData(groups.value)
+  }
+]);
+
+const allRow: Api.Cmdb.HostTreeRow = {
+  key: ROOT_KEY,
+  type: 'all',
+  id: 0,
+  name: '全部主机',
+  description: '',
+  groupType: '',
+  isActive: true,
+  hostCount: 0,
+  children: []
+};
 
 async function refresh() {
   loading.value = true;
-  const [businessRes, nodeRes] = await Promise.all([
-    fetchGetBusinessList({ current: 1, size: 100 }),
-    fetchGetServiceNodeList({ current: 1, size: 100 })
+  // 并行请求分组列表与主机总数（size=1 仅取 total，用于根节点计数）
+  const [groupRes, hostRes] = await Promise.all([
+    fetchGetHostGroupList({ current: 1, size: 500 }),
+    fetchGetHostList({ current: 1, size: 1 })
   ]);
   loading.value = false;
-  if (!businessRes.error) {
-    businesses.value = businessRes.data.records ?? [];
+  if (!groupRes.error) {
+    groups.value = groupRes.data.records ?? [];
   }
-  if (!nodeRes.error) {
-    nodes.value = nodeRes.data.records ?? [];
+  if (!hostRes.error) {
+    totalHosts.value = hostRes.data.total ?? 0;
   }
 }
 
 function handleNodeClick(data: Api.Cmdb.HostTreeRow) {
   selectedKey.value = data.key;
   emit('select', {
-    business: data.type === 'business' ? data.id : null,
-    serviceNodeIds: data.type === 'node' ? [data.id, ...collectNodeIds(data)] : null,
+    groupId: data.type === 'group' ? data.id : null,
     node: data
   });
 }
@@ -170,177 +138,102 @@ interface NodeCommand {
 
 function handleNodeCommand(command: NodeCommand) {
   const handlers: Record<NodeAction, (row: Api.Cmdb.HostTreeRow) => void> = {
-    'add-child': row => openNodeDialog(row),
+    'add-child': row => openGroupDialog(row),
     'add-host': row => emit('addHost', row),
     'move-hosts': row => emit('moveHosts', row),
-    edit: row => (row.type === 'business' ? openBusinessDialog(row) : openNodeDialog(null, row)),
+    edit: row => openGroupDialog(null, row),
     delete: row => handleDeleteRow(row)
   };
   handlers[command.action](command.row);
 }
 
 async function handleDeleteRow(row: Api.Cmdb.HostTreeRow) {
-  const isBusiness = row.type === 'business';
-  const tip = isBusiness
-    ? `确认删除业务「${row.name}」？业务下存在服务树节点时将被拒绝删除`
-    : `确认删除节点「${row.name}」？节点下存在子节点或主机时将被拒绝删除`;
   try {
-    await ElMessageBox.confirm(tip, '删除确认', { type: 'warning' });
+    await ElMessageBox.confirm(`确认删除分组「${row.name}」？分组下存在子分组或成员主机时将被拒绝删除`, '删除确认', {
+      type: 'warning'
+    });
   } catch {
     return;
   }
-  const { error } = isBusiness ? await fetchDeleteBusiness(row.id) : await fetchDeleteServiceNode(row.id);
+  const { error } = await fetchDeleteHostGroup(row.id);
   if (!error) {
-    window.$message?.success('删除成功');
+    window.$notification?.success('删除成功');
     if (selectedKey.value === row.key) {
-      selectedKey.value = '';
-      emit('select', { business: null, serviceNodeIds: null, node: null });
+      selectedKey.value = ROOT_KEY;
+      emit('select', { groupId: null, node: allRow });
     }
     refresh();
   }
 }
 
-/** ============ 业务 新建/编辑 对话框 ============ */
+/** ============ 分组 新建/编辑 对话框 ============ */
 
-interface BusinessForm {
+interface GroupForm {
   id?: number;
-  code: string;
   name: string;
   description: string;
   is_active: boolean;
+  /** 编辑时回传，保持类型与匹配规则不变 */
+  group_type?: string;
+  match_rule?: Record<string, unknown>;
 }
 
-const businessVisible = ref(false);
-const businessSubmitting = ref(false);
-const businessFormRef = ref();
-const businessForm = ref<BusinessForm>({ code: '', name: '', description: '', is_active: true });
+function createDefaultGroupForm(): GroupForm {
+  return { name: '', description: '', is_active: true };
+}
 
-const businessFormTitle = computed(() => (businessForm.value.id ? '编辑业务' : '新建业务'));
+const groupVisible = ref(false);
+const groupSubmitting = ref(false);
+const groupFormRef = ref();
+const groupForm = ref<GroupForm>(createDefaultGroupForm());
+const groupFormTitle = computed(() => (groupForm.value.id ? '编辑分组' : '新建分组'));
 
-const businessFormRules = {
-  code: [{ required: true, message: '请输入业务编码', trigger: 'blur' }],
-  name: [{ required: true, message: '请输入业务名称', trigger: 'blur' }]
+const groupFormRules = {
+  name: [{ required: true, message: '请输入分组名称', trigger: 'blur' }]
 };
 
-function openBusinessDialog(row?: Api.Cmdb.HostTreeRow) {
-  businessForm.value = row
-    ? { id: row.id, code: row.code, name: row.name, description: row.description, is_active: row.isActive }
-    : { code: '', name: '', description: '', is_active: true };
-  businessVisible.value = true;
-}
+/** 新建子分组时携带的父节点行 */
+const parentRow = shallowRef<Api.Cmdb.HostTreeRow | null>(null);
 
-async function handleBusinessSubmit() {
-  await businessFormRef.value?.validate();
+const parentLabel = computed(() => parentRow.value?.name ?? '');
 
-  businessSubmitting.value = true;
-  const form = businessForm.value;
-  const payload: Api.Cmdb.BusinessPayload = {
-    code: form.code,
-    name: form.name,
-    description: form.description,
-    is_active: form.is_active
-  };
-  const { error } = form.id ? await fetchUpdateBusiness(form.id, payload) : await fetchAddBusiness(payload);
-  businessSubmitting.value = false;
-
-  if (!error) {
-    window.$message?.success(form.id ? '修改成功' : '新建成功');
-    businessVisible.value = false;
-    refresh();
-  }
-}
-
-/** ============ 服务树节点 新建/编辑 对话框 ============ */
-
-interface NodeForm {
-  id?: number;
-  business: number | null;
-  parent: number | null;
-  node_type: Api.Cmdb.ServiceNodeType;
-  code: string;
-  name: string;
-  sort_order: number;
-  description: string;
-  is_active: boolean;
-}
-
-function createDefaultNodeForm(): NodeForm {
-  return {
-    business: null,
-    parent: null,
-    node_type: 'environment',
-    code: '',
-    name: '',
-    sort_order: 0,
-    description: '',
-    is_active: true
-  };
-}
-
-const nodeVisible = ref(false);
-const nodeSubmitting = ref(false);
-const nodeFormRef = ref();
-const nodeForm = ref<NodeForm>(createDefaultNodeForm());
-const nodeFormTitle = computed(() => (nodeForm.value.id ? '编辑节点' : '新建子节点'));
-
-const nodeFormRules = {
-  code: [{ required: true, message: '请输入节点编码', trigger: 'blur' }],
-  name: [{ required: true, message: '请输入节点名称', trigger: 'blur' }]
-};
-
-/** 新增子节点时携带的父节点行 */
-const nodeParentRow = shallowRef<Api.Cmdb.HostTreeRow | null>(null);
-
-const nodeParentLabel = computed(() => {
-  const parent = nodeParentRow.value;
-  return parent ? `${parent.name}（${nodeTypeText[parent.nodeType] ?? parent.nodeType}）` : '';
-});
-
-function openNodeDialog(parent: Api.Cmdb.HostTreeRow | null, row?: Api.Cmdb.HostTreeRow) {
-  nodeParentRow.value = row ? null : parent;
-  nodeForm.value = row
+function openGroupDialog(parent: Api.Cmdb.HostTreeRow | null, row?: Api.Cmdb.HostTreeRow) {
+  parentRow.value = row ? null : parent;
+  const record = row ? groups.value.find(item => item.id === row.id) : null;
+  groupForm.value = row
     ? {
         id: row.id,
-        business: row.businessId,
-        parent: null,
-        node_type: row.nodeType as Api.Cmdb.ServiceNodeType,
-        code: row.code,
         name: row.name,
-        sort_order: row.sortOrder,
         description: row.description,
-        is_active: row.isActive
+        is_active: row.isActive,
+        group_type: record?.group_type,
+        match_rule: record?.match_rule
       }
-    : {
-        ...createDefaultNodeForm(),
-        business: parent?.businessId ?? null,
-        parent: parent?.type === 'node' ? parent.id : null,
-        node_type: (parent && childNodeType[parent.nodeType]) || 'environment'
-      };
-  nodeVisible.value = true;
+    : createDefaultGroupForm();
+  groupVisible.value = true;
 }
 
-async function handleNodeSubmit() {
-  await nodeFormRef.value?.validate();
+async function handleGroupSubmit() {
+  await groupFormRef.value?.validate();
 
-  nodeSubmitting.value = true;
-  const form = nodeForm.value;
-  // 编辑时不传 parent，保持原层级不变
-  const payload: Api.Cmdb.ServiceTreeNodePayload = {
-    business: form.business!,
-    parent: form.parent ?? null,
-    node_type: form.node_type,
-    code: form.code,
+  groupSubmitting.value = true;
+  const form = groupForm.value;
+  // 新建时按所选父节点挂载；编辑时不传 parent，保持原层级不变
+  const parentId = parentRow.value?.type === 'group' ? parentRow.value.id : null;
+  const payload: Api.Cmdb.HostGroupPayload = {
     name: form.name,
-    sort_order: form.sort_order,
+    parent: form.id ? undefined : parentId,
     description: form.description,
-    is_active: form.is_active
+    is_active: form.is_active,
+    group_type: (form.group_type as Api.Cmdb.HostGroupType) ?? 'static',
+    match_rule: form.match_rule ?? {}
   };
-  const { error } = form.id ? await fetchUpdateServiceNode(form.id, payload) : await fetchAddServiceNode(payload);
-  nodeSubmitting.value = false;
+  const { error } = form.id ? await fetchUpdateHostGroup(form.id, payload) : await fetchAddHostGroup(payload);
+  groupSubmitting.value = false;
 
   if (!error) {
-    window.$message?.success(form.id ? '修改成功' : '新建成功');
-    nodeVisible.value = false;
+    window.$notification?.success(form.id ? '修改成功' : '新建成功');
+    groupVisible.value = false;
     refresh();
   }
 }
@@ -357,10 +250,10 @@ defineExpose({ refresh });
 <template>
   <div class="flex-col-stretch gap-8px overflow-hidden">
     <div class="flex items-center justify-between">
-      <p class="font-medium">业务 / 服务树</p>
+      <p class="font-medium">主机分组</p>
       <div class="flex items-center gap-4px">
-        <ElTooltip content="新建业务" placement="top">
-          <ElButton size="small" circle @click="openBusinessDialog()">
+        <ElTooltip content="新建根分组" placement="top">
+          <ElButton size="small" circle @click="openGroupDialog(null)">
             <template #icon>
               <icon-ic-round-plus class="text-icon" />
             </template>
@@ -376,7 +269,7 @@ defineExpose({ refresh });
       </div>
     </div>
 
-    <ElInput v-model="filterKeyword" clearable placeholder="搜索节点" size="small" />
+    <ElInput v-model="filterKeyword" clearable placeholder="搜索分组" size="small" />
 
     <div v-loading="loading" class="flex-1 overflow-auto">
       <ElTree
@@ -392,97 +285,70 @@ defineExpose({ refresh });
       >
         <template #default="{ data }">
           <div class="group flex flex-1 items-center gap-4px overflow-hidden pr-4px">
-            <ElTag v-if="data.type === 'node'" size="small" :type="nodeTypeTagType[data.nodeType] ?? 'info'">
-              {{ nodeTypeText[data.nodeType] ?? data.nodeType }}
-            </ElTag>
-            <span class="truncate" :class="{ 'font-medium': data.type === 'business' }">{{ data.name }}</span>
+            <span class="truncate" :class="{ 'font-medium': data.type === 'all' }">{{ data.name }}</span>
+            <span v-if="data.groupType === 'dynamic'" class="shrink-0 text-12px text-warning">（动态）</span>
             <span v-if="!data.isActive" class="shrink-0 text-12px text-warning">（停用）</span>
-            <span class="ml-auto shrink-0 text-12px text-#909399">{{ data.hostCount }}</span>
-            <span class="shrink-0" @click.stop>
-              <ElDropdown trigger="click" @command="handleNodeCommand">
-                <ElButton size="small" text circle class="opacity-0 group-hover:opacity-100">
-                  <template #icon>
-                    <icon-ic-round-more-vert class="text-icon" />
+            <span class="ml-auto shrink-0 text-12px text-[var(--el-text-color-secondary)]">{{ data.hostCount }}</span>
+            <span v-if="data.type === 'group'" class="shrink-0" @click.stop>
+              <!-- ElTooltip 必须包在 ElDropdown 外层：嵌在触发按钮外会丢失 dropdown 的 click 绑定导致点击无响应 -->
+              <ElTooltip content="更多操作" placement="top">
+                <ElDropdown trigger="click" @command="handleNodeCommand">
+                  <ElButton size="small" text circle class="opacity-0 group-hover:opacity-100">
+                    <template #icon>
+                      <icon-ic-round-more-vert class="text-icon" />
+                    </template>
+                  </ElButton>
+                  <template #dropdown>
+                    <ElDropdownMenu>
+                      <ElDropdownItem :command="{ action: 'add-child', row: data }">新建子分组</ElDropdownItem>
+                      <ElDropdownItem v-if="data.groupType === 'static'" :command="{ action: 'add-host', row: data }">
+                        添加主机
+                      </ElDropdownItem>
+                      <ElDropdownItem v-if="data.groupType === 'static'" :command="{ action: 'move-hosts', row: data }">
+                        移动主机到此分组
+                      </ElDropdownItem>
+                      <ElDropdownItem divided :command="{ action: 'edit', row: data }">编辑</ElDropdownItem>
+                      <ElDropdownItem :command="{ action: 'delete', row: data }">
+                        <span class="text-danger">删除</span>
+                      </ElDropdownItem>
+                    </ElDropdownMenu>
                   </template>
-                </ElButton>
-                <template #dropdown>
-                  <ElDropdownMenu>
-                    <ElDropdownItem
-                      v-if="data.type === 'business' || childNodeType[data.nodeType]"
-                      :command="{ action: 'add-child', row: data }"
-                    >
-                      新建子节点
-                    </ElDropdownItem>
-                    <ElDropdownItem v-if="data.type === 'node'" :command="{ action: 'add-host', row: data }">
-                      添加主机
-                    </ElDropdownItem>
-                    <ElDropdownItem v-if="data.type === 'node'" :command="{ action: 'move-hosts', row: data }">
-                      移动主机到此节点
-                    </ElDropdownItem>
-                    <ElDropdownItem divided :command="{ action: 'edit', row: data }">编辑</ElDropdownItem>
-                    <ElDropdownItem :command="{ action: 'delete', row: data }">
-                      <span class="text-danger">删除</span>
-                    </ElDropdownItem>
-                  </ElDropdownMenu>
-                </template>
-              </ElDropdown>
+                </ElDropdown>
+              </ElTooltip>
             </span>
           </div>
         </template>
       </ElTree>
-      <ElEmpty v-if="!loading && !treeData.length" description="暂无业务，点击右上角 + 新建" />
+      <ElEmpty v-if="!loading && !groups.length" description="暂无分组">
+        <ElButton type="primary" size="small" @click="openGroupDialog(null)">新建根分组</ElButton>
+      </ElEmpty>
     </div>
 
-    <ElDialog v-model="businessVisible" :title="businessFormTitle" width="440px" :close-on-click-modal="false">
-      <ElForm ref="businessFormRef" :model="businessForm" :rules="businessFormRules" label-width="80px">
-        <ElFormItem label="业务编码" prop="code">
-          <ElInput v-model="businessForm.code" placeholder="业务内唯一，如 order" />
+    <ElDialog v-model="groupVisible" :title="groupFormTitle" width="440px" :close-on-click-modal="false">
+      <ElForm
+        ref="groupFormRef"
+        :model="groupForm"
+        :rules="groupFormRules"
+        label-width="80px"
+        label-suffix="："
+        require-asterisk-position="left"
+      >
+        <ElFormItem v-if="parentRow" label="上级分组">
+          <span>{{ parentLabel }}</span>
         </ElFormItem>
-        <ElFormItem label="业务名称" prop="name">
-          <ElInput v-model="businessForm.name" placeholder="如 订单业务" />
+        <ElFormItem label="分组名称" prop="name">
+          <ElInput v-model="groupForm.name" placeholder="如 生产环境 / 华东区" />
         </ElFormItem>
         <ElFormItem label="描述">
-          <ElInput v-model="businessForm.description" type="textarea" :rows="3" placeholder="业务描述" />
+          <ElInput v-model="groupForm.description" type="textarea" :rows="3" placeholder="分组描述" />
         </ElFormItem>
         <ElFormItem label="启用">
-          <ElSwitch v-model="businessForm.is_active" />
+          <ElSwitch v-model="groupForm.is_active" />
         </ElFormItem>
       </ElForm>
       <template #footer>
-        <ElButton @click="businessVisible = false">取消</ElButton>
-        <ElButton type="primary" :loading="businessSubmitting" @click="handleBusinessSubmit">确认</ElButton>
-      </template>
-    </ElDialog>
-
-    <ElDialog v-model="nodeVisible" :title="nodeFormTitle" width="440px" :close-on-click-modal="false">
-      <ElForm ref="nodeFormRef" :model="nodeForm" :rules="nodeFormRules" label-width="80px">
-        <ElFormItem v-if="nodeForm.id" label="节点类型">
-          <ElTag :type="nodeTypeTagType[nodeForm.node_type] ?? 'info'">
-            {{ nodeTypeText[nodeForm.node_type] ?? nodeForm.node_type }}
-          </ElTag>
-        </ElFormItem>
-        <ElFormItem v-else-if="nodeParentRow" label="父节点">
-          <span>{{ nodeParentLabel }}</span>
-        </ElFormItem>
-        <ElFormItem label="节点编码" prop="code">
-          <ElInput v-model="nodeForm.code" placeholder="业务内唯一，如 prod / cn-north / order" />
-        </ElFormItem>
-        <ElFormItem label="节点名称" prop="name">
-          <ElInput v-model="nodeForm.name" placeholder="如 生产环境" />
-        </ElFormItem>
-        <ElFormItem label="排序">
-          <ElInputNumber v-model="nodeForm.sort_order" :min="0" class="w-full" />
-        </ElFormItem>
-        <ElFormItem label="描述">
-          <ElInput v-model="nodeForm.description" type="textarea" :rows="3" placeholder="节点描述" />
-        </ElFormItem>
-        <ElFormItem label="启用">
-          <ElSwitch v-model="nodeForm.is_active" />
-        </ElFormItem>
-      </ElForm>
-      <template #footer>
-        <ElButton @click="nodeVisible = false">取消</ElButton>
-        <ElButton type="primary" :loading="nodeSubmitting" @click="handleNodeSubmit">确认</ElButton>
+        <ElButton @click="groupVisible = false">取消</ElButton>
+        <ElButton type="primary" :loading="groupSubmitting" @click="handleGroupSubmit">确认</ElButton>
       </template>
     </ElDialog>
   </div>

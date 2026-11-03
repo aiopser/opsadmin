@@ -14,9 +14,9 @@ interface Emits {
 
 const emit = defineEmits<Emits>();
 
-const { formRef, validate, restoreValidation } = useForm();
-
 const model = defineModel<Api.SystemManage.UserSearchParams>('model', { required: true });
+
+const { formRef, validate, restoreValidation } = useForm();
 
 type RuleKey = Extract<keyof Api.SystemManage.UserSearchParams, 'userEmail' | 'userPhone'>;
 
@@ -41,76 +41,47 @@ async function search() {
 </script>
 
 <template>
-  <ElCard class="card-wrapper">
-    <ElCollapse>
-      <ElCollapseItem :title="$t('common.search')" name="user-search">
-        <ElForm ref="formRef" :model="model" :rules="rules" label-position="right" :label-width="80">
-          <ElRow :gutter="24">
-            <ElCol :lg="6" :md="8" :sm="12">
-              <ElFormItem :label="$t('page.manage.user.userName')" prop="userName">
-                <ElInput v-model="model.userName" :placeholder="$t('page.manage.user.form.userName')" />
-              </ElFormItem>
-            </ElCol>
-            <ElCol :lg="6" :md="8" :sm="12" :label="$t('page.manage.user.userGender')">
-              <ElFormItem :label="$t('page.manage.user.userGender')" prop="userGender">
-                <ElSelect v-model="model.userGender" clearable :placeholder="$t('page.manage.user.form.userGender')">
-                  <ElOption
-                    v-for="(item, idx) in translateOptions(userGenderOptions)"
-                    :key="idx"
-                    :label="item.label"
-                    :value="item.value"
-                  ></ElOption>
-                </ElSelect>
-              </ElFormItem>
-            </ElCol>
-            <ElCol :lg="6" :md="8" :sm="12">
-              <ElFormItem :label="$t('page.manage.user.nickName')" prop="nickName">
-                <ElInput v-model="model.nickName" :placeholder="$t('page.manage.user.form.nickName')" />
-              </ElFormItem>
-            </ElCol>
-            <ElCol :lg="6" :md="8" :sm="12">
-              <ElFormItem :label="$t('page.manage.user.userPhone')" prop="userPhone">
-                <ElInput v-model="model.userPhone" :placeholder="$t('page.manage.user.form.userPhone')" />
-              </ElFormItem>
-            </ElCol>
-            <ElCol :lg="6" :md="8" :sm="12">
-              <ElFormItem :label="$t('page.manage.user.userEmail')" prop="userEmail">
-                <ElInput v-model="model.userEmail" :placeholder="$t('page.manage.user.form.userEmail')" />
-              </ElFormItem>
-            </ElCol>
-            <ElCol :lg="6" :md="8" :sm="12">
-              <ElFormItem :label="$t('page.manage.user.userStatus')" prop="userStatus">
-                <ElSelect v-model="model.userGender" clearable :placeholder="$t('page.manage.user.form.userStatus')">
-                  <ElOption
-                    v-for="{ label, value } in translateOptions(enableStatusOptions)"
-                    :key="value"
-                    :label="label"
-                    :value="value"
-                  ></ElOption>
-                </ElSelect>
-              </ElFormItem>
-            </ElCol>
-            <ElCol :lg="12" :md="24" :sm="24">
-              <ElSpace class="w-full justify-end" alignment="end">
-                <ElButton @click="reset">
-                  <template #icon>
-                    <icon-ic-round-refresh class="text-icon" />
-                  </template>
-                  {{ $t('common.reset') }}
-                </ElButton>
-                <ElButton type="primary" plain @click="search">
-                  <template #icon>
-                    <icon-ic-round-search class="text-icon" />
-                  </template>
-                  {{ $t('common.search') }}
-                </ElButton>
-              </ElSpace>
-            </ElCol>
-          </ElRow>
-        </ElForm>
-      </ElCollapseItem>
-    </ElCollapse>
-  </ElCard>
+  <SearchPanel @reset="reset" @search="search">
+    <ElForm
+      ref="formRef"
+      :model="model"
+      :rules="rules"
+      label-position="right"
+      :label-width="80"
+      @submit.prevent="search"
+    >
+      <ElFormItem :label="$t('page.manage.user.userName')" prop="userName">
+        <ElInput v-model="model.userName" clearable :placeholder="$t('page.manage.user.form.userName')" />
+      </ElFormItem>
+      <ElFormItem :label="$t('page.manage.user.userGender')" prop="userGender">
+        <ElSelect v-model="model.userGender" clearable :placeholder="$t('page.manage.user.form.userGender')">
+          <ElOption
+            v-for="{ label, value } in translateOptions(userGenderOptions)"
+            :key="value"
+            :label="label"
+            :value="value"
+          />
+        </ElSelect>
+      </ElFormItem>
+      <ElFormItem :label="$t('page.manage.user.nickName')" prop="nickName">
+        <ElInput v-model="model.nickName" clearable :placeholder="$t('page.manage.user.form.nickName')" />
+      </ElFormItem>
+      <ElFormItem :label="$t('page.manage.user.userPhone')" prop="userPhone">
+        <ElInput v-model="model.userPhone" clearable :placeholder="$t('page.manage.user.form.userPhone')" />
+      </ElFormItem>
+      <ElFormItem :label="$t('page.manage.user.userEmail')" prop="userEmail">
+        <ElInput v-model="model.userEmail" clearable :placeholder="$t('page.manage.user.form.userEmail')" />
+      </ElFormItem>
+      <ElFormItem :label="$t('page.manage.user.userStatus')" prop="status">
+        <ElSelect v-model="model.status" clearable :placeholder="$t('page.manage.user.form.userStatus')">
+          <ElOption
+            v-for="{ label, value } in translateOptions(enableStatusOptions)"
+            :key="value"
+            :label="label"
+            :value="value"
+          />
+        </ElSelect>
+      </ElFormItem>
+    </ElForm>
+  </SearchPanel>
 </template>
-
-<style scoped></style>

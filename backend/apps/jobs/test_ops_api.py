@@ -9,8 +9,10 @@ from django.test import TestCase
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.automation.models import CommandAtom, CommandVersion
+from apps.audit_center.models import DomainAuditEvent
 from apps.cmdb.crypto import encrypt_secret
 from apps.cmdb.models import AssetHost
+from apps.cmdb.targets import snapshot_targets
 from apps.jobs.models import WorkerPool
 
 from .models import (
@@ -19,14 +21,22 @@ from .models import (
     SecurityRule,
     WorkflowRun,
 )
-from apps.jobs.execution.plan_builder import COMMAND_OUTPUT_MARKER, InvalidGateway, InvalidSourcePlaybook, build_source_playbook, parse_module_args, prepare_gateway_execution, prepare_host_gateway_execution, wrap_command_lines_with_markers
+from apps.jobs.execution.plan_builder import (
+    COMMAND_OUTPUT_MARKER,
+    InvalidGateway,
+    InvalidSourcePlaybook,
+    build_source_playbook,
+    parse_module_args,
+    prepare_gateway_execution,
+    prepare_host_gateway_execution,
+    wrap_command_lines_with_markers,
+)
 from .views import (
     DashboardRecentView,
     DashboardStatsView,
     EngineSettingsView,
     GatewayViewSet,
     ModuleRunViewSet,
-    NotifySettingsView,
     PlaybookRunViewSet,
     QuickCommandRunViewSet,
     SecurityRuleViewSet,
@@ -37,6 +47,258 @@ from .views import (
 
 
 class OpsExtensionApiTests(TestCase):
+    def test_execution_requests_are_idempotent_and_reject_changed_payload(self):
+        payload = {
+            "commandType": "linux_shell",
+            "commandContent": "uptime",
+            "hostIds": [self.host.id],
+            "workerPoolId": self.worker_pool.id,
+            "executionRequestId": "review-request-unique-001",
+        }
+        view = QuickCommandRunViewSet.as_view({"post": "create"})
+        first = self._request("post", view, payload)
+        second = self._request("post", view, payload)
+        self.assertEqual(first.status_code, 200, first.data)
+        self.assertEqual(second.status_code, 200, second.data)
+        self.assertEqual(first.data["data"]["id"], second.data["data"]["id"])
+        changed = self._request("post", view, {**payload, "commandContent": "date"})
+        self.assertEqual(changed.status_code, 409, changed.data)
+
+    def test_invalid_module_arguments_are_rejected_during_preview(self):
+        for arguments in ('msg="unterminated', "msg=hello world"):
+            with self.subTest(arguments=arguments):
+                response = self._request(
+                    "post",
+                    ModuleRunViewSet.as_view({"post": "preview"}),
+                    {
+                        "moduleName": "ansible.builtin.debug",
+                        "moduleArgs": arguments,
+                        "hostIds": [self.host.id],
+                        "workerPoolId": self.worker_pool.id,
+                    },
+                )
+                self.assertEqual(response.status_code, 400, response.data)
+                self.assertIn("moduleArgs", response.data["msg"])
+
+    def test_module_default_values_with_spaces_are_preserved(self):
+        resource = CommandAtom.objects.create(
+            name="Debug spaces",
+            code="test.module.spaces",
+            status="published",
+            resource_kind="module",
+        )
+        version = CommandVersion.objects.create(
+            command=resource,
+            version=1,
+            status="published",
+            command_type="ansible_module",
+            content="ansible.builtin.debug",
+            default_vars={
+                "module_args": {
+                    "msg": "hello world's test",
+                    "headers": {"X-Value": "one"},
+                    "names": ["nginx", "git"],
+                }
+            },
+        )
+        response = self._request(
+            "post",
+            ModuleRunViewSet.as_view({"post": "create"}),
+            {
+                "moduleVersionId": version.id,
+                "hostIds": [self.host.id],
+                "workerPoolId": self.worker_pool.id,
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        run = WorkflowRun.objects.get(pk=response.data["data"]["id"])
+        task = build_source_playbook(run)[0]["tasks"][0]
+        self.assertEqual(
+            task["ansible.builtin.debug"],
+            {
+                "msg": "hello world's test",
+                "headers": {"X-Value": "one"},
+                "names": ["nginx", "git"],
+            },
+        )
+
+    def test_quick_execution_rejects_disabled_source_and_reserved_variables(self):
+        resource = CommandAtom.objects.create(
+            name="Disabled", code="test.disabled.source", status="draft"
+        )
+        version = CommandVersion.objects.create(
+            command=resource,
+            version=1,
+            status="published",
+            command_type="linux_shell",
+            content="uptime",
+        )
+        base = {
+            "commandType": "linux_shell",
+            "commandContent": version.content,
+            "hostIds": [self.host.id],
+            "workerPoolId": self.worker_pool.id,
+        }
+        for fields in (
+            {"sourceCommandVersionId": version.id},
+            {"extraVars": {"command_content": "other"}},
+            {"extraVars": []},
+        ):
+            with self.subTest(fields=fields):
+                response = self._request(
+                    "post",
+                    QuickCommandRunViewSet.as_view({"post": "preview"}),
+                    {**base, **fields},
+                )
+                self.assertEqual(response.status_code, 400, response.data)
+
+    def test_playbook_and_module_preserve_resource_defaults_and_runtime_overrides(self):
+        from apps.jobs.execution.snapshots import execution_node, ensure_node_runs
+        from apps.jobs.execution.plan_builder import _merge_node_vars
+
+        for kind, command_type, content, view, fields in (
+            (
+                "playbook",
+                "playbook",
+                "- hosts: all\n  tasks: []\n",
+                PlaybookRunViewSet,
+                {},
+            ),
+            (
+                "module",
+                "ansible_module",
+                "ansible.builtin.debug",
+                ModuleRunViewSet,
+                {"moduleArgs": ""},
+            ),
+        ):
+            with self.subTest(kind=kind):
+                resource = CommandAtom.objects.create(
+                    name=kind,
+                    code=f"test.extra.{kind}",
+                    status="published",
+                    resource_kind=kind,
+                )
+                version = CommandVersion.objects.create(
+                    command=resource,
+                    version=1,
+                    status="published",
+                    command_type=command_type,
+                    content=content,
+                    default_vars={"greeting": "default", "count": 2},
+                    become_enabled=True,
+                    timeout_seconds=90,
+                )
+                source = (
+                    {"playbookVersionId": version.id, "playbookContent": content}
+                    if kind == "playbook"
+                    else {"moduleVersionId": version.id}
+                )
+                payload = {
+                    **fields,
+                    **source,
+                    "extraVars": {"greeting": "override"},
+                    "hostIds": [self.host.id],
+                    "workerPoolId": self.worker_pool.id,
+                }
+                preview = self._request(
+                    "post", view.as_view({"post": "preview"}), payload
+                )
+                self.assertEqual(preview.status_code, 200, preview.data)
+                summary = preview.data["data"]["contentSummary"]
+                self.assertIn(
+                    {"name": "extra_vars", "value": "资源默认 2 项，本次填写 1 项，同名覆盖"}, summary
+                )
+                response = self._request(
+                    "post", view.as_view({"post": "create"}), payload
+                )
+                self.assertEqual(response.status_code, 200, response.data)
+                run = WorkflowRun.objects.get(pk=response.data["data"]["id"])
+                ensure_node_runs(run)
+                node = execution_node(run.node_runs.get(node_key="quick_command"))
+                variables = _merge_node_vars(run, node)
+                self.assertEqual(variables["greeting"], "override")
+                self.assertEqual(variables["count"], 2)
+                self.assertTrue(node.command_version.become_enabled)
+                self.assertIsNone(node.timeout_seconds)
+                self.assertEqual(
+                    run.execution_settings["nodes"]["quick_command"]["values"][
+                        "timeoutSeconds"
+                    ],
+                    90,
+                )
+                self.assertEqual(
+                    run.execution_settings["nodes"]["quick_command"]["sources"][
+                        "timeoutSeconds"
+                    ],
+                    "resource",
+                )
+
+    def test_quick_resource_variables_are_inherited_overridden_and_frozen(self):
+        from apps.jobs.execution.snapshots import execution_node
+        from apps.jobs.execution.plan_builder import _merge_node_vars
+        from apps.jobs.execution.snapshots import ensure_node_runs
+
+        resource = CommandAtom.objects.create(
+            name="变量脚本",
+            code="test.extra.vars",
+            status="published",
+        )
+        version = CommandVersion.objects.create(
+            command=resource,
+            version=1,
+            status="published",
+            command_type="linux_shell",
+            content="echo {{ greeting }}",
+            default_vars={"greeting": "default", "count": 2},
+        )
+        response = self._request(
+            "post",
+            QuickCommandRunViewSet.as_view({"post": "create"}),
+            {
+                "commandType": "linux_shell",
+                "commandContent": version.content,
+                "sourceCommandVersionId": version.id,
+                "extraVars": {"greeting": "override"},
+                "hostIds": [self.host.id],
+                "workerPoolId": self.worker_pool.id,
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        run = WorkflowRun.objects.get(pk=response.data["data"]["id"])
+        CommandVersion.objects.filter(pk=version.pk).update(status="archived")
+        ensure_node_runs(run)
+        node_run = run.node_runs.get(node_key="quick_command")
+        values = _merge_node_vars(run, execution_node(node_run))
+        self.assertEqual(values["greeting"], "override")
+        self.assertEqual(values["count"], 2)
+
+    def test_playbook_source_version_content_mismatch_rejected(self):
+        resource = CommandAtom.objects.create(
+            name="变量剧本",
+            code="test.extra.playbook",
+            status="published",
+            resource_kind="playbook",
+        )
+        version = CommandVersion.objects.create(
+            command=resource,
+            version=1,
+            status="published",
+            command_type="playbook",
+            content="- hosts: all\n  tasks: []\n",
+        )
+        response = self._request(
+            "post",
+            PlaybookRunViewSet.as_view({"post": "create"}),
+            {
+                "playbookVersionId": version.id,
+                "playbookContent": "- hosts: all\n  tasks:\n    - debug: msg=changed\n",
+                "hostIds": [self.host.id],
+                "workerPoolId": self.worker_pool.id,
+            },
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+
     # T13 契约：所有可克隆运行必须携带发布冻结的合法图快照。
     MINIMAL_GRAPH = {
         "nodes": [
@@ -61,7 +323,7 @@ class OpsExtensionApiTests(TestCase):
         )
         self.host = AssetHost.objects.create(
             hostname="web01",
-            primary_ip="10.0.0.11",
+            internal_ip="10.0.0.11",
             os_family=AssetHost.OSFamily.LINUX,
             cpu_cores=2,
             memory_mb=4096,
@@ -147,6 +409,106 @@ class OpsExtensionApiTests(TestCase):
         rule = SecurityRule.objects.filter(pattern="rm -rf /").latest("id")
         self.assertEqual(rule.blocked_count, 1)
 
+    def test_quick_execution_previews_do_not_create_runs(self):
+        cases = (
+            (
+                QuickCommandRunViewSet,
+                {"commandType": "linux_shell", "commandContent": "uptime"},
+            ),
+            (
+                PlaybookRunViewSet,
+                {"playbookContent": "- hosts: all\n  tasks:\n    - debug: msg=ok\n"},
+            ),
+            (ModuleRunViewSet, {"moduleName": "ping", "moduleArgs": ""}),
+        )
+        for viewset, payload in cases:
+            with self.subTest(viewset=viewset.__name__):
+                response = self._request(
+                    "post",
+                    viewset.as_view({"post": "preview"}),
+                    {
+                        "hostIds": [self.host.id],
+                        "workerPoolId": self.worker_pool.id,
+                        **payload,
+                    },
+                )
+                self.assertEqual(response.status_code, 200, response.data)
+                self.assertEqual(
+                    response.data["data"]["targets"][0]["hostId"], self.host.id
+                )
+                self.assertTrue(response.data["data"]["confirmationFingerprint"])
+                self.assertTrue(response.data["data"]["contentSummary"])
+                self.assertNotIn("commandContent", str(response.data["data"]))
+                self.assertNotIn("playbookContent", str(response.data["data"]))
+                self.assertEqual(WorkflowRun.objects.count(), 0)
+
+    def test_quick_run_accepts_unchanged_confirmation(self):
+        payload = {
+            "commandType": "linux_shell",
+            "commandContent": "uptime",
+            "hostIds": [self.host.id],
+            "workerPoolId": self.worker_pool.id,
+        }
+        preview = self._request(
+            "post",
+            QuickCommandRunViewSet.as_view({"post": "preview"}),
+            payload,
+        )
+        self.assertEqual(preview.status_code, 200, preview.data)
+        run = self._request(
+            "post",
+            QuickCommandRunViewSet.as_view({"post": "create"}),
+            {
+                **payload,
+                "expectedConfirmationFingerprint": preview.data["data"][
+                    "confirmationFingerprint"
+                ],
+            },
+        )
+        self.assertEqual(run.status_code, 200, run.data)
+
+    def test_module_run_rejects_resource_risk_changed_after_preview(self):
+        payload = {
+            "moduleVersionId": self.module_version.id,
+            "hostIds": [self.host.id],
+            "workerPoolId": self.worker_pool.id,
+        }
+        preview = self._request(
+            "post",
+            ModuleRunViewSet.as_view({"post": "preview"}),
+            payload,
+        )
+        self.assertEqual(preview.status_code, 200, preview.data)
+        CommandAtom.objects.filter(pk=self.module_version.command_id).update(
+            risk_level=CommandAtom.RiskLevel.HIGH,
+        )
+        run = self._request(
+            "post",
+            ModuleRunViewSet.as_view({"post": "create"}),
+            {
+                **payload,
+                "expectedConfirmationFingerprint": preview.data["data"][
+                    "confirmationFingerprint"
+                ],
+            },
+        )
+        self.assertEqual(run.status_code, 400, run.data)
+        self.assertFalse(WorkflowRun.objects.exists())
+
+    def test_quick_run_rejects_changed_preview_targets(self):
+        response = self._request(
+            "post",
+            QuickCommandRunViewSet.as_view({"post": "create"}),
+            {
+                "commandType": "linux_shell",
+                "commandContent": "uptime",
+                "hostIds": [self.host.id],
+                "expectedTargetIds": [],
+            },
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertFalse(WorkflowRun.objects.exists())
+
     def test_security_stats_view(self):
         before = SecurityRule.objects.filter(enabled=True).count()
         SecurityRule.objects.create(pattern="mkfs.test", enabled=True)
@@ -164,7 +526,6 @@ class OpsExtensionApiTests(TestCase):
                 "name": "测试网关",
                 "address": "127.0.0.1:22",
                 "cloud": "私有云",
-                "network": "10.0.0.0/16",
                 "auth_type": "key",
                 "username": "ops",
                 "secret": "PRIVATE-KEY",
@@ -175,6 +536,20 @@ class OpsExtensionApiTests(TestCase):
         self.assertNotEqual(gateway.secret_encrypted, "PRIVATE-KEY")
         self.assertTrue(gateway.secret_encrypted)
         self.assertNotIn("secret", response.data["data"])
+        event = DomainAuditEvent.objects.get(
+            action="jobs.gateway.create", resource_id=str(gateway.pk)
+        )
+        self.assertEqual(event.after["name"], "测试网关")
+        self.assertNotIn("secret", str(event.after))
+        self.assertNotIn("PRIVATE-KEY", str(event.after))
+
+    def test_gateway_rejects_unused_auto_network_rule(self):
+        response = self._request(
+            "post",
+            GatewayViewSet.as_view({"post": "create"}),
+            {"name": "bad-gateway", "address": "10.0.0.1:22", "network": "10.0.0.0/16"},
+        )
+        self.assertEqual(response.status_code, 400)
 
     # ---------- Playbook ----------
 
@@ -241,35 +616,89 @@ class OpsExtensionApiTests(TestCase):
         response = self._request("get", DashboardStatsView.as_view())
         data = response.data["data"]
         self.assertEqual(data["todayExecutions"], 0)
-        self.assertEqual(data["successRate"], 100.0)
+        self.assertEqual(data["finishedExecutions"], 0)
+        self.assertIsNone(data["successRate"])
+        self.assertIsNone(data["avgResponseSeconds"])
 
         response = self._request("get", DashboardRecentView.as_view())
         self.assertEqual(response.data["data"], [])
 
+    def test_dashboard_domain_filters_task_runs_and_scheduled_count(self):
+        task_run = WorkflowRun.objects.create(
+            worker_pool=self.worker_pool,
+            trigger_type=WorkflowRun.TriggerType.SCHEDULED,
+            run_domain=WorkflowRun.RunDomain.TASK,
+        )
+        WorkflowRun.objects.create(
+            worker_pool=self.worker_pool,
+            trigger_type=WorkflowRun.TriggerType.MANUAL,
+            run_domain=WorkflowRun.RunDomain.OPS,
+        )
+
+        stats = self._request("get", DashboardStatsView.as_view(), {"domain": "task"})
+        recent = self._request("get", DashboardRecentView.as_view(), {"domain": "task"})
+
+        self.assertEqual(stats.data["data"]["todayExecutions"], 1)
+        self.assertEqual(stats.data["data"]["scheduledExecutions"], 1)
+        self.assertEqual([item["id"] for item in recent.data["data"]], [task_run.id])
+        self.assertEqual(recent.data["data"][0]["name"], f"任务运行 #{task_run.id}")
+        self.assertEqual(stats.data["data"]["finishedExecutions"], 0)
+        self.assertIsNone(stats.data["data"]["successRate"])
+
+    def test_dashboard_success_rate_uses_finished_runs_only(self):
+        WorkflowRun.objects.create(
+            worker_pool=self.worker_pool,
+            run_domain=WorkflowRun.RunDomain.TASK,
+            status=WorkflowRun.Status.SUCCESS,
+            duration_ms=2300,
+        )
+        WorkflowRun.objects.create(
+            worker_pool=self.worker_pool,
+            run_domain=WorkflowRun.RunDomain.TASK,
+            status=WorkflowRun.Status.RUNNING,
+        )
+
+        response = self._request(
+            "get", DashboardStatsView.as_view(), {"domain": "task"}
+        )
+        self.assertEqual(response.data["data"]["todayExecutions"], 2)
+        self.assertEqual(response.data["data"]["finishedExecutions"], 1)
+        self.assertEqual(response.data["data"]["successRate"], 100.0)
+        self.assertEqual(response.data["data"]["avgResponseSeconds"], 2.3)
+
     # ---------- 配置 ----------
 
-    def test_engine_and_notify_settings_roundtrip(self):
+    def test_engine_settings_roundtrip(self):
         response = self._request("get", EngineSettingsView.as_view())
-        self.assertEqual(response.data["data"]["default_user"], "root")
+        self.assertEqual(
+            set(response.data["data"]),
+            {
+                "timeout",
+                "forks",
+                "host_strategy",
+                "serial_batch",
+                "max_fail_percentage",
+            },
+        )
+        self.assertEqual(response.data["data"]["timeout"], 300)
 
         response = self._request(
             "put",
             EngineSettingsView.as_view(),
-            {"default_user": "ops", "forks": 20, "host_key_checking": False},
+            {
+                "timeout": 180,
+                "forks": 20,
+                "host_strategy": "rolling",
+                "serial_batch": 4,
+                "max_fail_percentage": 25,
+            },
         )
         data = response.data["data"]
-        self.assertEqual(data["default_user"], "ops")
+        self.assertEqual(data["timeout"], 180)
         self.assertEqual(data["forks"], 20)
-        self.assertFalse(data["host_key_checking"])
-
-        response = self._request(
-            "put",
-            NotifySettingsView.as_view(),
-            {"webhook_url": "https://example.com/hook", "webhook_secret": "s3cret"},
-        )
-        data = response.data["data"]
-        self.assertEqual(data["webhook_url"], "https://example.com/hook")
-        self.assertEqual(data["webhook_secret"], "s3cret")
+        self.assertEqual(data["host_strategy"], "rolling")
+        self.assertEqual(data["serial_batch"], 4)
+        self.assertEqual(data["max_fail_percentage"], 25)
 
     # ---------- Playbook 资产预校验 ----------
 
@@ -406,6 +835,21 @@ class GatewayExecutionTests(OpsExtensionApiTests):
         run = WorkflowRun.objects.latest("id")
         self.assertEqual(run.input_vars.get("gateway_id"), gateway.id)
 
+    def test_quick_preview_shows_explicit_gateway(self):
+        gateway = self._create_gateway()
+        response = self._request(
+            "post",
+            QuickCommandRunViewSet.as_view({"post": "preview"}),
+            {
+                "commandType": CommandVersion.CommandType.LINUX_SHELL,
+                "commandContent": "uptime",
+                "hostIds": [self.host.id],
+                "gatewayId": gateway.id,
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"]["gatewayName"], gateway.name)
+
     def test_quick_command_run_without_gateway_keeps_local_direct(self):
         response = self._request(
             "post",
@@ -420,10 +864,8 @@ class GatewayExecutionTests(OpsExtensionApiTests):
         run = WorkflowRun.objects.latest("id")
         self.assertNotIn("gateway_id", run.input_vars or {})
 
-    def test_host_default_gateway_is_frozen_in_run_snapshot(self):
-        gateway = self._create_gateway()
-        self.host.default_gateway = gateway
-        self.host.save(update_fields=("default_gateway", "updated_at"))
+    def test_run_snapshot_has_no_implicit_gateway(self):
+        self._create_gateway()
         response = self._request(
             "post",
             QuickCommandRunViewSet.as_view({"post": "create"}),
@@ -435,7 +877,7 @@ class GatewayExecutionTests(OpsExtensionApiTests):
         )
         self.assertEqual(response.status_code, 200, response.data)
         run = WorkflowRun.objects.latest("id")
-        self.assertEqual(run.target_snapshot[0]["variables"]["gateway_ref_id"], gateway.id)
+        self.assertNotIn("gateway_ref_id", run.target_snapshot[0]["variables"])
 
     def test_quick_command_run_persists_host_execution_options(self):
         response = self._request(
@@ -538,7 +980,7 @@ class GatewayExecutionTests(OpsExtensionApiTests):
             worker_pool=self.worker_pool,
             trigger_type=WorkflowRun.TriggerType.MANUAL,
             status=WorkflowRun.Status.FAILED,
-            target_snapshot=[{"host_id": self.host.id, "hostname": "web01"}],
+            target_snapshot=snapshot_targets(actor=self.user, targets=[self.host]),
             graph_snapshot=self.MINIMAL_GRAPH,
             queue_timeout_seconds=60,
         )
@@ -551,7 +993,8 @@ class GatewayExecutionTests(OpsExtensionApiTests):
         retry_run = WorkflowRun.objects.latest("id")
         self.assertEqual(response.data["data"]["id"], retry_run.id)
         self.assertNotEqual(retry_run.id, run.id)
-        # T04/T13：克隆经 snapshot_targets 重新解析，目标主机不变且为完整非敏感快照
+        # 克隆保留完整历史快照，仅重新校验当前权限和可用状态。
+        self.assertEqual(retry_run.target_snapshot, run.target_snapshot)
         self.assertEqual(
             [(t["host_id"], t["hostname"]) for t in retry_run.target_snapshot],
             [(t["host_id"], t["hostname"]) for t in run.target_snapshot],
@@ -565,7 +1008,7 @@ class GatewayExecutionTests(OpsExtensionApiTests):
             worker_pool=self.worker_pool,
             trigger_type=WorkflowRun.TriggerType.MANUAL,
             status=WorkflowRun.Status.SUCCESS,
-            target_snapshot=[{"host_id": self.host.id, "hostname": "web01"}],
+            target_snapshot=snapshot_targets(actor=self.user, targets=[self.host]),
             graph_snapshot=self.MINIMAL_GRAPH,
             queue_timeout_seconds=60,
         )
@@ -578,7 +1021,8 @@ class GatewayExecutionTests(OpsExtensionApiTests):
         rerun_run = WorkflowRun.objects.latest("id")
         self.assertEqual(response.data["data"]["id"], rerun_run.id)
         self.assertNotEqual(rerun_run.id, run.id)
-        # T04/T13：克隆经 snapshot_targets 重新解析，目标主机不变且为完整非敏感快照
+        # 克隆保留完整历史快照，仅重新校验当前权限和可用状态。
+        self.assertEqual(rerun_run.target_snapshot, run.target_snapshot)
         self.assertEqual(
             [(t["host_id"], t["hostname"]) for t in rerun_run.target_snapshot],
             [(t["host_id"], t["hostname"]) for t in run.target_snapshot],
@@ -647,24 +1091,16 @@ class GatewayExecutionTests(OpsExtensionApiTests):
         )
         self.assertEqual(group_vars, {})
         self.assertEqual(private_dir, "")
-        self.assertIn(
-            "10.0.0.1", hosts[0]["variables"]["ansible_ssh_common_args"]
-        )
-        self.assertIn(
-            "10.0.0.1", hosts[1]["variables"]["ansible_ssh_common_args"]
-        )
+        self.assertIn("10.0.0.1", hosts[0]["variables"]["ansible_ssh_common_args"])
+        self.assertIn("10.0.0.1", hosts[1]["variables"]["ansible_ssh_common_args"])
 
     def test_prepare_host_gateway_without_gateway_keeps_direct(self):
         # 未选网关时一律直连：不做 CIDR 自动匹配，也不读主机默认网关
-        self._create_gateway(network="10.60.0.0/16")
+        self._create_gateway()
         hosts, group_vars, private_dir = prepare_host_gateway_execution(
             [
                 {"hostname": "inner", "address": "10.60.1.5", "connection_type": "ssh"},
-                {
-                    "hostname": "with-default",
-                    "connection_type": "ssh",
-                    "variables": {"gateway_ref_id": 999},
-                },
+                {"hostname": "another", "connection_type": "ssh"},
             ]
         )
         self.assertEqual(group_vars, {})
@@ -680,26 +1116,30 @@ class GatewayExecutionTests(OpsExtensionApiTests):
                 {"gateway_id": gateway.id},
             )
 
-    def test_direct_mode_bypasses_host_default_gateway(self):
-        host_gateway = self._create_gateway()
-        hosts, group_vars, private_dir = prepare_host_gateway_execution(
-            [
-                {
-                    "hostname": "web",
-                    "connection_type": "ssh",
-                    "variables": {"gateway_ref_id": host_gateway.id},
-                }
-            ],
-            {"bypass_host_gateway": True},
+    def test_explicit_gateway_is_not_silently_bypassed(self):
+        gateway = self._create_gateway(address="10.0.0.1:22")
+        hosts, _, private_dir = prepare_host_gateway_execution(
+            [{"hostname": "web", "connection_type": "ssh", "variables": {}}],
+            {"gateway_id": gateway.id, "bypass_host_gateway": True},
         )
-        self.assertEqual(group_vars, {})
+        self.assertIn("ansible_ssh_common_args", hosts[0]["variables"])
         self.assertEqual(private_dir, "")
-        self.assertNotIn("ansible_ssh_common_args", hosts[0].get("variables", {}))
 
     def test_module_run_with_gateway_sets_input_vars(self):
         gateway = self._create_gateway()
-        atom = CommandAtom.objects.create(name="Gateway shell", code="gateway-shell", resource_kind="module", status="published")
-        version = CommandVersion.objects.create(command=atom, version=1, status="published", command_type="ansible_module", content="ansible.builtin.shell")
+        atom = CommandAtom.objects.create(
+            name="Gateway shell",
+            code="gateway-shell",
+            resource_kind="module",
+            status="published",
+        )
+        version = CommandVersion.objects.create(
+            command=atom,
+            version=1,
+            status="published",
+            command_type="ansible_module",
+            content="ansible.builtin.shell",
+        )
         response = self._request(
             "post",
             ModuleRunViewSet.as_view({"post": "create"}),

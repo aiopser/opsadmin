@@ -1,9 +1,54 @@
 """Pure graph validation and canonical digest."""
 import hashlib
 import json
+import re
 from collections import defaultdict, deque
 
 from common.workflow.node_types import CONTROL_NODE_TYPES, NODE_TYPES
+from common.workflow.native_parameters import native_variable_values
+
+
+def _output_extractor_errors(config, key):
+    rules = config.get("outputExtractors")
+    if rules is None:
+        return []
+    error = f"节点 {key} 的输出提取规则无效"
+    if not isinstance(rules, list):
+        return [error + "：必须为数组"]
+    names = set()
+    for rule in rules:
+        if (
+            not isinstance(rule, dict)
+            or not isinstance(rule.get("name"), str)
+            or not rule["name"].strip()
+        ):
+            return [error + "：每条规则需要变量名"]
+        if rule["name"] in names or rule["name"] == "hosts":
+            return [error + "：变量名重复或为保留名称 hosts"]
+        names.add(rule["name"])
+        try:
+            if not isinstance(rule.get("pattern"), str) or not rule["pattern"]:
+                return [error + "：需要正则表达式"]
+            pattern = re.compile(rule["pattern"])
+            group = rule.get("group", 1)
+            if (
+                isinstance(group, bool)
+                or not isinstance(group, int)
+                or group < 0
+                or group > pattern.groups
+            ):
+                return [error + "：捕获组不存在"]
+        except re.error:
+            return [error + "：正则表达式错误"]
+        if rule.get("type", "string") not in {
+            "string",
+            "json",
+            "integer",
+            "number",
+            "boolean",
+        }:
+            return [error + "：不支持的输出类型"]
+    return []
 
 
 def validate_graph(graph):
@@ -57,6 +102,31 @@ def validate_graph(graph):
     for node in nodes:
         key = str(node.get("id") or "")
         node_type = node.get("type")
+        forbidden_targets = {
+            "hostIds",
+            "groupIds",
+            "tagIds",
+            "targetSelector",
+            "host_ids",
+            "group_ids",
+            "tag_ids",
+        }
+        config = node.get("config") or {}
+        if isinstance(config, dict):
+            errors.extend(_output_extractor_errors(config, key))
+            if node_type == "playbook" and config.get("hostPolicy", "native") not in {
+                "native",
+                "platform",
+            }:
+                errors.append(f"节点 {key} 的 hostPolicy 必须是 native 或 platform")
+            try:
+                native_variable_values(node_type, config)
+            except ValueError as exc:
+                errors.append(f"节点 {key}：{exc}")
+        if forbidden_targets.intersection(node) or (
+            isinstance(config, dict) and forbidden_targets.intersection(config)
+        ):
+            errors.append(f"节点 {key} 不能重新指定目标主机；目标由本次运行统一确定")
         if sum(bool(edge.get("isDefault")) for edge in outgoing[key]) > 1:
             errors.append(f"节点 {key} 最多允许一条默认出口")
         if node_type != "start" and not incoming[key]:
@@ -79,7 +149,7 @@ def validate_graph(graph):
             errors.append(f"结束节点 {key} 不能有出口")
         if node_type not in CONTROL_NODE_TYPES:
             timeout = node.get("timeoutSeconds")
-            if type(timeout) is not int or timeout <= 0:
+            if timeout is not None and (type(timeout) is not int or timeout <= 0):
                 errors.append(f"节点 {key} 的超时时间必须大于 0")
 
     if len(starts) == 1:

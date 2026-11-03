@@ -56,6 +56,24 @@ export const generatedRoutes: GeneratedRoute[] = [
           title: 'audit_event',
           i18nKey: 'route.audit_event'
         }
+      },
+      {
+        name: 'audit_login',
+        path: '/audit/login',
+        component: 'view.audit_login',
+        meta: {
+          title: 'audit_login',
+          i18nKey: 'route.audit_login'
+        }
+      },
+      {
+        name: 'audit_operation',
+        path: '/audit/operation',
+        component: 'view.audit_operation',
+        meta: {
+          title: 'audit_operation',
+          i18nKey: 'route.audit_operation'
+        }
       }
     ]
   },
@@ -96,6 +114,15 @@ export const generatedRoutes: GeneratedRoute[] = [
             }
           },
           {
+            name: 'automation_resources_git',
+            path: '/automation/resources/git',
+            component: 'view.automation_resources_git',
+            meta: {
+              title: 'automation_resources_git',
+              i18nKey: 'route.automation_resources_git'
+            }
+          },
+          {
             name: 'automation_resources_jenkins',
             path: '/automation/resources/jenkins',
             component: 'view.automation_resources_jenkins',
@@ -129,6 +156,15 @@ export const generatedRoutes: GeneratedRoute[] = [
             meta: {
               title: 'automation_resources_playbook',
               i18nKey: 'route.automation_resources_playbook'
+            }
+          },
+          {
+            name: 'automation_resources_provisioning',
+            path: '/automation/resources/provisioning',
+            component: 'view.automation_resources_provisioning',
+            meta: {
+              title: 'automation_resources_provisioning',
+              i18nKey: 'route.automation_resources_provisioning'
             }
           },
           {
@@ -169,6 +205,15 @@ export const generatedRoutes: GeneratedRoute[] = [
             }
           },
           {
+            name: 'automation_resources_git',
+            path: '/automation/resources/git',
+            component: 'view.automation_resources_git',
+            meta: {
+              title: 'automation_resources_git',
+              i18nKey: 'route.automation_resources_git'
+            }
+          },
+          {
             name: 'automation_resources_jenkins',
             path: '/automation/resources/jenkins',
             component: 'view.automation_resources_jenkins',
@@ -202,6 +247,15 @@ export const generatedRoutes: GeneratedRoute[] = [
             meta: {
               title: 'automation_resources_playbook',
               i18nKey: 'route.automation_resources_playbook'
+            }
+          },
+          {
+            name: 'automation_resources_provisioning',
+            path: '/automation/resources/provisioning',
+            component: 'view.automation_resources_provisioning',
+            meta: {
+              title: 'automation_resources_provisioning',
+              i18nKey: 'route.automation_resources_provisioning'
             }
           },
           {
@@ -269,6 +323,15 @@ export const generatedRoutes: GeneratedRoute[] = [
         meta: {
           title: 'cmdb_resource',
           i18nKey: 'route.cmdb_resource'
+        }
+      },
+      {
+        name: 'cmdb_source',
+        path: '/cmdb/source',
+        component: 'view.cmdb_source',
+        meta: {
+          title: 'cmdb_source',
+          i18nKey: 'route.cmdb_source'
         }
       }
     ]
@@ -349,15 +412,6 @@ export const generatedRoutes: GeneratedRoute[] = [
         }
       },
       {
-        name: 'manage_log',
-        path: '/manage/log',
-        component: 'view.manage_log',
-        meta: {
-          title: 'manage_log',
-          i18nKey: 'route.manage_log'
-        }
-      },
-      {
         name: 'manage_menu',
         path: '/manage/menu',
         component: 'view.manage_menu',
@@ -368,6 +422,15 @@ export const generatedRoutes: GeneratedRoute[] = [
           order: 3,
           roles: ['R_ADMIN'],
           keepAlive: true
+        }
+      },
+      {
+        name: 'manage_notification',
+        path: '/manage/notification',
+        component: 'view.manage_notification',
+        meta: {
+          title: 'manage_notification',
+          i18nKey: 'route.manage_notification'
         }
       },
       {
@@ -410,6 +473,71 @@ export const generatedRoutes: GeneratedRoute[] = [
     ]
   },
   {
+    name: 'monitoring',
+    path: '/monitoring',
+    component: 'layout.base',
+    meta: {
+      title: 'monitoring',
+      i18nKey: 'route.monitoring'
+    },
+    children: [
+      {
+        name: 'monitoring_consul',
+        path: '/monitoring/consul',
+        component: 'view.monitoring_consul',
+        meta: {
+          title: 'monitoring_consul',
+          i18nKey: 'route.monitoring_consul'
+        }
+      },
+      {
+        name: 'monitoring_consul-template',
+        path: '/monitoring/consul-template',
+        component: 'view.monitoring_consul-template',
+        meta: {
+          title: 'monitoring_consul-template',
+          i18nKey: 'route.monitoring_consul-template'
+        }
+      },
+      {
+        name: 'monitoring_integrations',
+        path: '/monitoring/integrations',
+        component: 'view.monitoring_integrations',
+        meta: {
+          title: 'monitoring_integrations',
+          i18nKey: 'route.monitoring_integrations'
+        }
+      },
+      {
+        name: 'monitoring_policies',
+        path: '/monitoring/policies',
+        component: 'view.monitoring_policies',
+        meta: {
+          title: 'monitoring_policies',
+          i18nKey: 'route.monitoring_policies'
+        }
+      },
+      {
+        name: 'monitoring_security',
+        path: '/monitoring/security',
+        component: 'view.monitoring_security',
+        meta: {
+          title: 'monitoring_security',
+          i18nKey: 'route.monitoring_security'
+        }
+      },
+      {
+        name: 'monitoring_targets',
+        path: '/monitoring/targets',
+        component: 'view.monitoring_targets',
+        meta: {
+          title: 'monitoring_targets',
+          i18nKey: 'route.monitoring_targets'
+        }
+      }
+    ]
+  },
+  {
     name: 'ops',
     path: '/ops',
     component: 'layout.base',
@@ -443,6 +571,45 @@ export const generatedRoutes: GeneratedRoute[] = [
         meta: {
           title: 'ops_quick-execute',
           i18nKey: 'route.ops_quick-execute'
+        },
+        children: [
+          {
+            name: 'ops_quick-execute_module',
+            path: '/ops/quick-execute/module',
+            component: 'view.ops_quick-execute_module',
+            meta: {
+              title: 'ops_quick-execute_module',
+              i18nKey: 'route.ops_quick-execute_module'
+            }
+          },
+          {
+            name: 'ops_quick-execute_playbook',
+            path: '/ops/quick-execute/playbook',
+            component: 'view.ops_quick-execute_playbook',
+            meta: {
+              title: 'ops_quick-execute_playbook',
+              i18nKey: 'route.ops_quick-execute_playbook'
+            }
+          },
+          {
+            name: 'ops_quick-execute_script',
+            path: '/ops/quick-execute/script',
+            component: 'view.ops_quick-execute_script',
+            meta: {
+              title: 'ops_quick-execute_script',
+              i18nKey: 'route.ops_quick-execute_script'
+            }
+          }
+        ]
+      },
+      {
+        name: 'ops_run-detail',
+        path: '/ops/run-detail/:id',
+        component: 'view.ops_run-detail',
+        meta: {
+          title: 'ops_run-detail',
+          i18nKey: 'route.ops_run-detail',
+          hideInMenu: true
         }
       },
       {
@@ -723,12 +890,39 @@ export const generatedRoutes: GeneratedRoute[] = [
         }
       },
       {
+        name: 'task_execution-history',
+        path: '/task/execution-history',
+        component: 'view.task_execution-history',
+        meta: {
+          title: 'task_execution-history',
+          i18nKey: 'route.task_execution-history'
+        }
+      },
+      {
         name: 'task_flow-design',
         path: '/task/flow-design',
         component: 'view.task_flow-design',
         meta: {
           title: 'task_flow-design',
           i18nKey: 'route.task_flow-design'
+        }
+      },
+      {
+        name: 'task_provisioning',
+        path: '/task/provisioning',
+        component: 'view.task_provisioning',
+        meta: {
+          title: 'task_provisioning',
+          i18nKey: 'route.task_provisioning'
+        }
+      },
+      {
+        name: 'task_provisioning-operations',
+        path: '/task/provisioning-operations',
+        component: 'view.task_provisioning-operations',
+        meta: {
+          title: 'task_provisioning-operations',
+          i18nKey: 'route.task_provisioning-operations'
         }
       },
       {
@@ -796,6 +990,15 @@ export const generatedRoutes: GeneratedRoute[] = [
       title: 'user-center',
       i18nKey: 'route.user-center',
       hideInMenu: true
+    }
+  },
+  {
+    name: 'wiki',
+    path: '/wiki',
+    component: 'layout.base$view.wiki',
+    meta: {
+      title: 'wiki',
+      i18nKey: 'route.wiki'
     }
   }
 ];

@@ -1,0 +1,435 @@
+[
+  {
+    "service": "monitoring",
+    "name": "getConsulConnections",
+    "method": "get",
+    "url": "/api/v1/consul/connections"
+  },
+  {
+    "service": "monitoring",
+    "name": "saveConsulConnection",
+    "method": "post",
+    "url": "/api/v1/consul/connections",
+    "data": {}
+  },
+  {
+    "service": "monitoring",
+    "name": "deleteConsulConnection",
+    "method": "delete",
+    "url": "/api/v1/consul/connections/7"
+  },
+  {
+    "service": "monitoring",
+    "name": "testConsulConnection",
+    "method": "post",
+    "url": "/api/v1/consul/connections/7/test"
+  },
+  {
+    "service": "monitoring",
+    "name": "getConsulServices",
+    "method": "get",
+    "url": "/api/v1/consul/connections/7/services"
+  },
+  {
+    "service": "monitoring",
+    "name": "getMonitoringTargets",
+    "method": "get",
+    "url": "/api/v1/monitoring/targets",
+    "params": {
+      "pageNum": 2,
+      "pageSize": 20,
+      "search": "example"
+    }
+  },
+  {
+    "service": "monitoring",
+    "name": "saveMonitoringTarget",
+    "method": "post",
+    "url": "/api/v1/monitoring/targets",
+    "data": {}
+  },
+  {
+    "service": "monitoring",
+    "name": "deleteMonitoringTarget",
+    "method": "delete",
+    "url": "/api/v1/monitoring/targets/7"
+  },
+  {
+    "service": "monitoring",
+    "name": "previewMonitoringTarget",
+    "method": "get",
+    "url": "/api/v1/monitoring/targets/7/preview"
+  },
+  {
+    "service": "monitoring",
+    "name": "syncMonitoringTarget",
+    "method": "post",
+    "url": "/api/v1/monitoring/targets/7/sync"
+  },
+  {
+    "service": "monitoring",
+    "name": "getMonitoringRecords",
+    "method": "get",
+    "url": "/api/v1/monitoring/sync-records",
+    "params": {
+      "target": 7,
+      "pageNum": 2,
+      "pageSize": 20
+    }
+  },
+  {
+    "service": "monitoring",
+    "name": "getPrometheusConfig",
+    "method": "get",
+    "url": "/api/v1/monitoring/connections/7/prometheus-config"
+  },
+  {
+    "service": "monitoring",
+    "name": "getMonitoringAlertRules",
+    "method": "get",
+    "url": "/api/v1/monitoring/connections/7/alert-rules"
+  },
+  {
+    "service": "monitoring",
+    "name": "getConsulDatacenters",
+    "method": "get",
+    "url": "/api/v1/consul/connections/7/datacenters"
+  },
+  {
+    "service": "monitoring",
+    "name": "getCatalogServices",
+    "method": "get",
+    "url": "/api/v1/consul/connections/7/catalog-services",
+    "params": {
+      "datacenter": "dc1"
+    }
+  },
+  {
+    "service": "monitoring",
+    "name": "getCatalogInstances",
+    "method": "get",
+    "url": "/api/v1/consul/connections/7/catalog-instances",
+    "params": {
+      "datacenter": "dc1",
+      "service": "node",
+      "pageNum": 2,
+      "pageSize": 20
+    }
+  },
+  {
+    "service": "monitoring",
+    "name": "previewHostImport",
+    "method": "post",
+    "url": "/api/v1/monitoring/targets/host-import-preview",
+    "data": {}
+  },
+  {
+    "service": "monitoring",
+    "name": "commitHostImport",
+    "method": "post",
+    "url": "/api/v1/monitoring/targets/host-import",
+    "data": {
+      "preview_token": "synthetic"
+    }
+  },
+  {
+    "service": "monitoring",
+    "name": "getConsulKvKeys",
+    "method": "get",
+    "url": "/api/v1/consul/connections/7/kv",
+    "params": {
+      "prefix": "example/"
+    }
+  },
+  {
+    "service": "monitoring",
+    "name": "getConsulKvValue",
+    "method": "get",
+    "url": "/api/v1/consul/connections/7/kv-value",
+    "params": {
+      "key": "example/key"
+    }
+  },
+  {
+    "service": "monitoring",
+    "name": "updateConsulKv",
+    "method": "post",
+    "url": "/api/v1/consul/connections/7/kv-write",
+    "data": {
+      "key": "example/key",
+      "value": "synthetic"
+    }
+  },
+  {
+    "service": "monitoring",
+    "name": "deleteConsulKv",
+    "method": "delete",
+    "url": "/api/v1/consul/connections/7/kv-delete",
+    "data": {
+      "key": "example/key"
+    }
+  },
+  {
+    "service": "monitoring",
+    "name": "getConsulTemplates",
+    "method": "get",
+    "url": "/api/v1/consul/templates"
+  },
+  {
+    "service": "monitoring",
+    "name": "saveConsulTemplate",
+    "method": "post",
+    "url": "/api/v1/consul/templates",
+    "data": {}
+  },
+  {
+    "service": "monitoring",
+    "name": "deleteConsulTemplate",
+    "method": "delete",
+    "url": "/api/v1/consul/templates/7"
+  },
+  {
+    "service": "monitoring",
+    "name": "deployConsulTemplate",
+    "method": "post",
+    "url": "/api/v1/consul/templates/7/deploy",
+    "data": {
+      "read_id": "00000000-0000-0000-0000-000000000001"
+    }
+  },
+  {
+    "service": "monitoring",
+    "name": "requestConsulRemoteRead",
+    "method": "post",
+    "url": "/api/v1/consul/templates/read-remote",
+    "data": {
+      "host": 7,
+      "path": "/etc/consul-template/config/app.hcl"
+    }
+  },
+  {
+    "service": "monitoring",
+    "name": "getConsulRemoteRead",
+    "method": "get",
+    "url": "/api/v1/consul/templates/remote-reads/00000000-0000-0000-0000-000000000001"
+  },
+  {
+    "service": "monitoring",
+    "name": "compareConsulRemoteRead",
+    "method": "post",
+    "url": "/api/v1/consul/templates/compare-remote",
+    "data": {
+      "read_id": "00000000-0000-0000-0000-000000000001",
+      "content": "synthetic"
+    }
+  },
+  {
+    "service": "monitoring",
+    "name": "saveConsulConnection",
+    "method": "put",
+    "url": "/api/v1/consul/connections/7",
+    "data": {}
+  },
+  {
+    "service": "monitoring",
+    "name": "saveMonitoringTarget",
+    "method": "put",
+    "url": "/api/v1/monitoring/targets/7",
+    "data": {}
+  },
+  {
+    "service": "monitoring",
+    "name": "saveConsulTemplate",
+    "method": "put",
+    "url": "/api/v1/consul/templates/7",
+    "data": {}
+  },
+  {
+    "service": "monitoring",
+    "name": "syncMonitoringTarget",
+    "method": "post",
+    "url": "/api/v1/monitoring/targets/7/deregister"
+  },
+  {
+    "service": "enrollment",
+    "name": "getEnrollmentPolicies",
+    "method": "get",
+    "url": "/api/v1/monitoring/enrollment-policies",
+    "params": {
+      "pageNum": 2,
+      "pageSize": 20,
+      "search": "example"
+    }
+  },
+  {
+    "service": "enrollment",
+    "name": "saveEnrollmentPolicy",
+    "method": "post",
+    "url": "/api/v1/monitoring/enrollment-policies",
+    "data": {}
+  },
+  {
+    "service": "enrollment",
+    "name": "deleteEnrollmentPolicy",
+    "method": "delete",
+    "url": "/api/v1/monitoring/enrollment-policies/7"
+  },
+  {
+    "service": "enrollment",
+    "name": "previewEnrollmentPolicy",
+    "method": "get",
+    "url": "/api/v1/monitoring/enrollment-policies/7/preview"
+  },
+  {
+    "service": "enrollment",
+    "name": "confirmEnrollmentPolicy",
+    "method": "post",
+    "url": "/api/v1/monitoring/enrollment-policies/7/run",
+    "data": {
+      "preview_token": "synthetic"
+    }
+  },
+  {
+    "service": "enrollment",
+    "name": "pauseEnrollmentPolicy",
+    "method": "post",
+    "url": "/api/v1/monitoring/enrollment-policies/7/pause"
+  },
+  {
+    "service": "enrollment",
+    "name": "getEnrollmentRuns",
+    "method": "get",
+    "url": "/api/v1/monitoring/enrollment-runs",
+    "params": {
+      "policy": 7,
+      "pageNum": 2,
+      "pageSize": 20
+    }
+  },
+  {
+    "service": "enrollment",
+    "name": "saveEnrollmentPolicy",
+    "method": "put",
+    "url": "/api/v1/monitoring/enrollment-policies/7",
+    "data": {}
+  },
+  {
+    "service": "enrollment",
+    "name": "confirmEnrollmentPolicy",
+    "method": "post",
+    "url": "/api/v1/monitoring/enrollment-policies/7/enable",
+    "data": {
+      "preview_token": "synthetic"
+    }
+  },
+  {
+    "service": "integrations",
+    "name": "fetchJumpServers",
+    "method": "get",
+    "url": "/api/v1/integrations/jumpserver/connections",
+    "params": {
+      "search": "example"
+    }
+  },
+  {
+    "service": "integrations",
+    "name": "saveJumpServer",
+    "method": "post",
+    "url": "/api/v1/integrations/jumpserver/connections",
+    "data": {}
+  },
+  {
+    "service": "integrations",
+    "name": "deleteJumpServer",
+    "method": "delete",
+    "url": "/api/v1/integrations/jumpserver/connections/7"
+  },
+  {
+    "service": "integrations",
+    "name": "testJumpServer",
+    "method": "post",
+    "url": "/api/v1/integrations/jumpserver/connections/7/test"
+  },
+  {
+    "service": "integrations",
+    "name": "previewJumpServer",
+    "method": "post",
+    "url": "/api/v1/integrations/jumpserver/connections/7/preview",
+    "data": {
+      "host_ids": [
+        1,
+        2
+      ]
+    }
+  },
+  {
+    "service": "integrations",
+    "name": "confirmJumpServer",
+    "method": "post",
+    "url": "/api/v1/integrations/jumpserver/connections/7/confirm",
+    "data": {
+      "preview_id": 8
+    }
+  },
+  {
+    "service": "integrations",
+    "name": "fetchJumpServerRecords",
+    "method": "get",
+    "url": "/api/v1/integrations/jumpserver/connections/7/records"
+  },
+  {
+    "service": "integrations",
+    "name": "saveJumpServer",
+    "method": "patch",
+    "url": "/api/v1/integrations/jumpserver/connections/7",
+    "data": {}
+  },
+  {
+    "service": "security",
+    "name": "getSecuritySubscriptions",
+    "method": "get",
+    "url": "/api/v1/security/subscriptions"
+  },
+  {
+    "service": "security",
+    "name": "saveSecuritySubscription",
+    "method": "post",
+    "url": "/api/v1/security/subscriptions",
+    "data": {}
+  },
+  {
+    "service": "security",
+    "name": "collectSecuritySubscription",
+    "method": "post",
+    "url": "/api/v1/security/subscriptions/7/collect"
+  },
+  {
+    "service": "security",
+    "name": "getSecurityAdvisories",
+    "method": "get",
+    "url": "/api/v1/security/advisories",
+    "params": {
+      "pageNum": 2,
+      "pageSize": 10,
+      "sortBy": "published",
+      "order": "desc"
+    }
+  },
+  {
+    "service": "security",
+    "name": "getSecurityCollections",
+    "method": "get",
+    "url": "/api/v1/security/collections",
+    "params": {
+      "pageNum": 1,
+      "pageSize": 30
+    }
+  },
+  {
+    "service": "security",
+    "name": "saveSecuritySubscription",
+    "method": "put",
+    "url": "/api/v1/security/subscriptions/7",
+    "data": {}
+  }
+]

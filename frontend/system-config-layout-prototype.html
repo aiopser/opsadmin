@@ -1,0 +1,849 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>系统配置 · 布局方案</title>
+    <style>
+      /* 独立原型复用 Element Plus 主题令牌；正式落地继承系统主题。 */
+      :root {
+        --el-color-primary: rgb(100 102 255);
+        --el-color-primary-light-9: rgb(245 245 255);
+        --el-text-color-primary: rgb(48 49 51);
+        --el-text-color-regular: rgb(96 98 102);
+        --el-border-color: rgb(220 223 230);
+        --el-border-color-lighter: rgb(235 238 245);
+        --el-bg-color: rgb(255 255 255);
+        --el-fill-color-light: rgb(247 248 250);
+        --el-color-success: rgb(82 151 74);
+        --el-color-warning: rgb(156 102 25);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--el-fill-color-light);
+        color: var(--el-text-color-primary);
+        font:
+          14px/1.6 'Microsoft YaHei',
+          system-ui,
+          sans-serif;
+      }
+      button,
+      input,
+      select {
+        font: inherit;
+        color: inherit;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:disabled {
+        cursor: default;
+        opacity: 0.5;
+      }
+      button:focus-visible,
+      input:focus-visible,
+      select:focus-visible {
+        outline: 2px solid var(--el-color-primary);
+        outline-offset: 3px;
+      }
+      button {
+        border: 1px solid var(--el-border-color);
+        background: var(--el-bg-color);
+        min-height: 32px;
+        padding: 4px 15px;
+        border-radius: 3px;
+      }
+      button:hover:not(:disabled) {
+        color: var(--el-color-primary);
+        border-color: var(--el-color-primary);
+      }
+      .primary {
+        background: var(--el-color-primary);
+        border-color: var(--el-color-primary);
+        color: var(--el-bg-color);
+      }
+      .primary:hover:not(:disabled) {
+        color: var(--el-bg-color);
+      }
+      .link {
+        border: 0;
+        background: none;
+        color: var(--el-color-primary);
+        padding: 4px 6px;
+      }
+      .muted {
+        color: var(--el-text-color-regular);
+        font-size: 12px;
+      }
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+      h1 {
+        font-size: 18px;
+        font-weight: 500;
+      }
+      h2 {
+        font-size: 15px;
+        font-weight: 400;
+      }
+      h3 {
+        font-size: 14px;
+        font-weight: 400;
+      }
+      .shell {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: 200px 1fr;
+      }
+      .app-nav {
+        background: var(--el-bg-color);
+        border-right: 1px solid var(--el-border-color-lighter);
+        padding: 22px 12px;
+      }
+      .brand {
+        font-size: 17px;
+        padding: 0 10px 28px;
+        color: var(--el-color-primary);
+        font-weight: 600;
+      }
+      .menu {
+        padding: 12px 14px;
+        color: var(--el-text-color-regular);
+      }
+      .menu.sub {
+        margin: 4px 0 4px 18px;
+        font-size: 13px;
+      }
+      .menu.active {
+        background: var(--el-color-primary-light-9);
+        color: var(--el-color-primary);
+      }
+      .workspace {
+        min-width: 0;
+      }
+      .topbar {
+        height: 54px;
+        background: var(--el-bg-color);
+        border-bottom: 1px solid var(--el-border-color-lighter);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 24px;
+        font-size: 13px;
+      }
+      .crumb {
+        color: var(--el-text-color-regular);
+      }
+      .crumb span {
+        padding: 0 12px;
+      }
+      .prototype {
+        font-size: 12px;
+        color: var(--el-text-color-regular);
+      }
+      main {
+        padding: 24px;
+        max-width: 1540px;
+        margin: auto;
+      }
+      .page-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+        align-items: center;
+        margin-bottom: 20px;
+      }
+      .page-head p {
+        margin-top: 5px;
+        color: var(--el-text-color-regular);
+        font-size: 13px;
+      }
+      .head-actions {
+        display: flex;
+        gap: 8px;
+        flex-shrink: 0;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 208px minmax(0, 1fr);
+        gap: 16px;
+      }
+      .groups {
+        align-self: stretch;
+        background: var(--el-bg-color);
+        border: 1px solid var(--el-border-color-lighter);
+        padding: 16px 10px;
+      }
+      .nav-title {
+        font-size: 12px;
+        color: var(--el-text-color-regular);
+        padding: 0 12px 12px;
+      }
+      .group {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        border: 0;
+        text-align: left;
+        padding: 12px;
+        margin: 2px 0;
+        gap: 10px;
+      }
+      .group.active {
+        background: var(--el-color-primary-light-9);
+        color: var(--el-color-primary);
+      }
+      .count {
+        font-size: 12px;
+        color: var(--el-text-color-regular);
+        font-variant-numeric: tabular-nums;
+      }
+      .nav-foot {
+        border-top: 1px solid var(--el-border-color-lighter);
+        margin: 14px 12px 0;
+        padding-top: 14px;
+        font-size: 12px;
+        color: var(--el-text-color-regular);
+      }
+      .panel {
+        background: var(--el-bg-color);
+        border: 1px solid var(--el-border-color-lighter);
+        min-width: 0;
+      }
+      .panel-head {
+        padding: 20px 24px;
+        border-bottom: 1px solid var(--el-border-color-lighter);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      .panel-head p {
+        margin-top: 4px;
+        font-size: 12px;
+        color: var(--el-text-color-regular);
+      }
+      .search {
+        width: 220px;
+        min-height: 32px;
+        border: 1px solid var(--el-border-color);
+        padding: 4px 10px;
+        background: var(--el-bg-color);
+      }
+      .fields {
+        padding: 0 24px;
+        min-height: 410px;
+      }
+      .section-title {
+        padding: 20px 0 6px;
+        font-size: 12px;
+        color: var(--el-text-color-regular);
+      }
+      .field {
+        display: grid;
+        grid-template-columns: minmax(160px, 0.75fr) minmax(220px, 1.4fr);
+        gap: 32px;
+        padding: 20px 0;
+        border-bottom: 1px solid var(--el-border-color-lighter);
+      }
+      .field:last-child {
+        border-bottom: 0;
+      }
+      .field-label {
+        padding-top: 5px;
+      }
+      .field-label p {
+        font-size: 12px;
+        color: var(--el-text-color-regular);
+        margin-top: 4px;
+      }
+      .control {
+        max-width: 540px;
+      }
+      .control input:not([type='checkbox']),
+      .control select {
+        width: 100%;
+        height: 34px;
+        padding: 5px 10px;
+        border: 1px solid var(--el-border-color);
+        background: var(--el-bg-color);
+        border-radius: 3px;
+      }
+      .control p {
+        font-size: 12px;
+        margin-top: 6px;
+        color: var(--el-text-color-regular);
+      }
+      .number {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .number input {
+        max-width: 180px;
+        font-variant-numeric: tabular-nums;
+      }
+      .number span {
+        font-size: 13px;
+        color: var(--el-text-color-regular);
+      }
+      .key {
+        display: none;
+        font:
+          11px/1.6 Consolas,
+          monospace;
+        margin-top: 8px;
+        color: var(--el-text-color-regular);
+        overflow-wrap: anywhere;
+      }
+      .show-keys .key {
+        display: block;
+      }
+      .switch-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 34px;
+        cursor: pointer;
+      }
+      .switch-label input {
+        appearance: none;
+        width: 36px;
+        height: 20px;
+        background: var(--el-border-color);
+        border-radius: 12px;
+        position: relative;
+        margin: 0;
+        cursor: pointer;
+      }
+      .switch-label input:before {
+        content: '';
+        position: absolute;
+        width: 16px;
+        height: 16px;
+        left: 2px;
+        top: 2px;
+        border-radius: 50%;
+        background: var(--el-bg-color);
+        transition: transform 0.18s ease-out;
+      }
+      .switch-label input:checked {
+        background: var(--el-color-primary);
+      }
+      .switch-label input:checked:before {
+        transform: translateX(16px);
+      }
+      .control :disabled {
+        background: var(--el-fill-color-light) !important;
+        cursor: not-allowed;
+        opacity: 0.65;
+      }
+      .changed {
+        font-size: 11px;
+        color: var(--el-color-warning);
+        margin-left: 8px;
+      }
+      .footer {
+        position: sticky;
+        bottom: 0;
+        border-top: 1px solid var(--el-border-color-lighter);
+        background: var(--el-bg-color);
+        padding: 14px 24px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        z-index: 2;
+      }
+      .footer-actions {
+        display: flex;
+        gap: 10px;
+      }
+      .empty {
+        padding: 70px 20px;
+        text-align: center;
+        color: var(--el-text-color-regular);
+      }
+      .note {
+        font-size: 12px;
+        color: var(--el-text-color-regular);
+        margin-top: 14px;
+      }
+      .toast {
+        position: fixed;
+        top: 22px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 10px 20px;
+        border: 1px solid var(--el-border-color);
+        background: var(--el-bg-color);
+        box-shadow: 0 4px 16px var(--el-border-color-lighter);
+        z-index: 10;
+      }
+      .toast:empty {
+        display: none;
+      }
+      dialog {
+        border: 1px solid var(--el-border-color);
+        padding: 24px;
+        width: 440px;
+        max-width: 90vw;
+        color: var(--el-text-color-primary);
+      }
+      dialog::backdrop {
+        background: rgb(0 0 0 / 25%);
+      }
+      dialog p {
+        margin: 12px 0 22px;
+        color: var(--el-text-color-regular);
+      }
+      dialog .footer-actions {
+        justify-content: flex-end;
+      }
+      .avatar {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+      .avatar-preview {
+        width: 34px;
+        height: 34px;
+        border: 1px solid var(--el-border-color);
+        background: var(--el-fill-color-light);
+        display: grid;
+        place-items: center;
+        color: var(--el-text-color-regular);
+        flex-shrink: 0;
+        font-size: 12px;
+      }
+      @media (min-width: 1600px) {
+        .field {
+          grid-template-columns: 280px minmax(220px, 1fr);
+        }
+      }
+      @media (max-width: 1000px) {
+        .shell {
+          grid-template-columns: 1fr;
+        }
+        .app-nav {
+          display: none;
+        }
+        .layout {
+          grid-template-columns: 170px minmax(0, 1fr);
+        }
+        .field {
+          grid-template-columns: 1fr;
+          gap: 10px;
+        }
+        .control {
+          max-width: none;
+        }
+        .panel-head {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+        .search {
+          width: 100%;
+        }
+      }
+      @media (max-width: 650px) {
+        main {
+          padding: 16px;
+        }
+        .layout {
+          grid-template-columns: 1fr;
+        }
+        .groups {
+          display: flex;
+          flex-wrap: wrap;
+          padding: 8px;
+        }
+        .group {
+          width: auto;
+          flex: 1;
+          white-space: nowrap;
+        }
+        .nav-title,
+        .nav-foot {
+          display: none;
+        }
+        .page-head {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+        .panel-head,
+        .footer {
+          padding: 16px;
+        }
+        .fields {
+          padding: 0 16px;
+        }
+        .footer {
+          flex-wrap: wrap;
+        }
+        .prototype {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="app-nav">
+        <div class="brand">◇ 运维执行平台</div>
+        <div class="menu">首页</div>
+        <div class="menu">资产管理</div>
+        <div class="menu">作业系统</div>
+        <div class="menu">任务系统</div>
+        <div class="menu">资源配置</div>
+        <div class="menu">审计中心</div>
+        <div class="menu">系统管理</div>
+        <div class="menu sub">用户管理</div>
+        <div class="menu sub">角色管理</div>
+        <div class="menu sub active">系统配置</div>
+      </aside>
+      <div class="workspace">
+        <header class="topbar">
+          <div class="crumb">
+            系统管理
+            <span>/</span>
+            系统配置
+          </div>
+          <div class="prototype">交互原型 · 示例数据</div>
+        </header>
+        <main>
+          <div class="page-head" style="justify-content: flex-end">
+            <div class="head-actions">
+              <button id="cache">刷新配置缓存</button>
+              <button id="add">新增配置项</button>
+            </div>
+          </div>
+          <div class="layout">
+            <aside class="groups">
+              <div class="nav-title">配置分组</div>
+              <nav id="nav"></nav>
+            </aside>
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2 id="heading"></h2>
+                  <p id="description"></p>
+                </div>
+                <input
+                  class="search"
+                  id="search"
+                  type="search"
+                  aria-label="搜索全部配置"
+                  placeholder="搜索配置名称或说明"
+                />
+              </div>
+              <div class="fields" id="fields"></div>
+              <footer class="footer">
+                <div><span id="status" class="muted">暂无未保存的修改</span></div>
+                <div class="footer-actions">
+                  <button id="reset" disabled>撤销本组修改</button>
+                  <button id="save" class="primary" disabled>保存本组配置</button>
+                </div>
+              </footer>
+            </section>
+          </div>
+        </main>
+      </div>
+    </div>
+    <div id="toast" class="toast" role="status"></div>
+    <dialog id="add-dialog">
+      <h2>新增配置项</h2>
+      <p>
+        正式页面沿用现有新增抽屉。内置配置在分组表单中维护，自定义配置通过新增入口管理。本原型仅演示布局，不新增真实数据。
+      </p>
+      <div class="footer-actions"><button id="close-dialog">关闭</button></div>
+    </dialog>
+    <script>
+      const groups = [
+        { id: 'basic', name: '基础配置', desc: '站点名称、登录页文案与默认头像。' },
+        { id: 'security', name: '安全配置', desc: '集中查看密码、登录与会话相关参数；生效范围以服务端实现为准。' },
+        { id: 'log', name: '日志与审计', desc: '配置操作日志记录范围及保留时间。' },
+        { id: 'file', name: '文件与上传', desc: '设置单文件大小、允许的文件类型和媒体访问路径。' }
+      ];
+      const fields = [
+        {
+          group: 'basic',
+          name: '系统名称',
+          key: 'basic.system.name',
+          value: '运维执行平台',
+          desc: '用于浏览器标题和系统名称展示。',
+          type: 'text'
+        },
+        {
+          group: 'basic',
+          name: '登录页标题',
+          key: 'basic.login.title',
+          value: '让每一次运维操作清晰可控',
+          desc: '登录页面展示的主标题。',
+          type: 'text'
+        },
+        {
+          group: 'basic',
+          name: '默认头像',
+          key: 'basic.user.default_avatar',
+          value: '/media/default-avatar.png',
+          desc: '新用户未设置头像时使用。',
+          hint: '支持 /media/ 相对路径或完整 URL。',
+          type: 'avatar'
+        },
+        {
+          group: 'security',
+          name: '密码最小长度',
+          key: 'security.password.min_length',
+          value: '8',
+          desc: '密码长度相关配置。',
+          hint: '建议不小于 8 位；校验是否生效需与后端策略核对。',
+          type: 'number',
+          unit: '位'
+        },
+        {
+          group: 'security',
+          name: '用户默认密码',
+          key: 'security.user.default_password',
+          value: '',
+          desc: '用于相应用户创建场景。',
+          hint: '原型不展示真实密码；正式页面需明确留空处理规则。',
+          type: 'password'
+        },
+        {
+          group: 'security',
+          name: '连续登录失败次数',
+          key: 'security.login.max_failures',
+          value: '5',
+          desc: '登录失败次数相关配置。',
+          hint: '锁定行为与解锁方式以服务端策略为准。',
+          type: 'number',
+          unit: '次'
+        },
+        {
+          group: 'security',
+          name: '访问令牌有效期',
+          key: 'security.jwt.access_token_seconds',
+          value: '86400',
+          desc: '用于控制会话令牌的有效时间。',
+          hint: '86400 秒为 24 小时；正式落地需核对新旧令牌的生效方式。',
+          type: 'number',
+          unit: '秒'
+        },
+        {
+          group: 'log',
+          name: '启用操作日志',
+          key: 'log.operation.enabled',
+          value: 'true',
+          desc: '记录用户的系统操作。',
+          type: 'switch'
+        },
+        {
+          group: 'log',
+          name: '记录查询请求',
+          key: 'log.operation.record_get',
+          value: 'false',
+          desc: '在操作日志中包含 GET 查询请求。',
+          hint: '依赖「启用操作日志」，关闭后本项不可编辑。',
+          depends: 'log.operation.enabled',
+          type: 'switch'
+        },
+        {
+          group: 'log',
+          name: '日志保留时间',
+          key: 'log.operation.retention_days',
+          value: '90',
+          desc: '操作日志的保留期限。',
+          hint: '此项为操作日志配置，执行输出归档保留期另行管理。',
+          type: 'number',
+          unit: '天'
+        },
+        {
+          group: 'file',
+          name: '单文件大小上限',
+          key: 'file.upload.max_size_mb',
+          value: '20',
+          desc: '限制每个上传文件的大小。',
+          type: 'number',
+          unit: 'MB'
+        },
+        {
+          group: 'file',
+          name: '允许上传的文件类型',
+          key: 'file.upload.allowed_extensions',
+          value: 'jpg,png,pdf,txt,xlsx',
+          desc: '允许上传的文件扩展名。',
+          hint: '示例用逗号分隔；正式页面沿用标签输入控件。',
+          type: 'text'
+        },
+        {
+          group: 'file',
+          name: '媒体访问路径',
+          key: 'file.media.base_url',
+          value: '/media/',
+          desc: '用于访问已上传的媒体文件。',
+          hint: '修改可能影响历史文件链接，请先确认访问路径。',
+          type: 'text'
+        }
+      ];
+      const initial = Object.fromEntries(fields.map(f => [f.key, f.value]));
+      const state = { group: 'basic', saved: { ...initial }, draft: { ...initial }, keyword: '' };
+      const $ = id => document.getElementById(id);
+      const escapeHtml = value =>
+        String(value).replace(
+          /[&<>"']/g,
+          c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
+        );
+      const changed = f => state.draft[f.key] !== state.saved[f.key];
+      const dirtyGroup = id => fields.filter(f => f.group === id && changed(f));
+      const matching = f => `${f.name} ${f.desc} ${f.key}`.toLowerCase().includes(state.keyword.toLowerCase());
+      const notify = message => {
+        $('toast').textContent = message;
+        setTimeout(() => {
+          $('toast').textContent = '';
+        }, 3000);
+      };
+      function control(f) {
+        const id = `field-${f.key}`;
+        const disabled = f.depends && state.draft[f.depends] !== 'true' ? 'disabled' : '';
+        const attrs = `id="${id}" data-key="${f.key}" ${disabled}`;
+        const value = escapeHtml(state.draft[f.key]);
+        if (f.type === 'switch')
+          return `<label class="switch-label"><input type="checkbox" ${attrs} ${value === 'true' ? 'checked' : ''}><span>${value === 'true' ? '已开启' : '已关闭'}</span></label>`;
+        if (f.type === 'number')
+          return `<div class="number"><input type="number" min="0" ${attrs} value="${value}"><span>${f.unit}</span></div>`;
+        if (f.type === 'avatar')
+          return `<div class="avatar"><input type="text" ${attrs} value="${value}"><span class="avatar-preview" aria-hidden="true">头像</span></div>`;
+        return `<input type="${f.type === 'password' ? 'password' : 'text'}" ${attrs} value="${value}" ${f.type === 'password' ? 'placeholder="示例不展示真实密码" autocomplete="new-password"' : ''}>`;
+      }
+      function render() {
+        const active = groups.find(g => g.id === state.group);
+        $('nav').innerHTML = groups
+          .map(
+            g =>
+              `<button class="group ${g.id === state.group ? 'active' : ''}" data-group="${g.id}" ${g.id === state.group ? 'aria-current="page"' : ''}><span>${g.name}${dirtyGroup(g.id).length ? ' ·' : ''}</span><span class="count">${fields.filter(f => f.group === g.id).length}</span></button>`
+          )
+          .join('');
+        $('heading').textContent = state.keyword ? '配置搜索' : active.name;
+        $('description').textContent = state.keyword ? '搜索结果按分组展示；点击分组名称后编辑。' : active.desc;
+        const visible = fields.filter(f => (state.keyword ? matching(f) : f.group === state.group));
+        $('fields').innerHTML = state.keyword
+          ? groups
+              .filter(g => visible.some(f => f.group === g.id))
+              .map(
+                g =>
+                  `<div class="section-title">${g.name}</div>${visible
+                    .filter(f => f.group === g.id)
+                    .map(
+                      f =>
+                        `<div class="field"><div><h3>${f.name}</h3><p class="muted">${f.desc}</p></div><div><button class="link" data-open="${g.id}">前往配置 →</button></div></div>`
+                    )
+                    .join('')}`
+              )
+              .join('')
+          : visible
+              .map(
+                f =>
+                  `<div class="field"><div class="field-label"><label for="field-${f.key}">${f.name}</label><span class="changed" data-changed="${f.key}" ${changed(f) ? '' : 'hidden'}>已修改</span><p>${f.desc}</p></div><div class="control">${control(f)}${f.hint ? `<p>${f.hint}</p>` : ''}</div></div>`
+              )
+              .join('');
+        if (!visible.length)
+          $('fields').innerHTML =
+            '<div class="empty">未找到匹配的配置项<br><button class="link" id="clear-search">清空搜索</button></div>';
+        renderStatus();
+      }
+      function renderStatus() {
+        const count = dirtyGroup(state.group).length;
+        const total = fields.filter(changed).length;
+        $('status').textContent = total
+          ? `本组 ${count} 项待保存${total > count ? ` · 其他分组 ${total - count} 项待保存` : ''}`
+          : '暂无未保存的修改';
+        $('save').disabled = !count || Boolean(state.keyword);
+        $('reset').disabled = !count || Boolean(state.keyword);
+      }
+      $('nav').addEventListener('click', event => {
+        const target = event.target.closest('[data-group]');
+        if (!target) return;
+        state.group = target.dataset.group;
+        state.keyword = '';
+        $('search').value = '';
+        render();
+      });
+      $('fields').addEventListener('input', event => {
+        const key = event.target.dataset.key;
+        if (!key) return;
+        state.draft = {
+          ...state.draft,
+          [key]: event.target.type === 'checkbox' ? String(event.target.checked) : event.target.value
+        };
+        if (event.target.type === 'checkbox') {
+          render();
+          return;
+        }
+        const marker = [...document.querySelectorAll('[data-changed]')].find(el => el.dataset.changed === key);
+        if (marker) marker.hidden = state.draft[key] === state.saved[key];
+        renderStatus();
+      });
+      $('fields').addEventListener('click', event => {
+        const open = event.target.closest('[data-open]');
+        if (open) {
+          state.group = open.dataset.open;
+          state.keyword = '';
+          $('search').value = '';
+          render();
+        }
+        if (event.target.id === 'clear-search') {
+          state.keyword = '';
+          $('search').value = '';
+          render();
+        }
+      });
+      $('search').addEventListener('input', event => {
+        state.keyword = event.target.value.trim();
+        render();
+      });
+      $('reset').addEventListener('click', () => {
+        state.draft = {
+          ...state.draft,
+          ...Object.fromEntries(fields.filter(f => f.group === state.group).map(f => [f.key, state.saved[f.key]]))
+        };
+        render();
+        notify('本组修改已撤销');
+      });
+      $('save').addEventListener('click', () => {
+        const invalid = fields.find(
+          f =>
+            f.group === state.group &&
+            f.type === 'number' &&
+            (!Number.isFinite(Number(state.draft[f.key])) || Number(state.draft[f.key]) < 0)
+        );
+        if (invalid) {
+          notify(`${invalid.name}需要填写非负数`);
+          return;
+        }
+        state.saved = {
+          ...state.saved,
+          ...Object.fromEntries(fields.filter(f => f.group === state.group).map(f => [f.key, state.draft[f.key]]))
+        };
+        render();
+        notify('演示：本组配置已保存，未调用真实接口');
+      });
+      $('cache').addEventListener('click', () => notify('演示：刷新配置缓存，未调用真实接口'));
+      $('add').addEventListener('click', () => $('add-dialog').showModal());
+      $('close-dialog').addEventListener('click', () => $('add-dialog').close());
+      window.addEventListener('beforeunload', event => {
+        if (!fields.some(changed)) return;
+        event.preventDefault();
+        event.returnValue = '';
+      });
+      render();
+    </script>
+  </body>
+</html>

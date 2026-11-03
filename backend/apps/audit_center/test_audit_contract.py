@@ -85,6 +85,25 @@ def test_export_keeps_scope_and_redacts_content(user, django_user_model):
 
 
 @pytest.mark.django_db
+def test_audit_keyword_matches_displayed_operation_and_object_labels(api_client, user):
+    user.is_superuser = True
+    user.save()
+    started = create_domain_audit_event(user, "workflow_run.create", "workflow_run", 1)
+    updated = create_domain_audit_event(user, "host.update", "host", 2)
+    deleted = create_domain_audit_event(user, "host.delete", "host", 3)
+    api_client.force_authenticate(user)
+
+    by_operation = api_client.get("/api/v1/audit/events", {"search": "启动"})
+    assert [item["id"] for item in by_operation.data["data"]["list"]] == [started.pk]
+
+    by_object = api_client.get("/api/v1/audit/events", {"search": "主机资产"})
+    assert {item["id"] for item in by_object.data["data"]["list"]} == {updated.pk, deleted.pk}
+
+    by_code = api_client.get("/api/v1/audit/events", {"search": "workflow_run.create"})
+    assert [item["id"] for item in by_code.data["data"]["list"]] == [started.pk]
+
+
+@pytest.mark.django_db
 def test_audit_filter_and_seed_are_idempotent(api_client, user):
     from apps.permission.seed_data import seed_system_settings
     from apps.permission.models import Menu

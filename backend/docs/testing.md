@@ -1,5 +1,7 @@
 # V2 重构测试基线
 
+> 历史记录：以下命令和结果属于当时版本。当前实现、验证矩阵与本轮结果统一见 [current-status.md](current-status.md)，请勿把本页旧失败数或通过数当作当前结论。
+
 ## P0 / T01 核验记录（2026-09-07，未通过阶段门槛）
 
 - 工作目录：`D:/front/soybean-admin`，分支 `dev2`，普通 checkout。

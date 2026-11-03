@@ -1,7 +1,6 @@
 from datetime import timedelta
 
 from django.conf import settings
-from django.db.models import Max
 from django.utils import timezone
 
 from .models import NodeRun, WorkflowRun
@@ -101,11 +100,25 @@ class ExecutionLease:
         nodes are short so a wedged worker is reported quickly.
         """
         configured = int(
-            getattr(settings, "JOBS_WORKER_LEASE_SECONDS", ExecutionLease.DEFAULT_LEASE_SECONDS)
+            getattr(
+                settings,
+                "JOBS_WORKER_LEASE_SECONDS",
+                ExecutionLease.DEFAULT_LEASE_SECONDS,
+            )
         )
-        running_max = run.node_runs.filter(
-            status=NodeRun.Status.RUNNING
-        ).aggregate(value=Max("workflow_node__timeout_seconds"))["value"] or 0
+        running_keys = run.node_runs.filter(status=NodeRun.Status.RUNNING).values_list(
+            "node_key", flat=True
+        )
+        frozen = (run.execution_settings or {}).get("nodes", {})
+        running_max = max(
+            (
+                frozen.get(key, {})
+                .get("values", {})
+                .get("timeoutSeconds", run.timeout_seconds)
+                for key in running_keys
+            ),
+            default=0,
+        )
         return max(
             configured,
             int(running_max) + ExecutionLease.NODE_TIMEOUT_GRACE_SECONDS,
@@ -121,4 +134,6 @@ class ExecutionLease:
         if not last_activity:
             return False
         now = now or timezone.now()
-        return last_activity + timedelta(seconds=ExecutionLease.lease_seconds(run)) < now
+        return (
+            last_activity + timedelta(seconds=ExecutionLease.lease_seconds(run)) < now
+        )

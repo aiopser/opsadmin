@@ -16,7 +16,7 @@ function initClipboard() {
   const clipboard = new Clipboard(domRef.value);
 
   clipboard.on('success', () => {
-    window.$message?.success($t('theme.configOperation.copySuccessMsg'));
+    window.$notification?.success($t('theme.configOperation.copySuccessMsg'));
   });
 }
 
@@ -32,7 +32,7 @@ function handleReset() {
   themeStore.resetStore();
 
   setTimeout(() => {
-    window.$message?.success($t('theme.configOperation.resetSuccessMsg'));
+    window.$notification?.success($t('theme.configOperation.resetSuccessMsg'));
   }, 50);
 }
 

@@ -15,6 +15,8 @@ declare namespace Api {
       roleCode: string;
       /** role description */
       roleDesc: string;
+      /** job data scope: visible run scope for job executions */
+      jobDataScope: 'own' | 'department' | 'all';
       /** whether the role is a protected built-in role (cannot be deleted) */
       isSystem: boolean;
     }>;
@@ -31,7 +33,7 @@ declare namespace Api {
     type AllRole = Pick<Role, 'id' | 'roleName' | 'roleCode'>;
 
     /** role model for create/update */
-    type RoleModel = Pick<Role, 'roleName' | 'roleCode' | 'roleDesc' | 'status'>;
+    type RoleModel = Pick<Role, 'roleName' | 'roleCode' | 'roleDesc' | 'status' | 'jobDataScope'>;
 
     /**
      * user gender
@@ -258,6 +260,8 @@ declare namespace Api {
       configGroup: string;
       /** remark */
       remark: string | null;
+      /** built-in config（内置配置项） */
+      isSystem: boolean;
     }>;
 
     /** system config search params */
@@ -273,6 +277,94 @@ declare namespace Api {
       SystemConfig,
       'configName' | 'configKey' | 'configValue' | 'configGroup' | 'remark' | 'status'
     >;
+
+    /** 邮件服务器传输协议 */
+    type NotificationEmailProtocol = 'smtp' | 'secure_smtp';
+
+    /** 通知邮件服务器设置 */
+    type NotificationEmailSettings = {
+      /** 服务器名称 */
+      name: string;
+      /** 描述 */
+      description: string;
+      /** SMTP 服务器地址，空字符串表示未配置（回退服务端环境变量） */
+      host: string;
+      /** SMTP 端口 */
+      port: number;
+      /** 登录用户名 */
+      username: string;
+      /** 默认发件人 */
+      fromEmail: string;
+      /** 邮件主题前缀 */
+      titlePrefix: string;
+      /** 传输协议：SMTP / SECURE_SMTP */
+      protocol: NotificationEmailProtocol;
+      /** 连接超时秒数，0 表示不超时 */
+      timeout: number;
+      /** 是否启用 STARTTLS，SECURE_SMTP 下恒为 false */
+      useTls: boolean;
+      /** 是否已保存密码 */
+      hasPassword: boolean;
+      /** 是否已完成配置 */
+      configured: boolean;
+    };
+
+    /** 通知邮件服务器保存参数；密码留空表示不修改 */
+    type NotificationEmailSettingsPayload = Omit<NotificationEmailSettings, 'hasPassword' | 'configured'> & {
+      password: string;
+    };
+
+    /** 通知邮件服务器连接测试参数；密码留空表示使用已保存密码 */
+    type NotificationEmailConnectionTestPayload = Pick<
+      NotificationEmailSettings,
+      'protocol' | 'host' | 'port' | 'timeout' | 'useTls' | 'username'
+    > & {
+      password: string;
+    };
+
+    /** 通知历史清理设置 */
+    type NotificationHistorySettings = {
+      /** 发送成功记录的保留天数 */
+      retentionDays: number;
+    };
+
+    /** 通知历史清理结果 */
+    type NotificationHistoryPurgeResult = {
+      /** 符合条件或已删除的记录数 */
+      count: number;
+      /** 已删除记录数，预览时为 0 */
+      deleted: number;
+      /** 是否为预览（不实际删除） */
+      dryRun: boolean;
+    };
+
+    /** 通知应用渠道 */
+    type NotificationAppProvider = 'wecom' | 'dingtalk' | 'feishu';
+
+    /** 通知应用凭据设置（企业微信 / 钉钉 / 飞书） */
+    type NotificationAppSettings = {
+      provider: NotificationAppProvider;
+      /** 应用标识：企业微信 CorpID、钉钉 AppKey、飞书 AppID */
+      appId: string;
+      /** 企业微信/钉钉 AgentId，飞书固定为空 */
+      agentId: string;
+      /** 开放平台 API 地址 */
+      apiBase: string;
+      /** 是否已保存 Secret */
+      hasSecret: boolean;
+      /** 是否已完成配置 */
+      configured: boolean;
+    };
+
+    /** 通知应用凭据保存参数；Secret 留空表示不修改 */
+    type NotificationAppSettingsPayload = Omit<NotificationAppSettings, 'provider' | 'hasSecret' | 'configured'> & {
+      appSecret: string;
+    };
+
+    /** 通知应用连接测试参数；Secret 留空表示使用已保存值 */
+    type NotificationAppConnectionTestPayload = Pick<NotificationAppSettings, 'appId' | 'apiBase'> & {
+      appSecret: string;
+    };
 
     /** operation log（只读，无增删改） */
     type OperationLog = {

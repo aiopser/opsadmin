@@ -39,13 +39,16 @@ interface BackendUserInfo {
   deptName?: string | null;
   avatar?: string | null;
   createTime?: string | null;
+  last_login?: string | null;
+  must_change_password?: boolean;
 }
 
 /** 映射 flat 响应中的 data（与 system-manage.ts 的 mapFlatResponse 同模式） */
-function mapData<T, R>(res: FlatResponseData<any, T>, mapper: (data: T) => R): FlatResponseData<any, R> {
-  if (res.error || res.data === null) {
-    return { data: null, error: res.error, response: res.response } as FlatResponseData<any, R>;
-  }
+function mapData<T, R, ResponseData>(
+  res: FlatResponseData<ResponseData, T>,
+  mapper: (data: T) => R
+): FlatResponseData<ResponseData, R> {
+  if (res.error) return res;
 
   return { data: mapper(res.data), error: null, response: res.response };
 }
@@ -87,6 +90,8 @@ export async function fetchGetUserInfo() {
   return mapData(res, data => ({
     userId: data.userId ?? (data.id !== undefined ? String(data.id) : ''),
     userName: data.username ?? '',
+    lastLogin: data.last_login ?? null,
+    mustChangePassword: data.must_change_password === true,
     roles: data.roles ?? [],
     buttons: data.perms ?? []
   }));
@@ -103,6 +108,7 @@ export async function fetchGetUserProfile() {
     userId: data.userId ?? (data.id !== undefined ? String(data.id) : ''),
     username: data.username ?? '',
     nickname: data.nickname ?? '',
+    mustChangePassword: data.must_change_password === true,
     roles: data.roles ?? [],
     perms: data.perms ?? [],
     email: data.email ?? '',

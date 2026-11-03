@@ -11,7 +11,6 @@ from drf_spectacular.views import (
 from rest_framework.permissions import AllowAny
 
 from common.api.log_views import (
-    LogBatchDeleteApiView,
     LogListApiView,
     VisitOverviewApiView,
     VisitTrendApiView,
@@ -40,16 +39,21 @@ urlpatterns = [
         name="redoc",
     ),
     path("api/v1/logs", LogListApiView.as_view()),
-    path("api/v1/logs/delete/<path:ids>", LogBatchDeleteApiView.as_view()),
     path("api/v1/logs/analytics/overview", VisitOverviewApiView.as_view()),
     path("api/v1/logs/analytics/trend", VisitTrendApiView.as_view()),
-    # path("api/v1/files", FileUploadApiView.as_view()),
+    path("api/v1/files", FileUploadApiView.as_view()),
     path("api/", include("apps.user.urls")),
     path("api/", include("apps.permission.urls")),
     path("api/", include("apps.cmdb.urls")),
+    path("api/", include("apps.consul.urls")),
+    path("api/", include("apps.monitoring.urls")),
+    path("api/", include("apps.integrations.urls")),
+    path("api/", include("apps.security.urls")),
+    path("api/", include("apps.provisioning.urls")),
     path("api/", include("apps.automation.urls")),
     path("api/", include("apps.jobs.urls")),
     path("api/", include("apps.audit_center.urls")),
+    path("api/", include("apps.wiki.urls")),
 ]
 
 if not settings.DEBUG:

@@ -8,9 +8,16 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+.agents
+.claude
+.github
+.trae
 .pnpm-store/
 .DS_Store
 dist
+frontend/.pnpm-store
+frontend/dist
+frontend/node_modules
 dist-ssr
 coverage
 *.local

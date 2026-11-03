@@ -2,9 +2,10 @@ declare namespace Api {
   /**
    * namespace Automation
    *
-   * 自动化资源域：命令原子（command/script/playbook/module 四类 resource_kind）、
+   * 自动化资源域：命令原子（command/script/playbook/module 四类资源）、
    * 工作流模板与版本、API 端点、Jenkins 服务、通知模板。
-   * 序列化器 fields="__all__" 输出 snake_case，附加展示字段为驼峰。
+   * 对外统一 camelCase：DRF 序列化器的 snake_case 由 API 层（service/api/automation.ts）
+   * 做顶层 key 转换；嵌套业务 JSON（default_vars/argument_schema/config 等）内部保持用户数据原样。
    */
   namespace Automation {
     /** 节点资源分类（CommandAtom.ResourceKind） */
@@ -28,19 +29,25 @@ declare namespace Api {
       name: string;
       code: string;
       category: string;
-      resource_kind: ResourceKind | string;
+      resourceKind: ResourceKind | string;
       description: string;
       status: AtomStatus | string;
-      risk_level: RiskLevel | string;
-      created_at: string | null;
-      updated_at: string | null;
+      riskLevel: RiskLevel | string;
+      createdAt: string | null;
+      updatedAt: string | null;
       /** serializer 附加只读字段 */
       latestVersion: number | null;
       publishedVersion: number | null;
+      draftVersion: number | null;
+      /** 已发布版本的内容（Module 页用于展示模块短名） */
+      publishedContent: string | null;
+      publishedModuleName?: string | null;
       versionCount: number;
       runCount: number;
       lastRunAt: string | null;
       nodeCount: number;
+      /** 创建人用户名（serializer 附加只读字段） */
+      createdByName: string | null;
     }
 
     /** 命令原子创建/更新载荷 */
@@ -48,10 +55,10 @@ declare namespace Api {
       name: string;
       code: string;
       category?: string;
-      resource_kind?: ResourceKind;
+      resourceKind?: ResourceKind;
       description?: string;
       status?: AtomStatus;
-      risk_level?: RiskLevel;
+      riskLevel?: RiskLevel;
     }
 
     /** 命令列表查询参数（filterset: status/risk_level/category/resource_kind） */
@@ -65,33 +72,49 @@ declare namespace Api {
       resourceKind?: ResourceKind | null;
     }
 
+    interface ModuleParameterDoc {
+      name: string;
+      description: string;
+    }
+
     /** 命令版本记录（CommandVersionSerializer 输出） */
     interface CommandVersionRecord {
       id: number;
       command: number;
       version: number;
       status: VersionStatus | string;
-      command_type: CommandType | string;
+      commandType: CommandType | string;
       content: string;
-      argument_schema: Record<string, unknown>;
-      default_vars: Record<string, unknown>;
-      output_extractors: unknown[];
-      timeout_seconds: number;
-      become_enabled: boolean;
-      check_mode_supported: boolean;
-      published_at: string | null;
-      created_at: string | null;
+      /** 独立 Module 字段；可选用于兼容旧后端 DTO */
+      moduleName?: string;
+      parameterDocs?: ModuleParameterDoc[];
+      argumentSchema: Record<string, unknown>;
+      defaultVars: Record<string, unknown>;
+      outputExtractors: unknown[];
+      timeoutSeconds: number;
+      becomeEnabled: boolean;
+      checkModeSupported: boolean;
+      /** 版本备注 */
+      remark: string;
+      publishedAt: string | null;
+      createdAt: string | null;
     }
 
     /** 命令版本创建载荷 */
     interface CommandVersionPayload {
       command: number;
-      command_type: CommandType;
-      content: string;
-      timeout_seconds?: number;
-      argument_schema?: Record<string, unknown>;
-      default_vars?: Record<string, unknown>;
-      output_extractors?: unknown[];
+      commandType: CommandType;
+      content?: string;
+      moduleName?: string;
+      parameterDocs?: ModuleParameterDoc[];
+      timeoutSeconds?: number;
+      becomeEnabled?: boolean;
+      checkModeSupported?: boolean;
+      argumentSchema?: Record<string, unknown>;
+      defaultVars?: Record<string, unknown>;
+      outputExtractors?: unknown[];
+      /** 版本备注 */
+      remark?: string;
     }
 
     /** 工作流模板记录（WorkflowTemplateSerializer 输出） */
@@ -100,10 +123,11 @@ declare namespace Api {
       name: string;
       code: string;
       description: string;
+      failureAlert: { templateId: number; receivers: string } | Record<string, never>;
       status: AtomStatus | string;
-      owner_team: string;
-      created_at: string | null;
-      updated_at: string | null;
+      ownerTeam: string;
+      createdAt: string | null;
+      updatedAt: string | null;
       /** serializer 附加只读字段 */
       latestVersion: number | null;
       /** 当前已发布版本号（无则为 null） */
@@ -117,8 +141,9 @@ declare namespace Api {
       name: string;
       code: string;
       description?: string;
+      failureAlert?: { templateId: number; receivers: string } | Record<string, never>;
       status?: AtomStatus;
-      owner_team?: string;
+      ownerTeam?: string;
     }
 
     /** 工作流版本记录（WorkflowVersionSerializer 输出，蛇形键已转驼峰） */
@@ -128,7 +153,6 @@ declare namespace Api {
       version: number;
       status: VersionStatus | string;
       inputSchema: Record<string, unknown> | null;
-      globalVars?: Record<string, unknown> | null;
       targetSelectorSchema?: Record<string, unknown> | null;
       editorMode: string;
       workflowName: string;
@@ -141,17 +165,17 @@ declare namespace Api {
     /** 工作流节点记录（WorkflowNodeSerializer 输出） */
     interface WorkflowNodeRecord {
       id: number;
-      workflow_version: number;
-      node_key: string;
+      workflowVersion: number;
+      nodeKey: string;
       name: string;
-      node_type: string;
-      command_version: number | null;
-      resource_type: string;
+      nodeType: string;
+      commandVersion: number | null;
+      resourceType: string;
       config: Record<string, unknown>;
-      order_index: number;
-      timeout_seconds: number | null;
-      failure_policy: 'stop' | 'ignore' | 'retry' | string;
-      continue_on_error: boolean;
+      orderIndex: number;
+      timeoutSeconds: number | null;
+      failurePolicy: 'stop' | 'ignore' | 'retry' | string;
+      continueOnError: boolean;
       /** serializer 附加只读字段 */
       commandName: string;
     }
@@ -159,13 +183,13 @@ declare namespace Api {
     /** 工作流边记录（WorkflowEdgeSerializer 输出） */
     interface WorkflowEdgeRecord {
       id: number;
-      workflow_version: number;
-      edge_key: string;
-      source_node: number;
-      target_node: number;
-      condition_expression: string;
-      is_default: boolean;
-      order_index: number;
+      workflowVersion: number;
+      edgeKey: string;
+      sourceNode: number;
+      targetNode: number;
+      conditionExpression: string;
+      isDefault: boolean;
+      orderIndex: number;
     }
 
     /** API 端点记录（ApiEndpointSerializer 输出，secret 为脱敏占位） */
@@ -175,23 +199,23 @@ declare namespace Api {
       description: string;
       method: string;
       url: string;
-      query_params: Record<string, unknown>;
+      queryParams: Record<string, unknown>;
       headers: Record<string, unknown>;
-      body_type: 'none' | 'json' | 'form' | 'raw' | string;
+      bodyType: 'none' | 'json' | 'form' | 'raw' | string;
       body: string;
-      auth_type: 'none' | 'basic' | 'bearer' | 'api_key' | string;
+      authType: 'none' | 'basic' | 'bearer' | 'api_key' | string;
       username: string;
       /** 脱敏后的密钥占位 */
       secret: string;
-      api_key_name: string;
-      api_key_location: string;
-      success_rules: unknown[];
-      output_extractors: unknown[];
-      timeout_seconds: number;
-      verify_ssl: boolean;
-      is_active: boolean;
-      created_at: string | null;
-      updated_at: string | null;
+      apiKeyName: string;
+      apiKeyLocation: string;
+      successRules: Record<string, unknown>;
+      outputExtractors: unknown[];
+      timeoutSeconds: number;
+      verifySsl: boolean;
+      isActive: boolean;
+      createdAt: string | null;
+      updatedAt: string | null;
     }
 
     /** API 端点创建/更新载荷（secret 为 write_only 明文） */
@@ -201,39 +225,79 @@ declare namespace Api {
       method?: string;
       url: string;
       headers?: Record<string, unknown>;
-      query_params?: Record<string, unknown>;
-      body_type?: 'none' | 'json' | 'form' | 'raw';
+      queryParams?: Record<string, unknown>;
+      bodyType?: 'none' | 'json' | 'form' | 'raw';
       body?: string;
-      auth_type?: 'none' | 'basic' | 'bearer' | 'api_key';
+      successRules?: Record<string, unknown>;
+      authType?: 'none' | 'basic' | 'bearer' | 'api_key';
       username?: string;
       secret?: string;
-      timeout_seconds?: number;
-      verify_ssl?: boolean;
-      is_active?: boolean;
+      apiKeyName?: string;
+      apiKeyLocation?: 'header' | 'query';
+      timeoutSeconds?: number;
+      verifySsl?: boolean;
+      isActive?: boolean;
     }
 
     /** Jenkins 服务记录（JenkinsServerSerializer 输出） */
     interface JenkinsServerRecord {
       id: number;
       name: string;
-      base_url: string;
+      baseUrl: string;
       username: string;
       /** 脱敏后的 token 占位 */
       secret: string;
-      verify_ssl: boolean;
-      is_active: boolean;
-      created_at: string | null;
-      updated_at: string | null;
+      verifySsl: boolean;
+      isActive: boolean;
+      createdAt: string | null;
+      updatedAt: string | null;
     }
 
     /** Jenkins 服务创建/更新载荷（secret 为 write_only 明文 token） */
     interface JenkinsServerPayload {
       name: string;
-      base_url: string;
+      baseUrl: string;
       username?: string;
       secret?: string;
-      verify_ssl?: boolean;
-      is_active?: boolean;
+      verifySsl?: boolean;
+      isActive?: boolean;
+    }
+
+    /** Git 仓库记录（GitRepositorySerializer 输出） */
+    interface GitRepositoryRecord {
+      id: number;
+      name: string;
+      repoUrl: string;
+      username: string;
+      branch: string;
+      verifySsl: boolean;
+      isActive: boolean;
+      createdAt: string | null;
+      updatedAt: string | null;
+    }
+
+    /** Git 仓库创建/更新载荷（secret 为 write_only 明文令牌） */
+    interface GitRepositoryPayload {
+      name: string;
+      repoUrl: string;
+      username?: string;
+      branch?: string;
+      secret?: string;
+      verifySsl?: boolean;
+      isActive?: boolean;
+    }
+
+    /** Git 仓库文件列表条目 */
+    interface GitRepoFileEntry {
+      ref: string;
+      files: string[];
+    }
+
+    /** Git 仓库文件加载结果 */
+    interface GitRepoLoadResult {
+      ref: string;
+      name: string;
+      content: string;
     }
 
     /** 通知模板记录（NotificationTemplateSerializer 输出） */
@@ -243,12 +307,12 @@ declare namespace Api {
       code: string;
       description: string;
       channel: number | null;
-      subject_template: string;
-      body_template: string;
-      receiver_template: string;
-      is_active: boolean;
-      created_at: string | null;
-      updated_at: string | null;
+      subjectTemplate: string;
+      bodyTemplate: string;
+      receiverTemplate: string;
+      isActive: boolean;
+      createdAt: string | null;
+      updatedAt: string | null;
       /** serializer 附加只读字段 */
       channelName: string;
       channelType: string;
@@ -260,18 +324,78 @@ declare namespace Api {
       code: string;
       description?: string;
       channel?: number | null;
-      subject_template?: string;
-      body_template?: string;
-      receiver_template?: string;
-      is_active?: boolean;
+      subjectTemplate?: string;
+      bodyTemplate?: string;
+      receiverTemplate?: string;
+      isActive?: boolean;
     }
 
     /** 通知渠道记录（NotificationChannelSerializer 输出，notification 页渠道下拉用） */
     interface NotificationChannelRecord {
       id: number;
       name: string;
-      channel_type: 'webhook' | 'wecom' | 'dingtalk' | 'email' | string;
-      is_active: boolean;
+      channelType: 'webhook' | 'wecom' | 'dingtalk' | 'feishu' | 'email';
+      config: Record<string, unknown>;
+      secret: string;
+      hasSigningSecret: boolean;
+      isActive: boolean;
+    }
+
+    interface NotificationChannelPayload {
+      name: string;
+      channelType: NotificationChannelRecord['channelType'];
+      secret?: string;
+      signingSecret?: string;
+      config?: Record<string, unknown>;
+      isActive: boolean;
+    }
+
+    type NotificationScenario = 'failure' | 'workflow' | 'asset_sync' | 'provisioning' | 'security';
+
+    interface NotificationVariable {
+      expression: string;
+      label: string;
+      example: unknown;
+      source: string;
+    }
+
+    interface NotificationVariableCatalog {
+      variables: NotificationVariable[];
+      sampleContext: Record<string, unknown>;
+      workflowVersions: Pick<WorkflowVersionRecord, 'id' | 'workflowName' | 'version'>[];
+    }
+
+    interface NotificationSample {
+      scenario: NotificationScenario;
+      workflowVersionId: number | null;
+      sampleContext: Record<string, unknown>;
+    }
+
+    interface NotificationPreviewPayload extends NotificationSample {
+      subjectTemplate: string;
+      bodyTemplate: string;
+      receiverTemplate: string;
+    }
+
+    interface NotificationPreviewResult {
+      valid: boolean;
+      errors: Partial<Record<'subjectTemplate' | 'bodyTemplate' | 'receiverTemplate', string>>;
+      subject: string;
+      body: string;
+      receivers: string;
+    }
+
+    interface NotificationRecord {
+      id: number;
+      templateName: string;
+      channelName: string;
+      status: 'pending' | 'sending' | 'success' | 'failed';
+      subject: string;
+      failureReason: string;
+      sentAt: string | null;
+      workflowRunId: number | null;
+      attemptCount: number;
+      nextRetryAt: string | null;
     }
 
     /** Jenkins 任务记录（JenkinsJobSerializer 输出，流程编排 jenkins 步骤引用） */
@@ -282,15 +406,23 @@ declare namespace Api {
       url: string;
       color: string;
       parameters: unknown[];
-      is_active: boolean;
-      last_synced_at: string | null;
-      created_at: string | null;
-      updated_at: string | null;
+      isActive: boolean;
+      lastSyncedAt: string | null;
+      createdAt: string | null;
+      updatedAt: string | null;
       /** serializer 附加只读字段 */
       serverName: string;
     }
 
     /** ============ 工作流图协议（graph 接口请求/响应） ============ */
+
+    /** Jenkins 任务参数定义（parameters 探测接口返回） */
+    interface JenkinsJobParameter {
+      name: string;
+      type: string;
+      default: string | number | boolean | null;
+      choices: string[];
+    }
 
     /** 图节点（保存与读取同构；commandVersion{Id}、resourceType{Id} 用于绑定资源） */
     interface GraphNode {
@@ -343,7 +475,6 @@ declare namespace Api {
     interface WorkflowGraph {
       nodes: GraphNode[];
       edges: GraphEdge[];
-      globalVars?: Record<string, unknown>;
       inputSchema?: Record<string, unknown>;
     }
   }

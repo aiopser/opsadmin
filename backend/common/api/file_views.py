@@ -4,18 +4,33 @@ from pathlib import Path
 from django.conf import settings
 from django.utils import timezone
 from rest_framework.parsers import FormParser, MultiPartParser
+from drf_spectacular.utils import extend_schema, OpenApiParameter
 
 from common.api.responses import api_error_response, api_ok_response
 from common.api.views import StandardApiView
+from common.api.schema import api_envelope_serializer, api_message_response
+from common.api.schema_serializers import (
+    FileUploadRequestSerializer,
+    FileUploadResultSerializer,
+)
+from common.system_policy import validate_upload
 
 
 class FileUploadApiView(StandardApiView):
     parser_classes = (MultiPartParser, FormParser)
 
+    @extend_schema(
+        request={"multipart/form-data": FileUploadRequestSerializer},
+        responses=api_envelope_serializer(
+            "FileUploadResponse", FileUploadResultSerializer
+        ),
+    )
     def post(self, request):
         upload_file = request.FILES.get("file")
         if not upload_file:
             return api_error_response("请选择上传文件")
+
+        validate_upload(upload_file)
 
         today = timezone.now()
         relative_dir = (
@@ -43,6 +58,10 @@ class FileUploadApiView(StandardApiView):
             }
         )
 
+    @extend_schema(
+        parameters=[OpenApiParameter("filePath", str, description="相对媒体路径或媒体URL路径")],
+        responses=api_message_response("FileDeleteResponse"),
+    )
     def delete(self, request):
         file_path = request.query_params.get("filePath")
         if not file_path:

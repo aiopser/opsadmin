@@ -4,6 +4,10 @@ allowed_hosts = ['*']
 static_url = static/
 jwt_expiration_delta = 36000
 media_root = upload/
+; 凭据加密密钥：保存密码/私钥到平台时使用，首次部署生成一次并永久固定（换 key 会导致已存密钥无法解密）：
+; python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+; 也可用同名环境变量 DEVOPS_CREDENTIAL_ENCRYPTION_KEY 覆盖本项
+credential_encryption_key =
 
 [db.mysql]
 host = 127.0.0.1

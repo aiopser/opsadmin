@@ -20,7 +20,7 @@ async function handleCopy() {
   }
 
   await copy(source.value);
-  window.$message?.success(`复制成功：${source.value}`);
+  window.$notification?.success(`复制成功：${source.value}`);
 }
 </script>
 

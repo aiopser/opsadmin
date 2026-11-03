@@ -10,6 +10,7 @@ class DomainAuditEvent(StandardModelMixin):
         TASK = "task", "Task system"
         AUTOMATION = "automation", "Automation resources"
         CMDB = "cmdb", "Asset management"
+        MONITORING = "monitoring", "Monitoring management"
         SECURITY = "security", "Security"
         SYSTEM = "system", "System"
 

@@ -1,7 +1,7 @@
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import extend_schema, OpenApiParameter
 
 from common.api.filters import KeywordSearchFilter
 from common.api.responses import api_error_response, api_ok_response
@@ -45,6 +45,7 @@ class DictTypeViewSet(CommaSeparatedBulkDeleteMixin, StandardModelViewSet):
 
 
 @generate_crud_schema(verbose_name="字典项", tags=["字典管理"])
+@extend_schema(parameters=[OpenApiParameter("dict_code", str, OpenApiParameter.PATH)])
 class DictItemViewSet(CommaSeparatedBulkDeleteMixin, StandardModelViewSet):
     queryset = DictItem.objects.select_related("dict_type").all().order_by("sort", "id")
     serializer_class = DictItemSerializer

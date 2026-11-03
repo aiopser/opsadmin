@@ -1,7 +1,8 @@
-import { computed, reactive, ref } from 'vue';
+import { computed, onScopeDispose, reactive, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { defineStore } from 'pinia';
 import { useLoading } from '@sa/hooks';
+import { router } from '@/router';
 import { fetchGetUserInfo, fetchLogin, fetchLogout } from '@/service/api';
 import { useRouterPush } from '@/hooks/common/router';
 import { localStg } from '@/utils/storage';
@@ -16,7 +17,7 @@ export const useAuthStore = defineStore(SetupStoreId.Auth, () => {
   const authStore = useAuthStore();
   const routeStore = useRouteStore();
   const tabStore = useTabStore();
-  const { toLogin, redirectFromLogin } = useRouterPush(false);
+  const { toLogin, redirectFromLogin, routerPushByKey } = useRouterPush(false);
   const { loading: loginLoading, startLoading, endLoading } = useLoading();
 
   const token = ref(getToken());
@@ -24,6 +25,8 @@ export const useAuthStore = defineStore(SetupStoreId.Auth, () => {
   const userInfo: Api.Auth.UserInfo = reactive({
     userId: '',
     userName: '',
+    lastLogin: null,
+    mustChangePassword: false,
     roles: [],
     buttons: []
   });
@@ -37,6 +40,15 @@ export const useAuthStore = defineStore(SetupStoreId.Auth, () => {
 
   /** Is login */
   const isLogin = computed(() => Boolean(token.value));
+
+  // 登录和刷新恢复会话均须在业务页面挂载前引导修改初始/重置密码。
+  const removePasswordGuard = router.beforeEach(to => {
+    if (token.value && userInfo.mustChangePassword && to.name !== 'user-center') {
+      return { name: 'user-center', replace: true };
+    }
+    return undefined;
+  });
+  onScopeDispose(removePasswordGuard);
 
   /** Reset auth store */
   async function logout() {
@@ -122,7 +134,11 @@ export const useAuthStore = defineStore(SetupStoreId.Auth, () => {
           // If the tab needs to be cleared,it means we don't need to redirect.
           needRedirect = false;
         }
-        await redirectFromLogin(needRedirect);
+        if (userInfo.mustChangePassword) {
+          await routerPushByKey('user-center');
+        } else {
+          await redirectFromLogin(needRedirect);
+        }
 
         window.$notification?.success({
           title: $t('page.login.common.loginSuccess'),

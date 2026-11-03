@@ -1,0 +1,6 @@
+*.db
+*.db-*
+.env
+.git
+gin-quest
+*.exe

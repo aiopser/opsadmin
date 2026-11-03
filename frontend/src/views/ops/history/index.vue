@@ -1,8 +1,11 @@
 <script setup lang="tsx">
-import { computed, ref } from 'vue';
+import { ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { fetchCancelRun, fetchGetTaskRunList } from '@/service/api';
+import { ElButton, ElTag } from 'element-plus';
+import { executionKindRecord, runStatusRecord, runStatusTagType } from '@/constants/business';
+import { fetchGetTaskRunList } from '@/service/api';
 import { defaultTransform, useUIPaginatedTable } from '@/hooks/common/table';
+import { $t } from '@/locales';
 
 defineOptions({ name: 'OpsHistory' });
 
@@ -10,40 +13,25 @@ const router = useRouter();
 
 /** ============ 搜索 ============ */
 
-const statusOptions = [
-  { value: 'pending', label: '待执行' },
-  { value: 'queued', label: '排队中' },
-  { value: 'running', label: '执行中' },
-  { value: 'waiting', label: '等待中' },
-  { value: 'success', label: '成功' },
-  { value: 'failed', label: '失败' },
-  { value: 'timeout', label: '超时' },
-  { value: 'canceled', label: '已取消' }
-];
+const statusOptions = (Object.keys(runStatusRecord) as Api.Jobs.RunStatus[]).map(value => ({
+  value,
+  label: $t(runStatusRecord[value])
+}));
 
-const statusText: Record<string, string> = Object.fromEntries(statusOptions.map(item => [item.value, item.label]));
-
-const statusTagType: Record<string, string> = {
-  pending: 'info',
-  queued: 'info',
-  running: 'primary',
-  waiting: 'warning',
-  cancel_requested: 'warning',
-  success: 'success',
-  failed: 'danger',
-  timeout: 'danger',
-  canceled: 'info'
-};
+const executionKindOptions = (Object.keys(executionKindRecord) as Api.Jobs.ExecutionKind[]).map(value => ({
+  value,
+  label: $t(executionKindRecord[value])
+}));
 
 function getInitSearchParams() {
   return {
     current: 1,
     size: 10,
     status: undefined as string | undefined,
+    executionKind: undefined as Api.Jobs.ExecutionKind | undefined,
     search: undefined as string | undefined
   };
 }
-
 const searchParams = ref(getInitSearchParams());
 
 /** ============ 列表 ============ */
@@ -59,6 +47,7 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
       size: searchParams.value.size,
       runDomain: 'ops',
       status: searchParams.value.status as Api.Jobs.RunStatus | null | undefined,
+      executionKind: searchParams.value.executionKind,
       search: searchParams.value.search
     }),
   transform: response => defaultTransform(response),
@@ -67,123 +56,114 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
     searchParams.value.size = params.pageSize ?? 10;
   },
   columns: () => [
-    { prop: 'id', label: 'ID', width: 80 },
-    { prop: 'workflowName', label: '作业名称', minWidth: 160, showOverflowTooltip: true },
+    { prop: 'id', label: $t('page.task.run.id'), width: 80, align: 'center', className: 'tabular-nums' },
+    {
+      prop: 'name',
+      label: '作业名称',
+      minWidth: 150,
+      showOverflowTooltip: true,
+      formatter: row => row.name || row.workflowName || '-'
+    },
     {
       prop: 'status',
-      label: '状态',
-      width: 100,
+      label: $t('page.task.run.statusLabel'),
+      width: 110,
       align: 'center',
-      formatter: row => (
-        <ElTag type={(statusTagType[row.status] ?? 'info') as any}>{statusText[row.status] ?? row.status}</ElTag>
-      )
+      formatter: row => <ElTag type={runStatusTagType[row.status] ?? 'info'}>{$t(runStatusRecord[row.status])}</ElTag>
     },
     {
       prop: 'executionKind',
-      label: '执行类型',
-      width: 110,
+      label: $t('page.task.run.executionKind'),
+      width: 120,
       align: 'center',
-      formatter: row =>
-        ({ workflow: '工作流', quick_command: '快速命令', playbook: 'Playbook', module: 'Module' })[
-          row.executionKind
-        ] ?? row.executionKind
+      formatter: row => $t(executionKindRecord[row.executionKind])
     },
     {
-      prop: 'triggerType',
-      label: '触发方式',
-      width: 100,
+      prop: 'targetCount',
+      label: $t('page.task.run.targetCount'),
+      width: 90,
       align: 'center',
-      formatter: row => ({ manual: '手动', api: 'API', scheduled: '定时' })[row.triggerType] ?? row.triggerType
+      className: 'tabular-nums'
     },
-    { prop: 'targetCount', label: '目标数', width: 80, align: 'center' },
-    { prop: 'workerPoolName', label: 'Worker 池', width: 130, showOverflowTooltip: true },
-    { prop: 'triggeredByName', label: '触发人', width: 110, formatter: row => row.triggeredByName || '-' },
-    { prop: 'startedAt', label: '开始时间', width: 170, formatter: row => row.startedAt || '-' },
+    {
+      prop: 'triggeredByName',
+      label: $t('page.task.run.triggeredBy'),
+      width: 120,
+      formatter: row => row.triggeredByName || '-'
+    },
+    {
+      prop: 'startedAt',
+      label: $t('page.task.run.startedAt'),
+      width: 170,
+      formatter: row => row.startedAt || '-'
+    },
     {
       prop: 'durationMs',
-      label: '耗时',
-      width: 100,
+      label: $t('page.task.run.duration'),
+      width: 110,
       align: 'center',
-      formatter: row => (row.durationMs ? `${(row.durationMs / 1000).toFixed(1)}s` : '-')
+      className: 'tabular-nums',
+      formatter: row => (row.durationMs === null ? '-' : `${(row.durationMs / 1000).toFixed(1)}s`)
     },
     {
       prop: 'operate',
-      label: '操作',
-      width: 150,
+      label: $t('common.operate'),
+      width: 90,
       align: 'center',
       fixed: 'right',
       formatter: row => (
-        <>
-          <ElButton type="primary" plain size="small" onClick={() => goDetail(row.id)}>
-            详情
+        <div class="flex justify-center gap-4px">
+          <ElButton type="primary" plain size="small" onClick={() => openDetail(row.id)}>
+            {$t('common.detail')}
           </ElButton>
-          {['pending', 'queued', 'running', 'waiting', 'cancel_requested'].includes(row.status) && (
-            <ElPopconfirm title="确认取消该执行？" onConfirm={() => handleCancel(row.id)}>
-              {{
-                reference: () => (
-                  <ElButton type="danger" plain size="small">
-                    取消
-                  </ElButton>
-                )
-              }}
-            </ElPopconfirm>
-          )}
-        </>
+        </div>
       )
     }
   ]
 });
-
-const hasFilter = computed(() => Boolean(searchParams.value.status || searchParams.value.search));
 
 function resetSearchParams() {
   searchParams.value = getInitSearchParams();
   getDataByPage();
 }
 
-function goDetail(id: number) {
-  router.push({ name: 'task_run-detail', params: { id: String(id) }, query: { domain: 'ops' } });
-}
-
-async function handleCancel(id: number) {
-  const { error } = await fetchCancelRun(id, 'ops');
-
-  if (!error) {
-    window.$message?.success('取消请求已提交');
-    getData();
-  }
+function openDetail(id: number) {
+  router.push({
+    name: 'ops_run-detail',
+    params: { id }
+  });
 }
 </script>
 
 <template>
   <div class="min-h-500px flex-col-stretch gap-16px overflow-hidden lt-sm:overflow-auto">
-    <ElCard class="card-wrapper">
-      <ElForm :model="searchParams" label-width="70px" inline @submit.prevent>
-        <ElFormItem label="状态">
-          <ElSelect v-model="searchParams.status" clearable placeholder="全部" class="w-140px">
+    <SearchPanel @reset="resetSearchParams" @search="getDataByPage">
+      <ElForm :model="searchParams" label-width="80px" @submit.prevent="getDataByPage">
+        <ElFormItem :label="$t('page.task.run.statusLabel')">
+          <ElSelect v-model="searchParams.status" clearable :placeholder="$t('page.task.run.statusLabel')">
             <ElOption v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" />
           </ElSelect>
         </ElFormItem>
-        <ElFormItem label="关键词">
+        <ElFormItem :label="$t('page.task.run.executionKind')">
+          <ElSelect v-model="searchParams.executionKind" clearable :placeholder="$t('page.task.run.executionKind')">
+            <ElOption v-for="item in executionKindOptions" :key="item.value" :label="item.label" :value="item.value" />
+          </ElSelect>
+        </ElFormItem>
+        <ElFormItem :label="$t('page.task.run.keyword')">
           <ElInput
             v-model="searchParams.search"
             clearable
-            placeholder="作业名称/触发人"
-            class="w-200px"
+            :placeholder="$t('common.keywordSearch')"
             @keyup.enter="getDataByPage()"
           />
         </ElFormItem>
-        <ElFormItem>
-          <ElButton type="primary" @click="getDataByPage()">查询</ElButton>
-          <ElButton :disabled="!hasFilter" @click="resetSearchParams">重置</ElButton>
-        </ElFormItem>
       </ElForm>
-    </ElCard>
+    </SearchPanel>
 
     <ElCard class="card-wrapper sm:flex-1-hidden">
       <template #header>
         <div class="flex items-center justify-between">
-          <p>作业历史</p>
+          <p>{{ $t('page.task.run.title') }}</p>
           <TableHeaderOperation
             v-model:columns="columnChecks"
             :loading="loading"
@@ -210,3 +190,5 @@ async function handleCancel(id: number) {
     </ElCard>
   </div>
 </template>
+
+<style scoped></style>

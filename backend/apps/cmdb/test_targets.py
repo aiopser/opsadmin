@@ -11,7 +11,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 def test_snapshot_uses_non_sensitive_target_contract(user):
     user.is_superuser = True
     user.save()
-    host = AssetHost.objects.create(hostname="test-host", primary_ip="192.0.2.10", os_family="linux", connection_type="ssh")
+    host = AssetHost.objects.create(hostname="test-host", internal_ip="192.0.2.10", os_family="linux", connection_type="ssh")
     snapshot = snapshot_targets(actor=user, targets=[host])[0]
     assert set(snapshot) == {"host_id", "hostname", "address", "port", "connection_type", "region", "credential_ref_id", "variables"}
     assert snapshot["address"] == "192.0.2.10"
@@ -26,7 +26,7 @@ def actor(user):
 
 @pytest.fixture
 def host():
-    return AssetHost.objects.create(hostname="safe", primary_ip="192.0.2.20", os_family="linux", connection_type="ssh")
+    return AssetHost.objects.create(hostname="safe", internal_ip="192.0.2.20", os_family="linux", connection_type="ssh")
 
 
 @pytest.mark.django_db
@@ -41,7 +41,7 @@ def test_group_selection_deduplicates_and_resolves_dynamic_rules(actor, host):
 @pytest.mark.django_db
 def test_snapshot_does_not_change_after_asset_edit(actor, host):
     snapshot = snapshot_targets(actor=actor, targets=[host])
-    host.primary_ip = "192.0.2.21"
+    host.internal_ip = "192.0.2.21"
     host.save()
     assert snapshot[0]["address"] == "192.0.2.20"
 

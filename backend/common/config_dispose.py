@@ -1,4 +1,4 @@
-﻿import ast
+import ast
 import os
 from pathlib import Path
 
@@ -47,10 +47,11 @@ class ConfigUtil(object):
         items = self.cf.items(sections)
         return items
 
-    def get_value(self, section, key):
+    def get_value(self, section, key, fallback=None):
         """
         :param sections:
         :param key:
+        :param fallback: 配置项不存在时返回的默认值（不传则保持原行为：抛 NoOptionError）
         :return: 获取某个 section 中某个 key 对应的 value
         """
         env_prefix = {
@@ -62,7 +63,9 @@ class ConfigUtil(object):
         env_name = f"{env_prefix}_{key.upper()}"
         if env_name in os.environ:
             return os.environ[env_name]
-        return self.cf.get(section, key)
+        if fallback is None:
+            return self.cf.get(section, key)
+        return self.cf.get(section, key, fallback=fallback)
 
     def get_int_val(self, section, key):
         return int(self.get_value(section, key))
@@ -122,5 +125,8 @@ class ConfigUtil(object):
         return dict(self.cf.items(section, True))
 
 
-file = Path(__file__).resolve().parents[1].joinpath("config", "devops.ini")
+file = os.environ.get(
+    "DEVOPS_CONFIG_FILE",
+    Path(__file__).resolve().parents[1].joinpath("config", "devops.ini"),
+)
 ConfigDispose = ConfigUtil(file)

@@ -1,30 +1,45 @@
 <script setup lang="ts">
-import { watch } from 'vue';
+import { ref, watch } from 'vue';
+import { fetchGetDashboardExecutionDistribution } from '@/service/api';
 import { useAppStore } from '@/store/modules/app';
 import { useEcharts } from '@/hooks/common/echarts';
 import { $t } from '@/locales';
 
-defineOptions({ name: 'PieChart' });
+defineOptions({ name: 'ExecutionDistributionChart' });
 
 const appStore = useAppStore();
+const distribution = ref<Api.Jobs.DashboardExecutionDistribution | null>(null);
+const loading = ref(false);
+
+const categoryLabel: Record<Api.Jobs.DashboardExecutionCategory, App.I18n.I18nKey> = {
+  ops_script: 'page.home.executionDistribution.opsScript',
+  ops_playbook: 'page.home.executionDistribution.opsPlaybook',
+  ops_module: 'page.home.executionDistribution.opsModule',
+  ops_other: 'page.home.executionDistribution.opsOther',
+  task_scheduled: 'page.home.executionDistribution.taskScheduled',
+  task_workflow: 'page.home.executionDistribution.taskWorkflow'
+};
 
 const { domRef, updateOptions } = useEcharts(() => ({
-  tooltip: {
-    trigger: 'item'
-  },
+  tooltip: { trigger: 'item' },
   legend: {
-    bottom: '1%',
-    left: 'center',
-    itemStyle: {
-      borderWidth: 0
-    }
+    orient: 'vertical',
+    left: 'left',
+    top: 'center',
+    itemGap: 12,
+    textStyle: { width: 112, overflow: 'truncate' },
+    itemStyle: { borderWidth: 0 }
+  },
+  title: {
+    show: false
   },
   series: [
     {
-      color: ['#5da8ff', '#8e9dff', '#fedc69', '#26deca'],
-      name: $t('page.home.schedule'),
+      color: ['#5da8ff', '#8e9dff', '#fedc69', '#26deca', '#ff9f7f', '#a3d977'],
+      name: $t('page.home.executionDistribution.title'),
       type: 'pie',
-      radius: ['45%', '75%'],
+      center: ['70%', '50%'],
+      radius: ['38%', '66%'],
       avoidLabelOverlap: false,
       itemStyle: {
         borderRadius: 10,
@@ -41,66 +56,60 @@ const { domRef, updateOptions } = useEcharts(() => ({
           fontSize: '12'
         }
       },
-      labelLine: {
-        show: false
-      },
+      labelLine: { show: false },
       data: [] as { name: string; value: number }[]
     }
   ]
 }));
 
-async function mockData() {
-  await new Promise(resolve => {
-    setTimeout(resolve, 1000);
+function renderChart() {
+  updateOptions((options, factory) => {
+    const baseOptions = factory();
+    options.series[0].name = baseOptions.series[0].name;
+    options.series[0].data = (distribution.value?.items ?? []).map(item => ({
+      name: $t(categoryLabel[item.key]),
+      value: item.count
+    }));
+    return options;
   });
+}
 
-  updateOptions(opts => {
-    opts.series[0].data = [
-      { name: $t('page.home.study'), value: 20 },
-      { name: $t('page.home.entertainment'), value: 10 },
-      { name: $t('page.home.work'), value: 40 },
-      { name: $t('page.home.rest'), value: 30 }
-    ];
-
-    return opts;
-  });
+async function loadDistribution() {
+  loading.value = true;
+  try {
+    const { data, error } = await fetchGetDashboardExecutionDistribution();
+    if (error || !data) {
+      if (error) window.$message?.error($t('page.home.executionDistribution.loadError'));
+      return;
+    }
+    distribution.value = data;
+    renderChart();
+  } finally {
+    loading.value = false;
+  }
 }
 
 function updateLocale() {
-  updateOptions((opts, factory) => {
-    const originOpts = factory();
-
-    opts.series[0].name = originOpts.series[0].name;
-
-    opts.series[0].data = [
-      { name: $t('page.home.study'), value: 20 },
-      { name: $t('page.home.entertainment'), value: 10 },
-      { name: $t('page.home.work'), value: 40 },
-      { name: $t('page.home.rest'), value: 30 }
-    ];
-
-    return opts;
-  });
+  renderChart();
 }
 
-async function init() {
-  mockData();
-}
+watch(() => appStore.locale, updateLocale);
 
-watch(
-  () => appStore.locale,
-  () => {
-    updateLocale();
-  }
-);
-
-// init
-init();
+loadDistribution();
 </script>
 
 <template>
-  <ElCard class="card-wrapper">
-    <div ref="domRef" class="h-360px overflow-hidden"></div>
+  <ElCard v-loading="loading" class="card-wrapper">
+    <template #header>
+      <div class="flex items-center justify-between gap-8px">
+        <span>{{ $t('page.home.executionDistribution.title') }}</span>
+        <span class="text-12px text-gray-500">
+          {{ $t('page.home.executionDistribution.period', { days: distribution?.periodDays ?? 30 }) }}
+          · {{ $t('page.home.executionDistribution.total', { total: distribution?.total ?? 0 }) }}
+        </span>
+      </div>
+    </template>
+    <div ref="domRef" class="h-320px min-h-320px overflow-hidden"></div>
   </ElCard>
 </template>
 

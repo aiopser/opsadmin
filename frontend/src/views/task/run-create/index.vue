@@ -3,13 +3,18 @@ import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   fetchCreateWorkflowRun,
+  fetchGetGatewayList,
   fetchGetHostGroupList,
   fetchGetHostList,
   fetchGetTagList,
   fetchGetWorkerPools,
+  fetchPreviewWorkflowRun,
   fetchPublishedWorkflowVersions
 } from '@/service/api';
+import ExecutionSettingsFields from '@/components/business/execution-settings-fields/index.vue';
 import HostSelectModal from '@/components/business/host-select-modal/index.vue';
+import RunPreviewDialog from '@/components/business/run-preview-dialog/index.vue';
+import { buildDefaultVars, getSchemaFields, missingRequiredFields, optLabel, optValue } from '../schema-form';
 
 defineOptions({ name: 'TaskRunCreate' });
 
@@ -20,31 +25,27 @@ const router = useRouter();
 
 const versions = shallowRef<Api.Jobs.WorkflowVersionOption[]>([]);
 const pools = shallowRef<Api.Jobs.WorkerPoolOption[]>([]);
+const gateways = shallowRef<Api.Jobs.GatewayRecord[]>([]);
 const hostGroups = shallowRef<Api.Cmdb.HostGroupRecord[]>([]);
 const hostTags = shallowRef<Api.Cmdb.HostTagRecord[]>([]);
 
 /** ============ 表单 ============ */
 
-type HostStrategy = 'parallel' | 'serial' | 'rolling';
-
-const hostStrategyOptions = [
-  { value: 'parallel', label: '并行', tip: '所有主机同时执行' },
-  { value: 'serial', label: '串行', tip: '主机按批次逐台执行' },
-  { value: 'rolling', label: '滚动', tip: '按批次滚动执行' }
-] as const;
+type HostStrategy = 'inherit' | 'parallel' | 'serial' | 'rolling';
 
 function getInitForm() {
   return {
     version: null as number | null,
     pool: null as number | null,
+    gateway: null as number | null,
     hosts: [] as number[],
     groups: [] as number[],
     tags: [] as number[],
-    hostStrategy: 'parallel' as HostStrategy,
-    forks: 5,
+    hostStrategy: 'inherit' as HostStrategy,
+    forks: null as number | null,
     serialBatch: null as number | null,
     maxFailPercentage: null as number | null,
-    timeoutSeconds: 3600
+    timeoutSeconds: null as number | null
   };
 }
 
@@ -75,13 +76,20 @@ function clearHosts() {
   form.hosts = [];
 }
 
+/** 只接受最新一次加载的结果：组件重复挂载时丢弃过期响应，避免旧数据覆盖新状态 */
+let loadOptionsSeq = 0;
+
 async function loadOptions() {
-  const [versionResult, poolResult, groupResult, tagResult] = await Promise.all([
+  loadOptionsSeq += 1;
+  const seq = loadOptionsSeq;
+  const [versionResult, poolResult, gatewayResult, groupResult, tagResult] = await Promise.all([
     fetchPublishedWorkflowVersions(),
     fetchGetWorkerPools(),
+    fetchGetGatewayList({ current: 1, size: 100 }),
     fetchGetHostGroupList(),
     fetchGetTagList()
   ]);
+  if (seq !== loadOptionsSeq) return;
   if (!versionResult.error) {
     versions.value = versionResult.data.list.filter(item => !item.workflowCode.startsWith('__quick_'));
   }
@@ -90,6 +98,9 @@ async function loadOptions() {
       item => item.isActive && (!item.executionKinds.length || item.executionKinds.includes('workflow'))
     );
     form.pool = pools.value.find(item => item.isDefault)?.id ?? pools.value[0]?.id ?? null;
+  }
+  if (!gatewayResult.error && gatewayResult.data) {
+    gateways.value = gatewayResult.data.records;
   }
   if (!groupResult.error) {
     hostGroups.value = groupResult.data.records.filter(item => item.is_active);
@@ -104,35 +115,16 @@ async function loadOptions() {
 
 const selectedVersion = computed(() => versions.value.find(item => item.id === form.version));
 
-function getSchemaFields(version?: Api.Jobs.WorkflowVersionOption) {
-  const schema = version?.inputSchema;
-  return Array.isArray(schema) ? schema : (schema?.fields ?? []);
-}
-
 const schemaFields = computed(() => getSchemaFields(selectedVersion.value));
 
 watch(selectedVersion, version => {
-  const next: Record<string, unknown> = {};
-  getSchemaFields(version).forEach(field => {
-    if (field.default !== undefined) next[field.name] = field.default;
-  });
+  const next = buildDefaultVars(getSchemaFields(version));
   // 再次执行：切到来源版本时预填值覆盖默认值
   if (version && prefillVars.value && prefillVars.value.versionId === version.id) {
     Object.assign(next, prefillVars.value.values);
   }
   inputVars.value = next;
 });
-
-/** select / multiselect 选项取值 */
-type FieldOption = NonNullable<Api.Jobs.WorkflowInputField['options']>[number];
-
-function optValue(opt: FieldOption) {
-  return typeof opt === 'object' ? opt.value : opt;
-}
-
-function optLabel(opt: FieldOption) {
-  return typeof opt === 'object' ? (opt.label ?? String(opt.value)) : String(opt);
-}
 
 /** ============ query 预填（模板页执行入口 / 任务列表再次执行 / 资产页带主机） ============ */
 
@@ -182,11 +174,12 @@ async function prefillHosts(ids: number[]) {
 /** ============ 提交 ============ */
 
 const submitting = ref(false);
+const previewVisible = ref(false);
+const preview = shallowRef<Api.Jobs.RunPreview | null>(null);
+const pendingPayload = shallowRef<Api.Jobs.WorkflowRunPayload | null>(null);
 
 function validateRequiredParams() {
-  const missing = schemaFields.value.filter(
-    field => field.required && (inputVars.value[field.name] === undefined || inputVars.value[field.name] === '')
-  );
+  const missing = missingRequiredFields(schemaFields.value, inputVars.value);
   if (missing.length) {
     window.$message?.warning(`请填写必填参数：${missing.map(field => field.label || field.name).join('、')}`);
     return false;
@@ -194,48 +187,64 @@ function validateRequiredParams() {
   return true;
 }
 
+function buildPayload(): Api.Jobs.WorkflowRunPayload {
+  const payload: Api.Jobs.WorkflowRunPayload = {
+    workflowVersionId: form.version as number,
+    hostIds: form.hosts,
+    groupIds: form.groups,
+    tagIds: form.tags,
+    workerPoolId: form.pool,
+    gatewayId: form.gateway,
+    inputVars: { ...inputVars.value },
+    hostStrategy: form.hostStrategy === 'inherit' ? null : form.hostStrategy,
+    forks: form.forks,
+    timeoutSeconds: form.timeoutSeconds
+  };
+  if (
+    (form.hostStrategy === 'serial' || form.hostStrategy === 'rolling' || form.hostStrategy === 'inherit') &&
+    form.serialBatch !== null
+  ) {
+    payload.serialBatch = form.serialBatch;
+  }
+  if (form.maxFailPercentage !== null) payload.maxFailPercentage = form.maxFailPercentage;
+  return payload;
+}
+
 async function submit() {
+  if (submitting.value) return;
   if (!form.version || !form.pool) {
-    window.$message?.warning('请选择已发布流程和 Worker 池');
+    window.$message?.warning('请选择已发布流程和执行节点池');
     return;
   }
   if (!validateRequiredParams()) return;
-  if (!form.hosts.length) {
-    // 仅含 API / Jenkins / 通知步骤的流程可无主机；含命令/脚本类步骤则必须指定目标
-    try {
-      await window.$messageBox?.confirm(
-        '未选择目标主机。若流程包含命令/脚本/Playbook/模块步骤，将无法执行。确认继续提交？',
-        '目标资产确认',
-        { type: 'warning', confirmButtonText: '继续', cancelButtonText: '取消' }
-      );
-    } catch {
-      return;
-    }
-  }
-
   submitting.value = true;
   try {
-    const payload: Api.Jobs.WorkflowRunPayload = {
-      workflowVersionId: form.version,
-      hostIds: form.hosts,
-      groupIds: form.groups,
-      tagIds: form.tags,
-      workerPoolId: form.pool,
-      inputVars: { ...inputVars.value },
-      hostStrategy: form.hostStrategy,
-      forks: form.forks,
-      timeoutSeconds: form.timeoutSeconds
-    };
-    if (form.hostStrategy === 'serial' && form.serialBatch) {
-      payload.serialBatch = form.serialBatch;
-    }
-    if (form.maxFailPercentage !== null) {
-      payload.maxFailPercentage = form.maxFailPercentage;
-    }
-    const { data, error } = await fetchCreateWorkflowRun(payload);
+    const payload = buildPayload();
+    const { data, error } = await fetchPreviewWorkflowRun(payload);
+    if (error || !data) return;
+    pendingPayload.value = payload;
+    preview.value = data;
+    previewVisible.value = true;
+  } finally {
+    submitting.value = false;
+  }
+}
+
+async function confirmRun() {
+  if (submitting.value || !pendingPayload.value || !preview.value) return;
+  submitting.value = true;
+  try {
+    const { data, error } = await fetchCreateWorkflowRun({
+      ...pendingPayload.value,
+      expectedTargetIds: preview.value.targets.map(target => target.hostId),
+      expectedTargetFingerprint: preview.value.targetFingerprint,
+      expectedConfirmationFingerprint: preview.value.confirmationFingerprint,
+      executionRequestId: preview.value.executionRequestId
+    });
     if (!error && data) {
-      window.$message?.success('任务已发起');
-      router.push(`/task/run-detail/${data.id}`);
+      previewVisible.value = false;
+      window.$notification?.success('执行已发起');
+      router.push({ name: 'task_run-detail', params: { id: data.id } });
     }
   } finally {
     submitting.value = false;
@@ -250,12 +259,18 @@ onMounted(loadOptions);
     <ElCard class="card-wrapper sm:flex-1-hidden">
       <template #header>
         <div class="flex items-center justify-between">
-          <p>创建任务</p>
+          <p>发起执行</p>
           <ElButton text type="primary" @click="loadOptions">刷新选项</ElButton>
         </div>
       </template>
 
-      <ElForm :model="form" label-width="120px">
+      <ElForm
+        :model="form"
+        label-width="170px"
+        label-suffix="："
+        require-asterisk-position="left"
+        class="responsive-form"
+      >
         <ElRow :gutter="16">
           <!-- ① 流程选择 -->
           <ElCol :xl="12" :lg="24" :md="24" :sm="24" :xs="24">
@@ -270,15 +285,15 @@ onMounted(loadOptions);
                   />
                 </ElSelect>
               </ElFormItem>
-              <div v-if="selectedVersion" class="w-full text-12px text-gray-400">
+              <div v-if="selectedVersion" class="w-full text-12px text-gray-500">
                 编码：{{ selectedVersion.workflowCode }} · 发布后固定引用资源版本，运行时使用快照
               </div>
             </ElCard>
           </ElCol>
 
-          <!-- ② 运行参数 -->
+          <!-- ② 任务单参数 -->
           <ElCol :xl="12" :lg="24" :md="24" :sm="24" :xs="24">
-            <ElCard shadow="never" header="运行参数" class="mb-16px">
+            <ElCard shadow="never" header="任务单参数" class="mb-16px">
               <template v-if="schemaFields.length">
                 <ElFormItem
                   v-for="field in schemaFields"
@@ -333,7 +348,7 @@ onMounted(loadOptions);
                   />
                 </ElFormItem>
               </template>
-              <ElEmpty v-else description="该流程未定义输入参数" :image-size="60" />
+              <ElEmpty v-else description="该流程未定义任务单参数（extra_vars）" :image-size="60" />
             </ElCard>
           </ElCol>
 
@@ -357,10 +372,10 @@ onMounted(loadOptions);
                       closable
                       @close="removeHost(host.id)"
                     >
-                      {{ host.hostname }} · {{ host.primaryIp }}
+                      {{ host.hostname }} · {{ host.internalIp }}
                     </ElTag>
                   </div>
-                  <div v-else class="mt-8px text-12px text-gray-400">
+                  <div v-else class="mt-8px text-12px text-gray-500">
                     命令/脚本/Playbook/模块步骤在所选主机上执行；API、Jenkins、通知步骤使用自身资源配置，不需要主机
                   </div>
                 </div>
@@ -393,44 +408,47 @@ onMounted(loadOptions);
                   <ElOption v-for="tag in hostTags" :key="tag.id" :value="tag.id" :label="tag.label" />
                 </ElSelect>
               </ElFormItem>
-              <div class="text-12px text-gray-400">主机、主机组、标签三类目标会合并去重后作为最终执行范围</div>
+              <div class="text-12px text-gray-500">主机、主机组、标签三类目标会合并去重后作为最终执行范围</div>
             </ElCard>
           </ElCol>
 
           <!-- ④ 执行设置 -->
           <ElCol :xl="12" :lg="24" :md="24" :sm="24" :xs="24">
             <ElCard shadow="never" header="执行设置" class="mb-16px">
-              <ElFormItem label="Worker 池" required>
+              <ElFormItem required>
+                <template #label>
+                  <FormLabelHelp
+                    label="执行节点池"
+                    :help="['运行被投递到该池对应队列执行；池可限制并发数量与支持的执行类型。']"
+                  />
+                </template>
                 <ElSelect v-model="form.pool" class="w-full" placeholder="选择执行池">
                   <ElOption v-for="pool in pools" :key="pool.id" :value="pool.id" :label="pool.name" />
                 </ElSelect>
               </ElFormItem>
-              <ElFormItem label="执行策略">
-                <ElRadioGroup v-model="form.hostStrategy">
-                  <ElTooltip v-for="item in hostStrategyOptions" :key="item.value" :content="item.tip" placement="top">
-                    <ElRadio :value="item.value">{{ item.label }}</ElRadio>
-                  </ElTooltip>
-                </ElRadioGroup>
+              <ElFormItem label="连接网关">
+                <ElSelect v-model="form.gateway" class="w-full" clearable placeholder="不指定则全部直连">
+                  <ElOption
+                    v-for="gateway in gateways"
+                    :key="gateway.id"
+                    :value="gateway.id"
+                    :label="`${gateway.name}（${gateway.address}）`"
+                  />
+                </ElSelect>
+                <div class="mt-4px w-full text-12px text-gray-500">
+                  选定后所有 SSH 主机统一走该网关代理；仅命令/脚本/Playbook/模块步骤受影响
+                </div>
               </ElFormItem>
-              <ElFormItem v-if="form.hostStrategy === 'serial'" label="每批主机数">
-                <ElInputNumber v-model="form.serialBatch" :min="1" placeholder="默认 1 台/批" />
-              </ElFormItem>
-              <ElFormItem label="并发数（forks）">
-                <ElInputNumber v-model="form.forks" :min="1" :max="100" :disabled="form.hostStrategy === 'serial'" />
-                <span v-if="form.hostStrategy === 'serial'" class="ml-8px text-12px text-gray-400">
-                  串行策略强制逐台执行
-                </span>
-              </ElFormItem>
-              <ElFormItem label="超时秒数">
-                <ElInputNumber v-model="form.timeoutSeconds" :min="1" :max="86400" :step="60" />
-              </ElFormItem>
-              <ElFormItem label="最大失败比例">
-                <ElInputNumber v-model="form.maxFailPercentage" :min="0" :max="100" placeholder="不限制" />
-                <span class="ml-8px text-12px text-gray-400">失败主机占比超过该值时终止剩余执行</span>
-              </ElFormItem>
+              <ExecutionSettingsFields
+                v-model:host-strategy="form.hostStrategy"
+                v-model:forks="form.forks"
+                v-model:serial-batch="form.serialBatch"
+                v-model:max-fail-percentage="form.maxFailPercentage"
+                v-model:timeout-seconds="form.timeoutSeconds"
+              />
 
               <ElFormItem>
-                <ElButton type="primary" :loading="submitting" @click="submit">提交任务</ElButton>
+                <ElButton type="primary" :loading="submitting" @click="submit">确认执行</ElButton>
               </ElFormItem>
             </ElCard>
           </ElCol>
@@ -439,5 +457,6 @@ onMounted(loadOptions);
     </ElCard>
 
     <HostSelectModal v-model:visible="hostModalVisible" :selected-hosts="selectedHosts" @confirm="onHostsConfirm" />
+    <RunPreviewDialog v-model:visible="previewVisible" :preview="preview" :loading="submitting" @confirm="confirmRun" />
   </div>
 </template>

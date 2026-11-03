@@ -98,7 +98,7 @@ async function handleSubmit() {
     props.operateType === 'add' ? await addUser(model.value) : await updateUser(props.rowData!.id, model.value);
 
   if (!error) {
-    window.$message?.success($t('common.updateSuccess'));
+    window.$notification?.success($t('common.updateSuccess'));
     closeDrawer();
     emit('submitted');
   }
@@ -115,8 +115,21 @@ watch(visible, () => {
 
 <template>
   <ElDrawer v-model="visible" :title="title" :size="360">
-    <ElForm ref="formRef" :model="model" :rules="rules" label-position="top">
-      <ElFormItem :label="$t('page.manage.user.userName')" prop="userName">
+    <ElForm
+      ref="formRef"
+      :model="model"
+      :rules="rules"
+      label-position="top"
+      label-suffix="："
+      require-asterisk-position="left"
+    >
+      <ElFormItem prop="userName">
+        <template #label>
+          <FormLabelHelp
+            :label="$t('page.manage.user.userName')"
+            :help="['登录账号，全局唯一，用户使用该账号登录系统。']"
+          />
+        </template>
         <ElInput v-model="model.userName" :placeholder="$t('page.manage.user.form.userName')" />
       </ElFormItem>
       <ElFormItem :label="$t('page.manage.user.userGender')" prop="userGender">
@@ -138,7 +151,13 @@ watch(visible, () => {
           <ElRadio v-for="item in enableStatusOptions" :key="item.value" :value="item.value" :label="$t(item.label)" />
         </ElRadioGroup>
       </ElFormItem>
-      <ElFormItem :label="$t('page.manage.user.userRole')" prop="roles">
+      <ElFormItem prop="roles">
+        <template #label>
+          <FormLabelHelp
+            :label="$t('page.manage.user.userRole')"
+            :help="['角色决定用户可访问的菜单与操作权限，可多选。']"
+          />
+        </template>
         <ElSelect v-model="model.userRoles" multiple :placeholder="$t('page.manage.user.form.userRole')">
           <ElOption v-for="{ label, value } in roleOptions" :key="value" :label="label" :value="value" />
         </ElSelect>

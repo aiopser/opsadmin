@@ -333,7 +333,7 @@ def _create_log_with_sequence(run, node, attempt, scoped_key, safe, base):
 def _append_once(run_id, node_run_id, attempt_id, event_key, event):
     run = WorkflowRun.objects.get(pk=run_id)
     node = (
-        NodeRun.objects.filter(pk=node_run_id, workflow_run_id=run_id).first()
+        NodeRun.objects.select_for_update().filter(pk=node_run_id, workflow_run_id=run_id).first()
         if node_run_id
         else None
     )
@@ -383,6 +383,7 @@ def _append_once(run_id, node_run_id, attempt_id, event_key, event):
         runner_event
         and node
         and (attempt is None or attempt.attempt == node.attempt_count)
+        and (attempt is None or (node.status == NodeRun.Status.RUNNING and attempt.celery_task_id == node.celery_task_id))
     ):
         from .event_types import JobEvent
         from .projections import JobEventProjector
@@ -393,9 +394,9 @@ def _append_once(run_id, node_run_id, attempt_id, event_key, event):
             )
         )
     if runner_event:
-        from .log_artifacts import archive_event_stdout
+        from .log_artifacts import queue_event_stdout_archive
 
-        transaction.on_commit(lambda: archive_event_stdout(run.id, log.sequence, safe))
+        queue_event_stdout_archive(run.id, log.sequence, safe)
     from .realtime.publisher import publish_events_available
 
     transaction.on_commit(lambda: publish_events_available(run.id, log.sequence))

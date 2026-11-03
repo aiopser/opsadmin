@@ -1,4 +1,5 @@
 from .models import DomainAuditEvent
+from ipaddress import ip_address
 from common.redaction import redact_text, redact_value
 
 
@@ -6,9 +7,11 @@ def _get_client_ip(request):
     if not request:
         return None
     forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR")
+    candidate = forwarded_for.split(",")[0].strip() if forwarded_for else request.META.get("REMOTE_ADDR")
+    try:
+        return str(ip_address(candidate)) if candidate else None
+    except ValueError:
+        return None
 
 
 def create_domain_audit_event(

@@ -3,23 +3,67 @@ from django.test import SimpleTestCase, TestCase
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.cmdb.audit import build_cmdb_audit_snapshot
-from apps.cmdb.serializers import AssetHostSerializer, ServiceTreeNodeSerializer
-from apps.cmdb.services import resolve_group_host_ids
+from apps.cmdb.serializers import AssetHostSerializer
+from apps.cmdb.services import collect_group_tree_ids, resolve_group_host_ids
+from apps.cmdb.sync_preview import preview_asset_sync
 from apps.cmdb.tasks import sync_asset_source
 from apps.cmdb.models import (
     AssetHost,
     AssetSource,
     AssetSyncRecord,
-    Business,
     CredentialRef,
     HostGroup,
-    ServiceTreeNode,
 )
 from apps.audit_center.models import DomainAuditEvent
 from apps.jobs.models import Gateway
 
 
 class CMDBModelTests(TestCase):
+    def test_cloud_type_repair_does_not_reclassify_manual_hosts(self):
+        from importlib import import_module
+        from types import SimpleNamespace
+        from django.apps import apps
+
+        source = AssetSource.objects.create(
+            code="repair-aliyun", name="Aliyun", source_type="cloud", cloud_provider="aliyun",
+        )
+        cloud = AssetHost.objects.create(
+            hostname="ecs", internal_ip="10.0.0.1", asset_source=source,
+            source_type="cloud", source_id="i-ecs", asset_type="server",
+        )
+        manual = AssetHost.objects.create(hostname="physical", internal_ip="10.0.0.2", asset_type="server")
+        migration = import_module("apps.cmdb.migrations.0012_fix_public_cloud_asset_types")
+        editor = SimpleNamespace(connection=SimpleNamespace(alias="default"))
+        migration.repair_public_cloud_types(apps, editor)
+        migration.repair_public_cloud_types(apps, editor)
+        cloud.refresh_from_db()
+        manual.refresh_from_db()
+        self.assertEqual(cloud.asset_type, "cloud_instance")
+        self.assertEqual(manual.asset_type, "server")
+
+    def test_public_cloud_sync_classifies_new_and_existing_instances(self):
+        for provider in ("aliyun", "tencent"):
+            source = AssetSource.objects.create(
+                code=f"type-{provider}", name=provider, source_type="cloud",
+                cloud_provider=provider,
+            )
+            host = AssetHost.objects.create(
+                hostname=f"old-{provider}", internal_ip="10.0.0.1", asset_source=source,
+                source_id="existing", asset_type="server", owner_team="operations",
+            )
+            record = AssetSyncRecord.objects.create(source=source, payload=[
+                {"source_id": "existing", "hostname": f"old-{provider}", "internal_ip": "10.0.0.1", "cpu_cores": 4, "memory_mb": 8192, "system_disk_gb": 40, "data_disk_gb": 100, "region": "test-region"},
+                {"source_id": "new", "hostname": f"new-{provider}", "internal_ip": "10.0.0.2", "cpu_cores": 2, "memory_mb": 4096, "system_disk_gb": 50, "region": "test-region"},
+            ], total_count=2)
+            sync_asset_source(record.pk)
+            host.refresh_from_db()
+            self.assertEqual(host.asset_type, "cloud_instance")
+            self.assertEqual(host.owner_team, "operations")
+            self.assertEqual((host.cpu_cores, host.memory_mb, host.system_disk_gb, host.data_disk_gb, host.region), (4, 8192, 40, 100, "test-region"))
+            new_host = AssetHost.objects.get(asset_source=source, source_id="new")
+            self.assertEqual((new_host.cpu_cores, new_host.memory_mb, new_host.system_disk_gb, new_host.region), (2, 4096, 50, "test-region"))
+            self.assertEqual(AssetHost.objects.get(asset_source=source, source_id="new").asset_type, "cloud_instance")
+
     def test_asset_source_sync_upserts_hosts_and_records_counts(self):
         source = AssetSource.objects.create(
             code="external",
@@ -32,7 +76,7 @@ class CMDBModelTests(TestCase):
                 {
                     "id": "ext-1",
                     "hostname": "web01",
-                    "primary_ip": "10.0.0.11",
+                    "internal_ip": "10.0.0.11",
                     "os_family": "linux",
                     "connection_type": "ssh",
                 }
@@ -49,6 +93,43 @@ class CMDBModelTests(TestCase):
             AssetHost.objects.filter(asset_source=source, source_id="ext-1").exists()
         )
 
+    def test_asset_source_sync_reports_partial_success(self):
+        source = AssetSource.objects.create(
+            code="partial-source",
+            name="Partial Source",
+            source_type=AssetSource.SourceType.EXTERNAL_CMDB,
+        )
+        record = AssetSyncRecord.objects.create(
+            source=source,
+            payload=[
+                {"id": "host-1", "hostname": "web01", "internal_ip": "10.0.0.11"},
+                {"id": "host-2", "hostname": "missing-ip"},
+            ],
+            total_count=2,
+        )
+
+        sync_asset_source(record.id)
+        record.refresh_from_db()
+        self.assertEqual(record.status, AssetSyncRecord.Status.PARTIAL)
+        self.assertEqual((record.created_count, record.skipped_count), (1, 1))
+
+    def test_asset_sync_preview_is_read_only_and_detects_duplicates(self):
+        source = AssetSource.objects.create(
+            code="preview-source", name="Preview", source_type=AssetSource.SourceType.CLOUD
+        )
+        AssetHost.objects.create(
+            hostname="existing", internal_ip="10.0.0.1",
+            asset_source=source, source_id="cloud-1",
+        )
+        preview = preview_asset_sync(source, [
+            {"id": "cloud-1", "hostname": "existing", "internal_ip": "10.0.0.1"},
+            {"id": "cloud-2", "hostname": "new", "internal_ip": "10.0.0.2"},
+            {"id": "cloud-2", "hostname": "duplicate", "internal_ip": "10.0.0.3"},
+            {"hostname": "unidentified", "internal_ip": "10.0.0.4"},
+        ])
+        self.assertEqual((preview["create"], preview["update"], preview["unchanged"], preview["invalid"]), (1, 0, 1, 2))
+        self.assertEqual(AssetHost.objects.count(), 1)
+
     def test_dynamic_group_resolves_active_hosts_from_match_rule(self):
         group = HostGroup.objects.create(
             name="Production Linux",
@@ -57,14 +138,14 @@ class CMDBModelTests(TestCase):
         )
         host = AssetHost.objects.create(
             hostname="web01",
-            primary_ip="10.0.0.11",
+            internal_ip="10.0.0.11",
             os_family=AssetHost.OSFamily.LINUX,
             environment="prod",
             connection_type=AssetHost.ConnectionType.SSH,
         )
         AssetHost.objects.create(
             hostname="test01",
-            primary_ip="10.0.0.12",
+            internal_ip="10.0.0.12",
             os_family=AssetHost.OSFamily.LINUX,
             environment="test",
             connection_type=AssetHost.ConnectionType.SSH,
@@ -82,7 +163,7 @@ class CMDBModelTests(TestCase):
         )
         host = AssetHost.objects.create(
             hostname="web01",
-            primary_ip="10.0.0.11",
+            internal_ip="10.0.0.11",
             os_family=AssetHost.OSFamily.LINUX,
             asset_source=source,
             source_type=AssetHost.SourceType.MANUAL,
@@ -93,89 +174,24 @@ class CMDBModelTests(TestCase):
         self.assertEqual(host.asset_source, source)
         self.assertEqual(host.source_id, "legacy-web01")
 
-    def test_service_tree_hierarchy_can_be_attached_to_host(self):
-        business = Business.objects.create(code="commerce", name="Commerce")
-        environment = ServiceTreeNode.objects.create(
-            business=business,
-            code="prod",
-            name="Production",
-            node_type=ServiceTreeNode.NodeType.ENVIRONMENT,
-        )
-        region = ServiceTreeNode.objects.create(
-            business=business,
-            parent=environment,
-            code="cn-east",
-            name="China East",
-            node_type=ServiceTreeNode.NodeType.REGION,
-        )
-        module = ServiceTreeNode.objects.create(
-            business=business,
-            parent=region,
-            code="web",
-            name="Web",
-            node_type=ServiceTreeNode.NodeType.MODULE,
-        )
-        host = AssetHost.objects.create(
-            hostname="web01",
-            primary_ip="10.0.0.11",
-            os_family=AssetHost.OSFamily.LINUX,
-            service_node=module,
-            connection_type=AssetHost.ConnectionType.SSH,
-        )
+    def test_collect_group_tree_ids_includes_all_descendants(self):
+        root = HostGroup.objects.create(name="Root")
+        mid = HostGroup.objects.create(name="Mid", parent=root)
+        leaf = HostGroup.objects.create(name="Leaf", parent=mid)
+        other = HostGroup.objects.create(name="Other")
 
-        self.assertEqual(host.service_node, module)
-        self.assertEqual(module.parent, region)
-
-    def test_service_tree_serializer_rejects_invalid_parent_type(self):
-        business = Business.objects.create(code="commerce", name="Commerce")
-        environment = ServiceTreeNode.objects.create(
-            business=business,
-            code="prod",
-            name="Production",
-            node_type=ServiceTreeNode.NodeType.ENVIRONMENT,
+        self.assertEqual(
+            collect_group_tree_ids([root.id]), {root.id, mid.id, leaf.id}
         )
-        serializer = ServiceTreeNodeSerializer(
-            data={
-                "business": business.id,
-                "parent": environment.id,
-                "code": "invalid",
-                "name": "Invalid Environment",
-                "node_type": ServiceTreeNode.NodeType.ENVIRONMENT,
-            }
-        )
-
-        self.assertFalse(serializer.is_valid())
-        self.assertIn("parent", serializer.errors)
-
-    def test_host_serializer_rejects_inactive_service_tree_node(self):
-        business = Business.objects.create(code="commerce", name="Commerce")
-        node = ServiceTreeNode.objects.create(
-            business=business,
-            code="retired",
-            name="Retired",
-            node_type=ServiceTreeNode.NodeType.ENVIRONMENT,
-            is_active=False,
-        )
-        serializer = AssetHostSerializer(
-            data={
-                "hostname": "web01",
-                "primary_ip": "10.0.0.11",
-                "os_family": AssetHost.OSFamily.LINUX,
-                "service_node": node.id,
-                "connection_type": AssetHost.ConnectionType.SSH,
-                "connection_port": 22,
-            }
-        )
-
-        self.assertFalse(serializer.is_valid())
-        self.assertIn("service_node", serializer.errors)
+        self.assertEqual(collect_group_tree_ids([leaf.id]), {leaf.id})
+        self.assertEqual(collect_group_tree_ids([other.id]), {other.id})
 
     def test_host_serializer_rejects_gateway_for_non_ssh_host(self):
         gateway = Gateway.objects.create(name="jump", address="10.0.0.1:22")
         serializer = AssetHostSerializer(
             data={
                 "hostname": "win01",
-                "primary_ip": "10.0.0.12",
+                "internal_ip": "10.0.0.12",
                 "os_family": AssetHost.OSFamily.WINDOWS,
                 "connection_type": AssetHost.ConnectionType.WINRM,
                 "connection_port": 5986,
@@ -195,7 +211,7 @@ class CMDBModelTests(TestCase):
         )
         host = AssetHost.objects.create(
             hostname="web01",
-            primary_ip="10.0.0.11",
+            internal_ip="10.0.0.11",
             os_family=AssetHost.OSFamily.LINUX,
             cpu_cores=2,
             memory_mb=4096,
@@ -214,7 +230,7 @@ class CMDBAuditSnapshotTests(SimpleTestCase):
     def test_snapshot_uses_foreign_key_id_and_redacts_secret_ref(self):
         host = AssetHost(
             hostname="audit-web01",
-            primary_ip="10.0.0.12",
+            internal_ip="10.0.0.12",
             os_family=AssetHost.OSFamily.LINUX,
             connection_type=AssetHost.ConnectionType.SSH,
         )
@@ -246,7 +262,7 @@ class CMDBApiTests(TestCase):
 
         AssetHost.objects.create(
             hostname="web01",
-            primary_ip="10.0.0.11",
+            internal_ip="10.0.0.11",
             os_family=AssetHost.OSFamily.LINUX,
             cpu_cores=2,
             memory_mb=4096,
@@ -273,7 +289,7 @@ class CMDBApiTests(TestCase):
             "/api/v1/cmdb/hosts",
             {
                 "hostname": "audit-web01",
-                "primary_ip": "10.0.0.12",
+                "internal_ip": "10.0.0.12",
                 "os_family": AssetHost.OSFamily.LINUX,
                 "connection_type": AssetHost.ConnectionType.SSH,
                 "connection_port": 22,

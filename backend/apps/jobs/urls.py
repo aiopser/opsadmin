@@ -9,7 +9,6 @@ from .views import (
     HostRunResultViewSet,
     ModuleRunViewSet,
     NodeRunViewSet,
-    NotifySettingsView,
     OpsWorkflowRunViewSet,
     PlaybookRunViewSet,
     QuickCommandRunViewSet,
@@ -17,9 +16,11 @@ from .views import (
     SecurityRuleViewSet,
     SecurityStatsView,
     DashboardStatsView,
+    DashboardExecutionDistributionView,
     DashboardHealthView,
     DashboardRecentView,
     WorkflowRunViewSet,
+    WorkflowTaskTicketViewSet,
 )
 
 router = SimpleRouter(trailing_slash=False)
@@ -30,6 +31,11 @@ router.register(
     r"v1/tasks/runs",
     WorkflowRunViewSet,
     basename="task-runs",
+)
+router.register(
+    r"v1/tasks/tickets",
+    WorkflowTaskTicketViewSet,
+    basename="task-tickets",
 )
 router.register(
     r"v1/ops/runs",
@@ -71,9 +77,9 @@ router.register(r"v1/jobs/module-runs", ModuleRunViewSet, basename="jobs-module-
 urlpatterns = [
     path("v1/jobs/security/stats", SecurityStatsView.as_view()),
     path("v1/jobs/dashboard/stats", DashboardStatsView.as_view()),
+    path("v1/jobs/dashboard/execution-distribution", DashboardExecutionDistributionView.as_view()),
     path("v1/jobs/dashboard/recent", DashboardRecentView.as_view()),
     path("v1/jobs/dashboard/health", DashboardHealthView.as_view()),
     path("v1/jobs/settings/engine", EngineSettingsView.as_view()),
-    path("v1/jobs/settings/notify", NotifySettingsView.as_view()),
     *router.urls,
 ]

@@ -85,7 +85,10 @@ def test_cancel_waits_for_running_worker_confirmation(run):
 
 @pytest.mark.django_db
 def test_retry_creates_new_attempt_and_old_delivery_stays_fenced(run):
+    from django.contrib.auth import get_user_model
     from apps.jobs.application.retry import retry_failed_node
+    run.triggered_by = get_user_model().objects.create_user(username="retry-owner")
+    run.save(update_fields=["triggered_by"])
     node = NodeRun.objects.create(workflow_run=run, status="failed", attempt_count=1)
     old = NodeRunAttempt.objects.create(node_run=node, attempt=1, status="failed")
     result = retry_failed_node(node.id)

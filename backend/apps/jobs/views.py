@@ -1,3 +1,4 @@
+from .idempotency import execution_idempotent
 from uuid import uuid4
 from apps.jobs.events import append_run_event
 import csv
@@ -6,20 +7,199 @@ from datetime import datetime, timedelta
 
 from django.conf import settings
 from django.http import HttpResponse
+from django.shortcuts import get_object_or_404
 from django.db import transaction
-from django.db.models import Avg, Count
+from django.db.models.deletion import ProtectedError
+from django.db.models import Avg, Count, F, Q
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework.exceptions import ValidationError
+from rest_framework import serializers as drf_serializers
 from rest_framework.decorators import action
 from rest_framework.views import APIView
+from drf_spectacular.utils import extend_schema
+from common.api.schema import api_envelope_serializer
+from .schema_serializers import (
+    SecurityStatsSerializer,
+    DashboardStatsSerializer,
+    ExecutionDistributionSerializer,
+    DashboardHealthSerializer,
+    DashboardRecentItemSerializer,
+    EngineSettingsSerializer,
+    EngineSettingsUpdateSerializer,
+)
 
 from .application.dispatch import enqueue_workflow_run
 from .cron import next_cron_time
+from .schedule_sync import remove_periodic_task, upsert_periodic_task
 from apps.jobs.models import WorkerPool
 from common.api.responses import api_error_response, api_ok_response
 from common.api.viewsets import StandardModelViewSet
+from common.pagination import StandardResultSetPagination
+from common.runtime_health import runtime_environment
 from .serializers import WorkerPoolSerializer
+from apps.cmdb.targets import resolve_targets, target_snapshot_fingerprint
+from .confirmation import confirmation_fingerprint, definition_config, request_config
+from common.workflow.node_types import ANSIBLE_NODE_TYPES, CONTROL_NODE_TYPES
+
+
+def _preview_host_policy(node):
+    if node.get("type") not in ANSIBLE_NODE_TYPES:
+        return "none"
+    config = node.get("config") or {}
+    if (
+        node.get("type") == "playbook"
+        and config.get("hostPolicy", "native") == "native"
+    ):
+        return "native"
+    if any(
+        config.get(field) is not None
+        for field in ("hostStrategy", "forks", "serialBatch", "maxFailPercentage")
+    ):
+        return "step"
+    return "run"
+
+def _execution_preview(
+    workflow_version,
+    targets,
+    worker_pool,
+    *,
+    input_vars=None,
+    host_strategy=None,
+    gateway_id=None,
+    confirmation_config=None,
+):
+    """Public, non-secret projection of the same resolved targets used to create runs."""
+    graph = workflow_version.graph_snapshot or {}
+    if not targets and any(
+        node.get("type") in ANSIBLE_NODE_TYPES for node in graph.get("nodes", [])
+    ):
+        raise ValidationError({"hostIds": "流程包含主机执行步骤，请选择目标主机"})
+    gateway = None
+    if gateway_id:
+        gateway = Gateway.objects.filter(
+            pk=gateway_id, status=Gateway.Status.NORMAL
+        ).first()
+        if gateway is None:
+            raise ValidationError({"gatewayId": "连接网关已不可用，请重新选择"})
+        if any(target.get("connection_type") != "ssh" for target in targets):
+            raise ValidationError({"gatewayId": "连接网关仅支持 SSH 主机"})
+    input_schema = workflow_version.input_schema or []
+    fields = (
+        input_schema.get("fields") or []
+        if isinstance(input_schema, dict)
+        else input_schema
+    )
+    parameters = []
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        name = field.get("name")
+        if not isinstance(name, str) or name not in (input_vars or {}):
+            continue
+        value = input_vars[name]
+        display = "已填写（保密）" if field.get("type") == "secret" else str(value)
+        parameters.append({"name": field.get("label") or name, "value": display[:120]})
+    return {
+        "valid": True,
+        "executionRequestId": uuid4().hex,
+        "workflowVersionId": workflow_version.id,
+        "workflowName": workflow_version.workflow.name,
+        "targetCount": len(targets),
+        "targetFingerprint": target_snapshot_fingerprint(targets),
+        "confirmationFingerprint": confirmation_fingerprint(
+            workflow_version, worker_pool, confirmation_config
+        ),
+        "targets": [
+            {
+                "hostId": target["host_id"],
+                "hostname": target["hostname"],
+                "address": target["address"],
+            }
+            for target in targets
+        ],
+        "steps": [
+            {
+                "key": node["id"],
+                "name": node.get("name") or node["id"],
+                "type": node["type"],
+                "targetScope": "all" if node["type"] in ANSIBLE_NODE_TYPES else "none",
+                "hostPolicySource": _preview_host_policy(node),
+            }
+            for node in graph.get("nodes", [])
+            if node.get("type") not in CONTROL_NODE_TYPES
+        ],
+        "workerPoolId": getattr(worker_pool, "id", None),
+        "workerPoolName": getattr(worker_pool, "name", ""),
+        "gatewayName": gateway.name if gateway else "",
+        "parameters": parameters,
+        "hostStrategy": host_strategy or "inherit",
+    }
+
+
+def _quick_execution_preview(serializer, label):
+    values = serializer.validated_data
+    preview = _execution_preview(
+        values["workflow_version"],
+        values["target_preview"],
+        values["worker_pool"],
+        host_strategy=values.get("hostStrategy"),
+        gateway_id=values.get("gatewayId"),
+        confirmation_config=request_config(serializer.initial_data, values),
+    )
+    preview["workflowName"] = values.get("name") or label
+    if "commandType" in values:
+        preview["contentSummary"] = [
+            {"name": "执行类型", "value": "脚本"},
+            {"name": "脚本语言", "value": values["commandType"]},
+            {
+                "name": "资源版本",
+                "value": str(
+                    getattr(values.get("source_command_version"), "id", None) or "在线输入"
+                ),
+            },
+        ]
+    elif "playbookContent" in values:
+        for step in preview["steps"]:
+            if step["targetScope"] == "all":
+                step["hostPolicySource"] = "native"
+        preview["contentSummary"] = [
+            {"name": "执行类型", "value": "Playbook"},
+            {"name": "剧本名称", "value": (values.get("playbookName") or "Playbook")[:80]},
+            {
+                "name": "资源版本",
+                "value": str(
+                    getattr(values.get("playbook_version"), "id", None) or "在线输入"
+                ),
+            },
+        ]
+    elif "module" in values:
+        preview["contentSummary"] = [
+            {"name": "执行类型", "value": "Ansible Module"},
+            {"name": "模块名称", "value": values["module"]},
+            {
+                "name": "资源版本",
+                "value": str(
+                    getattr(values.get("module_version"), "id", None) or "在线输入"
+                ),
+            },
+            {"name": "检查模式", "value": "开启" if values.get("checkMode") else "关闭"},
+        ]
+    source = (
+        values.get("source_command_version")
+        or values.get("playbook_version")
+        or values.get("module_version")
+    )
+    defaults = getattr(source, "default_vars", None) or {}
+    default_keys = set(defaults) - {"module_args"}
+    overrides = values.get("extraVars") or {}
+    preview["contentSummary"].append(
+        {
+            "name": "extra_vars",
+            "value": f"资源默认 {len(default_keys)} 项，本次填写 {len(overrides)} 项，同名覆盖",
+        }
+    )
+    return preview
 
 
 class WorkerPoolViewSet(StandardModelViewSet):
@@ -75,12 +255,10 @@ from .application.cancel import request_execution_cancel
 from .application.retry import retry_failed_node
 from .settings_service import (
     get_engine_settings,
-    get_notify_settings,
     save_engine_settings,
-    save_notify_settings,
 )
 from apps.jobs.application.runs import (
-    create_workflow_run_from_host_ids,
+    create_workflow_run_from_selector,
     clone_workflow_run,
     scheduled_job_run_options,
 )
@@ -94,11 +272,13 @@ from .models import (
     ScheduledJob,
     SecurityRule,
     WorkflowRun,
+    WorkflowTaskTicket,
 )
 from .serializers import (
     CommandInterceptSerializer,
     GatewaySerializer,
     HostRunResultSerializer,
+    HostRunResultSummarySerializer,
     JobEventLogSerializer,
     ModuleRunCreateSerializer,
     NodeRunSerializer,
@@ -109,7 +289,9 @@ from .serializers import (
     SecurityRuleSerializer,
     WorkflowRunCreateSerializer,
     WorkflowRunSerializer,
+    WorkflowTaskTicketSerializer,
 )
+from .input_secrets import resolve_workflow_inputs
 
 
 def _workflow_run_audit_summary(run):
@@ -146,7 +328,14 @@ class WorkflowRunViewSet(StandardModelViewSet):
     ).all()
     serializer_class = WorkflowRunSerializer
     ordering_fields = ("id", "status", "started_at", "finished_at", "updated_at")
-    filterset_fields = ("status", "trigger_type", "execution_kind", "workflow_version", "worker_pool")
+    filterset_fields = (
+        "status",
+        "trigger_type",
+        "execution_kind",
+        "workflow_version",
+        "worker_pool",
+        "workflow_version__workflow",
+    )
     search_fields = ("=id", "failure_reason", "workflow_version__workflow__name")
     run_domain = WorkflowRun.RunDomain.TASK
 
@@ -159,12 +348,20 @@ class WorkflowRunViewSet(StandardModelViewSet):
             "triggerType": "trigger_type",
             "executionKind": "execution_kind",
             "workflowVersionId": "workflow_version_id",
+            "workflowId": "workflow_version__workflow_id",
             "workerPoolId": "worker_pool_id",
+            "ticketId": "ticket_id",
         }
         for api_name, model_name in aliases.items():
             value = self.request.query_params.get(api_name)
             if value not in (None, ""):
                 queryset = queryset.filter(**{model_name: value})
+        scheduled_job_id = self.request.query_params.get("scheduledJobId")
+        if scheduled_job_id not in (None, ""):
+            scheduled_job_id = drf_serializers.IntegerField(min_value=1).run_validation(
+                scheduled_job_id
+            )
+            queryset = queryset.filter(input_vars__scheduled_job_id=scheduled_job_id)
         created_after = self.request.query_params.get("created_after")
         created_before = self.request.query_params.get("created_before")
         if created_after:
@@ -359,6 +556,7 @@ class WorkflowRunViewSet(StandardModelViewSet):
             )
         return api_ok_response({"ticket": ticket, "expires_in": TTL_SECONDS})
 
+    @execution_idempotent
     def create(self, request, *args, **kwargs):
         serializer = WorkflowRunCreateSerializer(
             data=request.data,
@@ -403,19 +601,21 @@ class WorkflowRunViewSet(StandardModelViewSet):
         workflow_version = values["workflow_version"]
         worker_pool = values["worker_pool"]
         return api_ok_response(
-            {
-                "valid": True,
-                "workflowVersionId": workflow_version.id,
-                "workflowName": workflow_version.workflow.name,
-                "targetCount": len(values["hostIds"]),
-                "workerPoolId": worker_pool.id,
-                "workerPoolName": worker_pool.name,
-            }
+            _execution_preview(
+                workflow_version,
+                values["target_preview"],
+                worker_pool,
+                input_vars=values.get("inputVars"),
+                host_strategy=values.get("hostStrategy"),
+                gateway_id=values.get("gatewayId"),
+                confirmation_config=request_config(serializer.initial_data, values),
+            )
         )
 
     @action(methods=["POST"], detail=True, url_path="cancel")
     def cancel(self, request, pk=None):
         run = self.get_object()
+
         if run.status not in {
             WorkflowRun.Status.PENDING,
             WorkflowRun.Status.QUEUED,
@@ -432,8 +632,11 @@ class WorkflowRunViewSet(StandardModelViewSet):
             event_key=uuid4().hex,
             event={
                 "event_type": "workflow_cancel_requested",
-                "message": "Workflow run cancellation requested.",
-                "payload": {"workflow_run_id": run.id},
+                "message": "Workflow run cancellation requested. Jenkins polling stops; remote queued jobs or builds may continue.",
+                "payload": {
+                    "workflow_run_id": run.id,
+                    "jenkins_cancel_mode": "stop_waiting",
+                },
             },
         )
         create_domain_audit_event(
@@ -448,8 +651,10 @@ class WorkflowRunViewSet(StandardModelViewSet):
         return api_ok_response(self.get_serializer(run).data)
 
     @action(methods=["POST"], detail=True, url_path="retry-failed")
+    @execution_idempotent
     def retry_failed(self, request, pk=None):
         run = self.get_object()
+
         if run.status != WorkflowRun.Status.FAILED:
             return api_error_response(message="只有失败的执行任务可以重试")
 
@@ -483,8 +688,10 @@ class WorkflowRunViewSet(StandardModelViewSet):
         return api_ok_response(self.get_serializer(retry_run).data)
 
     @action(methods=["POST"], detail=True, url_path="rerun")
+    @execution_idempotent
     def rerun(self, request, pk=None):
         run = self.get_object()
+
         if run.status in {
             WorkflowRun.Status.PENDING,
             WorkflowRun.Status.QUEUED,
@@ -538,6 +745,15 @@ class QuickCommandRunViewSet(StandardModelViewSet):
     queryset = WorkflowRun.objects.none()
     serializer_class = WorkflowRunSerializer
 
+    @action(methods=["POST"], detail=False, url_path="preview")
+    def preview(self, request):
+        serializer = QuickCommandRunCreateSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        return api_ok_response(_quick_execution_preview(serializer, "脚本执行"))
+
+    @execution_idempotent
     def create(self, request, *args, **kwargs):
         serializer = QuickCommandRunCreateSerializer(
             data=request.data,
@@ -572,7 +788,36 @@ class QuickCommandRunViewSet(StandardModelViewSet):
         return api_ok_response(WorkflowRunSerializer(run).data)
 
 
+def _scheduled_next_run_at(schedule, enabled):
+    """Planned first trigger for a schedule, or None when nothing will fire.
+
+    One-off jobs plan their single ``run_at``; periodic jobs plan the next cron
+    slot.  A schedule whose plan already sits at or beyond ``expires_at`` gets
+    no plan at all, mirroring the expiry check the executor applies at runtime.
+    """
+    if not enabled:
+        return None
+    if schedule.schedule_type == ScheduledJob.ScheduleType.ONCE:
+        candidate = schedule.run_at
+    else:
+        candidate = next_cron_time(schedule.cron_expression, schedule.timezone)
+    if (
+        schedule.expires_at is not None
+        and candidate is not None
+        and candidate >= schedule.expires_at
+    ):
+        return None
+    return candidate
+
+
 class ScheduledJobViewSet(StandardModelViewSet):
+    def get_queryset(self):
+        from .run_access import visible_runs
+
+        return visible_runs(
+            super().get_queryset(), self.request.user, owner="created_by"
+        )
+
     queryset = ScheduledJob.objects.select_related(
         "workflow_version__workflow",
         "worker_pool",
@@ -584,61 +829,100 @@ class ScheduledJobViewSet(StandardModelViewSet):
     filterset_fields = ("enabled", "workflow_version", "worker_pool")
     search_fields = ("name", "workflow_version__workflow__name")
 
-    def perform_create(self, serializer, request=None):
-        cron_expression = serializer.validated_data.get("cron_expression", "0 * * * *")
-        timezone_name = serializer.validated_data.get("timezone", "Asia/Shanghai")
-        enabled = serializer.validated_data.get("enabled", True)
-        serializer.save(
-            created_by=self.request.user,
-            updated_by=self.request.user,
-            next_run_at=(
-                next_cron_time(cron_expression, timezone_name) if enabled else None
-            ),
+    @action(methods=["GET"], detail=True, url_path="preview")
+    def preview(self, request, pk=None):
+        schedule = self.get_object()
+        targets = (
+            resolve_targets(
+                actor=request.user,
+                host_ids=schedule.host_ids or [],
+                group_ids=schedule.group_ids or [],
+                tag_ids=schedule.tag_ids or [],
+            )
+            if any((schedule.host_ids, schedule.group_ids, schedule.tag_ids))
+            else []
         )
+        run_options = scheduled_job_run_options(schedule)
+        return api_ok_response(
+            _execution_preview(
+                schedule.workflow_version,
+                targets,
+                schedule.worker_pool,
+                input_vars=run_options["input_vars"],
+                host_strategy=schedule.host_strategy,
+                gateway_id=schedule.gateway_id,
+                confirmation_config=definition_config(schedule),
+            )
+        )
+
+    def perform_create(self, serializer, request=None):
+        enabled = serializer.validated_data.get("enabled", True)
+        with transaction.atomic():
+            serializer.save(
+                created_by=self.request.user,
+                updated_by=self.request.user,
+            )
+            instance = serializer.instance
+            instance.next_run_at = _scheduled_next_run_at(instance, enabled)
+            instance.save(update_fields=["next_run_at", "updated_at"])
+            upsert_periodic_task(instance)
 
     def perform_update(self, serializer, request=None):
-        instance = serializer.instance
-        enabled = serializer.validated_data.get("enabled", instance.enabled)
-        cron_expression = serializer.validated_data.get(
-            "cron_expression", instance.cron_expression
-        )
-        timezone_name = serializer.validated_data.get("timezone", instance.timezone)
-        schedule_changed = (
-            enabled != instance.enabled
-            or cron_expression != instance.cron_expression
-            or timezone_name != instance.timezone
-        )
-        next_run_at = instance.next_run_at
-        if not enabled:
-            next_run_at = None
-        elif schedule_changed or next_run_at is None:
-            next_run_at = next_cron_time(cron_expression, timezone_name)
-        serializer.save(
-            updated_by=self.request.user,
-            next_run_at=next_run_at,
-        )
+        enabled = serializer.validated_data.get("enabled", serializer.instance.enabled)
+        with transaction.atomic():
+            serializer.save(updated_by=self.request.user)
+            instance = serializer.instance
+            instance.next_run_at = _scheduled_next_run_at(instance, enabled)
+            instance.save(update_fields=["next_run_at", "updated_at"])
+            upsert_periodic_task(instance)
+
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        scheduled_job_id = instance.pk
+        instance.delete()
+        remove_periodic_task(scheduled_job_id)
+        return api_ok_response()
 
     @action(methods=["POST"], detail=True, url_path="run-now")
+    @transaction.atomic
+    @execution_idempotent
     def run_now(self, request, pk=None):
-        schedule = self.get_object()
+        schedule = self.get_queryset().select_for_update().get(pk=pk)
+        expected_target_ids = None
+        if "expectedTargetIds" in request.data:
+            expected_target_ids = drf_serializers.ListField(
+                child=drf_serializers.IntegerField(min_value=1)
+            ).run_validation(request.data["expectedTargetIds"])
+        expected_target_fingerprint = request.data.get("expectedTargetFingerprint")
+        expected_confirmation_fingerprint = request.data.get(
+            "expectedConfirmationFingerprint"
+        )
         try:
             run_options = scheduled_job_run_options(schedule)
-            run = create_workflow_run_from_host_ids(
+            run = create_workflow_run_from_selector(
                 workflow_version=schedule.workflow_version,
                 host_ids=schedule.host_ids or [],
+                group_ids=schedule.group_ids or [],
+                tag_ids=schedule.tag_ids or [],
                 input_vars={
                     **run_options["input_vars"],
                     "execution_source": "scheduled_manual",
                     "scheduled_job_id": schedule.id,
+                    "scheduled_job_name": schedule.name,
                 },
                 worker_pool=schedule.worker_pool,
                 triggered_by=request.user,
-                trigger_type=WorkflowRun.TriggerType.SCHEDULED,
+                trigger_type=WorkflowRun.TriggerType.MANUAL,
                 timeout_seconds=run_options["timeout_seconds"],
                 queue_timeout_seconds=run_options["queue_timeout_seconds"],
+                expected_target_ids=expected_target_ids,
+                expected_target_fingerprint=expected_target_fingerprint,
+                expected_confirmation_fingerprint=expected_confirmation_fingerprint,
+                confirmation_config=definition_config(schedule),
             )
-        except ValidationError:
-            return api_error_response("定时任务包含无效或未启用的目标主机")
+        except ValidationError as exc:
+            return api_error_response(message=str(exc.detail))
         except ValueError as exc:
             return api_error_response(f"无法立即执行定时任务：{exc}")
         append_run_event(
@@ -658,22 +942,196 @@ class ScheduledJobViewSet(StandardModelViewSet):
         return api_ok_response(WorkflowRunSerializer(run).data)
 
 
+class WorkflowTaskTicketViewSet(StandardModelViewSet):
+    def get_queryset(self):
+        from .run_access import visible_runs
+
+        return visible_runs(
+            super().get_queryset(), self.request.user, owner="created_by"
+        )
+
+    """任务单：创建时锁定流程版本/主机/参数，之后可反复「运行」产生执行记录。"""
+
+    queryset = WorkflowTaskTicket.objects.select_related(
+        "workflow_version__workflow",
+        "worker_pool",
+        "gateway",
+        "last_run",
+        "created_by",
+    ).all()
+    serializer_class = WorkflowTaskTicketSerializer
+    http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
+    ordering_fields = ("id", "name", "run_count", "updated_at", "created_at")
+    filterset_fields = ("workflow_version", "worker_pool")
+    search_fields = ("name", "workflow_version__workflow__name")
+
+    @action(methods=["GET"], detail=True, url_path="preview")
+    def preview(self, request, pk=None):
+        ticket = self.get_object()
+        if ticket.workflow_version is None:
+            return api_error_response(message="流程版本已删除，无法预览")
+        targets = (
+            resolve_targets(
+                actor=request.user,
+                host_ids=ticket.host_ids or [],
+                group_ids=ticket.group_ids or [],
+                tag_ids=ticket.tag_ids or [],
+            )
+            if any((ticket.host_ids, ticket.group_ids, ticket.tag_ids))
+            else []
+        )
+        return api_ok_response(
+            _execution_preview(
+                ticket.workflow_version,
+                targets,
+                ticket.worker_pool,
+                input_vars=resolve_workflow_inputs(ticket),
+                host_strategy=ticket.host_strategy,
+                gateway_id=ticket.gateway_id,
+                confirmation_config=definition_config(ticket),
+            )
+        )
+
+    def perform_create(self, serializer, request=None):
+        serializer.save(created_by=self.request.user)
+
+    def perform_update(self, serializer, request=None):
+        serializer.save(updated_by=self.request.user)
+
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        create_domain_audit_event(
+            self.request.user,
+            "jobs.workflow_ticket.delete",
+            "workflow_task_ticket",
+            instance.pk,
+            before={"id": instance.pk, "name": instance.name},
+        )
+        instance.delete()
+        return api_ok_response()
+
+    @action(methods=["POST"], detail=True, url_path="run")
+    @transaction.atomic
+    @execution_idempotent
+    def run(self, request, pk=None):
+        from apps.automation.models import (
+            CommandAtom,
+            WorkflowTemplate,
+            WorkflowVersion,
+        )
+
+        ticket = self.get_queryset().select_for_update().get(pk=pk)
+        expected_target_ids = None
+        if "expectedTargetIds" in request.data:
+            target_field = drf_serializers.ListField(
+                child=drf_serializers.IntegerField(min_value=1)
+            )
+            expected_target_ids = target_field.run_validation(
+                request.data["expectedTargetIds"]
+            )
+        expected_target_fingerprint = request.data.get("expectedTargetFingerprint")
+        expected_confirmation_fingerprint = request.data.get(
+            "expectedConfirmationFingerprint"
+        )
+        workflow_version = ticket.workflow_version
+        if workflow_version is None:
+            return api_error_response(message="流程版本已删除，无法运行")
+        if workflow_version.status == WorkflowVersion.Status.DRAFT:
+            return api_error_response(message="流程版本尚未发布，无法运行")
+        if workflow_version.workflow.status != WorkflowTemplate.Status.PUBLISHED:
+            return api_error_response(message="流程模板未启用，无法运行任务单")
+
+        has_high_risk_node = workflow_version.nodes.filter(
+            command_version__command__risk_level=CommandAtom.RiskLevel.HIGH,
+        ).exists()
+        if has_high_risk_node:
+            user = request.user
+            if not getattr(user, "is_superuser", False):
+                has_permission = user.role.filter(
+                    permission__code="automation.command:execute_high_risk",
+                    permission__is_active=True,
+                ).exists()
+                if not has_permission:
+                    return api_error_response(message="流程包含高危命令，当前用户缺少高危命令执行权限")
+
+        input_vars = {
+            **resolve_workflow_inputs(ticket),
+            "host_strategy": ticket.host_strategy,
+            "ansible_forks": ticket.forks,
+            "serial_batch": ticket.serial_batch,
+            "max_fail_percentage": ticket.max_fail_percentage,
+        }
+        if ticket.gateway_id:
+            input_vars["gateway_id"] = ticket.gateway_id
+        try:
+            run = create_workflow_run_from_selector(
+                workflow_version=workflow_version,
+                host_ids=ticket.host_ids or [],
+                group_ids=ticket.group_ids or [],
+                tag_ids=ticket.tag_ids or [],
+                input_vars=input_vars,
+                worker_pool=ticket.worker_pool,
+                triggered_by=request.user,
+                timeout_seconds=ticket.timeout_seconds,
+                expected_target_ids=expected_target_ids,
+                expected_target_fingerprint=expected_target_fingerprint,
+                expected_confirmation_fingerprint=expected_confirmation_fingerprint,
+                confirmation_config=definition_config(ticket),
+                failure_alert=ticket.failure_alert,
+            )
+        except ValidationError as exc:
+            return api_error_response(message=str(exc.detail))
+        except ValueError as exc:
+            return api_error_response(message=f"无法运行任务单：{exc}")
+
+        run.ticket = ticket
+        run.save(update_fields=["ticket", "updated_at"])
+        WorkflowTaskTicket.objects.filter(id=ticket.id).update(
+            run_count=F("run_count") + 1,
+            last_run=run,
+            updated_at=timezone.now(),
+        )
+        append_run_event(
+            run_id=run.id,
+            node_run_id=None,
+            event_key=uuid4().hex,
+            event={
+                "event_type": "workflow_dispatch_requested",
+                "message": "Task ticket run dispatched.",
+                "payload": {"task_ticket_id": ticket.id, "workflow_run_id": run.id},
+            },
+        )
+        create_domain_audit_event(
+            actor=request.user,
+            action="jobs.workflow_ticket.run",
+            resource_type="workflow_task_ticket",
+            resource_id=ticket.id,
+            after={"workflow_run_id": run.id, **_workflow_run_audit_summary(run)},
+            request=request,
+        )
+        transaction.on_commit(lambda: enqueue_workflow_run(run.id))
+        return api_ok_response(WorkflowRunSerializer(run).data)
+
+
 class ReadOnlyHistoryViewSet(StandardModelViewSet):
     http_method_names = ["get", "head", "options"]
 
     def get_queryset(self):
+        from apps.jobs.run_access import visible_runs
+
         queryset = super().get_queryset()
         user = self.request.user
-        if not user.is_active or not user.job_status:
-            return queryset.none()
-        if user.is_superuser:
-            return queryset
+        if queryset.model is CommandIntercept:
+            if not user.is_active or not user.job_status:
+                return queryset.none()
+            return queryset if user.is_superuser else queryset.filter(operator=user)
         owner = (
             "workflow_run__triggered_by"
             if queryset.model is NodeRun
             else "node_run__workflow_run__triggered_by"
         )
-        return queryset.filter(**{owner: user})
+        return visible_runs(queryset, user, owner=owner)
 
 
 class NodeRunViewSet(ReadOnlyHistoryViewSet):
@@ -691,9 +1149,50 @@ class NodeRunViewSet(ReadOnlyHistoryViewSet):
 
     @action(methods=["GET"], detail=True, url_path="host-results")
     def host_results(self, request, pk=None):
-        node_run = self.get_object()
-        serializer = HostRunResultSerializer(node_run.host_results.all(), many=True)
-        return api_ok_response(serializer.data)
+        # Host filters belong to this action, not NodeRun; retain the shared
+        # run data scope without applying node-level filters.
+        node_run = get_object_or_404(self.get_queryset(), pk=pk)
+        self.check_object_permissions(request, node_run)
+        queryset = node_run.host_results.order_by("hostname", "id")
+        summary = queryset.aggregate(
+            total=Count("id"),
+            success=Count("id", filter=Q(status__in=("ok", "changed"))),
+            failed=Count("id", filter=Q(status__in=("failed", "unreachable"))),
+        )
+        status = request.query_params.get("hostStatus", "all")
+        if status == "failed":
+            queryset = queryset.filter(status__in=("failed", "unreachable"))
+        elif status == "success":
+            queryset = queryset.filter(status__in=("ok", "changed"))
+        elif status != "all":
+            raise ValidationError({"hostStatus": "仅支持 all、failed 或 success"})
+        search = request.query_params.get("hostSearch", "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(hostname__icontains=search[:128]) | Q(ip__icontains=search[:128])
+            )
+        queryset = queryset.only(
+            "id",
+            "hostname",
+            "ip",
+            "status",
+            "changed",
+            "rc",
+            "started_at",
+            "finished_at",
+        )
+        paginator = StandardResultSetPagination()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+        data = HostRunResultSummarySerializer(page, many=True).data
+        return api_ok_response(
+            {
+                "list": data,
+                "total": paginator.page.paginator.count,
+                "page": paginator.page.number,
+                "size": paginator.page.paginator.per_page,
+                "summary": summary,
+            }
+        )
 
     @action(methods=["GET"], detail=True, url_path="attempts")
     def attempts(self, request, pk=None):
@@ -703,14 +1202,16 @@ class NodeRunViewSet(ReadOnlyHistoryViewSet):
         )
 
     @action(methods=["POST"], detail=True, url_path="retry")
+    @execution_idempotent
     def retry(self, request, pk=None):
         node_run = self.get_object()
-        node_run = retry_failed_node(node_run.id)
+        node_run = retry_failed_node(node_run.id, actor=request.user)
         return api_ok_response(self.get_serializer(node_run).data)
 
     @action(methods=["POST"], detail=True, url_path="ignore")
     def ignore(self, request, pk=None):
         node_run = self.get_object()
+
         if node_run.status not in {NodeRun.Status.FAILED, NodeRun.Status.TIMEOUT}:
             return api_error_response("只有失败或超时节点可以忽略")
         node_run.status = NodeRun.Status.IGNORED
@@ -758,6 +1259,11 @@ class CommandInterceptViewSet(ReadOnlyHistoryViewSet):
 
 
 class SecurityStatsView(APIView):
+    @extend_schema(
+        responses=api_envelope_serializer(
+            "SecurityStatsResponse", SecurityStatsSerializer
+        )
+    )
     def get(self, request):
         now = timezone.now()
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -778,7 +1284,47 @@ class GatewayViewSet(StandardModelViewSet):
     http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
     ordering_fields = ("id", "name", "status", "created_at")
     filterset_fields = ("cloud", "status", "auth_type")
-    search_fields = ("name", "address", "network")
+    search_fields = ("name", "address")
+
+    def perform_create(self, serializer, request=None):
+        gateway = serializer.save()
+        create_domain_audit_event(
+            self.request.user,
+            "jobs.gateway.create",
+            "gateway",
+            gateway.pk,
+            after=self.get_serializer(gateway).data,
+        )
+
+    def perform_update(self, serializer, request=None):
+        before = self.get_serializer(serializer.instance).data
+        gateway = serializer.save()
+        create_domain_audit_event(
+            self.request.user,
+            "jobs.gateway.update",
+            "gateway",
+            gateway.pk,
+            before=before,
+            after=self.get_serializer(gateway).data,
+        )
+
+    def perform_destroy(self, gateway):
+        before = self.get_serializer(gateway).data
+        identifier = gateway.pk
+        gateway.delete()
+        create_domain_audit_event(
+            self.request.user,
+            "jobs.gateway.delete",
+            "gateway",
+            identifier,
+            before=before,
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except ProtectedError:
+            return api_error_response("该网关仍被任务单或定时任务引用，请先调整引用")
 
     @action(methods=["POST"], detail=True, url_path="test")
     def test(self, request, pk=None):
@@ -810,6 +1356,15 @@ class PlaybookRunViewSet(StandardModelViewSet):
     queryset = WorkflowRun.objects.none()
     serializer_class = WorkflowRunSerializer
 
+    @action(methods=["POST"], detail=False, url_path="preview")
+    def preview(self, request):
+        serializer = PlaybookRunCreateSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        return api_ok_response(_quick_execution_preview(serializer, "剧本执行"))
+
+    @execution_idempotent
     def create(self, request, *args, **kwargs):
         serializer = PlaybookRunCreateSerializer(
             data=request.data,
@@ -849,6 +1404,15 @@ class ModuleRunViewSet(StandardModelViewSet):
     queryset = WorkflowRun.objects.none()
     serializer_class = WorkflowRunSerializer
 
+    @action(methods=["POST"], detail=False, url_path="preview")
+    def preview(self, request):
+        serializer = ModuleRunCreateSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        return api_ok_response(_quick_execution_preview(serializer, "模块执行"))
+
+    @execution_idempotent
     def create(self, request, *args, **kwargs):
         serializer = ModuleRunCreateSerializer(
             data=request.data,
@@ -884,13 +1448,23 @@ class ModuleRunViewSet(StandardModelViewSet):
 
 
 class DashboardStatsView(APIView):
+    @extend_schema(
+        responses=api_envelope_serializer(
+            "DashboardStatsResponse", DashboardStatsSerializer
+        )
+    )
     def get(self, request):
+        from .run_access import visible_runs
+
+        domain = request.query_params.get("domain", WorkflowRun.RunDomain.OPS)
+        if domain not in WorkflowRun.RunDomain.values:
+            raise ValidationError({"domain": "无效的运行领域"})
         now = timezone.now()
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        today_runs = WorkflowRun.objects.filter(
-            run_domain=WorkflowRun.RunDomain.OPS,
-            created_at__gte=day_start,
+        today_runs = visible_runs(
+            WorkflowRun.objects.filter(run_domain=domain, created_at__gte=day_start),
+            request.user,
         )
         finished_today = today_runs.filter(
             status__in=[
@@ -902,19 +1476,22 @@ class DashboardStatsView(APIView):
         )
         success_count = finished_today.filter(status=WorkflowRun.Status.SUCCESS).count()
         finished_count = finished_today.count()
-        avg_duration_ms = (
-            finished_today.exclude(duration_ms=None).aggregate(avg=Avg("duration_ms"))[
-                "avg"
-            ]
-            or 0
-        )
+        avg_duration_ms = finished_today.exclude(duration_ms=None).aggregate(
+            avg=Avg("duration_ms")
+        )["avg"]
         return api_ok_response(
             {
                 "todayExecutions": today_runs.count(),
+                "finishedExecutions": finished_count,
                 "successRate": round(success_count / finished_count * 100, 1)
                 if finished_count
-                else 100.0,
-                "avgResponseSeconds": round(avg_duration_ms / 1000, 1),
+                else None,
+                "avgResponseSeconds": round(avg_duration_ms / 1000, 1)
+                if avg_duration_ms is not None
+                else None,
+                "scheduledExecutions": today_runs.filter(
+                    trigger_type=WorkflowRun.TriggerType.SCHEDULED
+                ).count(),
                 "blockedCommands": CommandIntercept.objects.filter(
                     created_at__gte=month_start
                 ).count(),
@@ -922,7 +1499,62 @@ class DashboardStatsView(APIView):
         )
 
 
+class DashboardExecutionDistributionView(APIView):
+    """近 30 日运行类型分布，统计范围遵循当前用户的数据可见范围。"""
+
+    @extend_schema(
+        responses=api_envelope_serializer(
+            "ExecutionDistributionResponse", ExecutionDistributionSerializer
+        )
+    )
+    def get(self, request):
+        from .run_access import visible_runs
+
+        period_days = 30
+        since = timezone.now() - timedelta(days=period_days)
+        runs = visible_runs(
+            WorkflowRun.objects.filter(created_at__gte=since), request.user
+        )
+        grouped = runs.values("run_domain", "execution_kind", "trigger_type").annotate(
+            count=Count("id")
+        )
+        counts = {
+            "ops_script": 0,
+            "ops_playbook": 0,
+            "ops_module": 0,
+            "ops_other": 0,
+            "task_scheduled": 0,
+            "task_workflow": 0,
+        }
+        for row in grouped:
+            if row["run_domain"] == WorkflowRun.RunDomain.OPS:
+                key = {
+                    WorkflowRun.ExecutionKind.QUICK_COMMAND: "ops_script",
+                    WorkflowRun.ExecutionKind.PLAYBOOK: "ops_playbook",
+                    WorkflowRun.ExecutionKind.MODULE: "ops_module",
+                }.get(row["execution_kind"], "ops_other")
+            elif row["trigger_type"] == WorkflowRun.TriggerType.SCHEDULED:
+                key = "task_scheduled"
+            else:
+                key = "task_workflow"
+            counts[key] += row["count"]
+
+        items = [{"key": key, "count": count} for key, count in counts.items()]
+        return api_ok_response(
+            {
+                "periodDays": period_days,
+                "total": sum(counts.values()),
+                "items": items,
+            }
+        )
+
+
 class DashboardHealthView(APIView):
+    @extend_schema(
+        responses=api_envelope_serializer(
+            "DashboardHealthResponse", DashboardHealthSerializer
+        )
+    )
     def get(self, request):
         from celery import current_app
         import redis
@@ -947,10 +1579,15 @@ class DashboardHealthView(APIView):
             redis_error = str(exc)
         workers = {}
         active_queues = {}
+        worker_versions = {}
         try:
             inspector = current_app.control.inspect(timeout=1)
             workers = inspector.ping() or {}
             active_queues = inspector.active_queues() or {}
+            try:
+                worker_versions = inspector._request("deployment_version") or {}
+            except Exception:
+                worker_versions = {}
         except Exception:
             workers = {}
             active_queues = {}
@@ -1008,16 +1645,25 @@ class DashboardHealthView(APIView):
                     else 100.0,
                 },
                 "checkedAt": timezone.now(),
+                "environment": runtime_environment(worker_versions, workers),
             }
         )
 
 
 class DashboardRecentView(APIView):
+    @extend_schema(
+        responses=api_envelope_serializer(
+            "DashboardRecentResponse", DashboardRecentItemSerializer, data_many=True
+        )
+    )
     def get(self, request):
         from .run_access import visible_runs
 
+        domain = request.query_params.get("domain", WorkflowRun.RunDomain.OPS)
+        if domain not in WorkflowRun.RunDomain.values:
+            raise ValidationError({"domain": "无效的运行领域"})
         runs = visible_runs(
-            WorkflowRun.objects.filter(run_domain=WorkflowRun.RunDomain.OPS),
+            WorkflowRun.objects.filter(run_domain=domain),
             request.user,
         ).select_related(
             "workflow_version", "workflow_version__workflow", "triggered_by"
@@ -1028,12 +1674,13 @@ class DashboardRecentView(APIView):
         for run in runs:
             input_vars = run.input_vars or {}
             name = (
-                input_vars.get("playbook_name")
+                run.name
+                or input_vars.get("playbook_name")
                 or input_vars.get("name")
                 or (
                     run.workflow_version.workflow.name
                     if run.workflow_version
-                    else "Ansible task"
+                    else f"{'作业' if domain == WorkflowRun.RunDomain.OPS else '任务'}运行 #{run.id}"
                 )
             )
             items.append(
@@ -1051,16 +1698,19 @@ class DashboardRecentView(APIView):
 
 
 class EngineSettingsView(APIView):
+    @extend_schema(
+        responses=api_envelope_serializer(
+            "EngineSettingsResponse", EngineSettingsSerializer
+        )
+    )
     def get(self, request):
         return api_ok_response(get_engine_settings())
 
+    @extend_schema(
+        request=EngineSettingsUpdateSerializer,
+        responses=api_envelope_serializer(
+            "EngineSettingsUpdateResponse", EngineSettingsSerializer
+        ),
+    )
     def put(self, request):
         return api_ok_response(save_engine_settings(request.data or {}))
-
-
-class NotifySettingsView(APIView):
-    def get(self, request):
-        return api_ok_response(get_notify_settings())
-
-    def put(self, request):
-        return api_ok_response(save_notify_settings(request.data or {}))

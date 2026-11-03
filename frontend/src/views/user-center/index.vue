@@ -19,6 +19,7 @@ interface ProfileInfo {
   deptName: string;
   avatar: string;
   createTime: string;
+  mustChangePassword: boolean;
 }
 
 const appStore = useAppStore();
@@ -33,10 +34,12 @@ const profile = shallowRef<ProfileInfo>({
   mobile: '',
   deptName: '',
   avatar: '',
-  createTime: ''
+  createTime: '',
+  mustChangePassword: false
 });
 
 const profileLoading = ref(false);
+const mustChangePassword = computed(() => authStore.userInfo.mustChangePassword || profile.value.mustChangePassword);
 
 async function getProfile() {
   profileLoading.value = true;
@@ -78,7 +81,7 @@ async function handleSaveProfile() {
   const { error } = await fetchUpdateUserProfile({ ...profileModel.value });
 
   if (!error) {
-    window.$message?.success($t('page.manage.common.profileUpdated'));
+    window.$notification?.success($t('page.manage.common.profileUpdated'));
     getProfile();
   }
 }
@@ -89,6 +92,7 @@ const { formRef: passwordFormRef, validate: validatePassword, restoreValidation:
 const { createRequiredRule, createConfirmPwdRule } = useFormRules();
 
 const passwordModel = ref(createPasswordModel());
+const passwordSaving = ref(false);
 
 const passwordRules = computed(() => ({
   oldPassword: [createRequiredRule($t('page.manage.common.oldPasswordRequired'))],
@@ -108,16 +112,18 @@ function createPasswordModel() {
 }
 
 async function handleSavePassword() {
-  await validatePassword();
-
-  const { error } = await fetchUpdateUserPassword(passwordModel.value.oldPassword, passwordModel.value.newPassword);
-
-  if (!error) {
-    window.$message?.success($t('page.manage.common.passwordUpdated'));
+  if (passwordSaving.value) return;
+  passwordSaving.value = true;
+  try {
+    await validatePassword();
+    const { error } = await fetchUpdateUserPassword(passwordModel.value.oldPassword, passwordModel.value.newPassword);
+    if (error) return;
+    window.$notification?.success('密码已修改，请使用新密码重新登录');
     resetPasswordForm();
     passwordModel.value = createPasswordModel();
-    // 修改密码后强制重新登录
-    authStore.resetStore();
+    await authStore.resetStore();
+  } finally {
+    passwordSaving.value = false;
   }
 }
 
@@ -126,11 +132,26 @@ getProfile();
 
 <template>
   <div class="flex-col-stretch gap-16px">
-    <ElCard v-loading="profileLoading" class="card-wrapper">
+    <ElAlert
+      v-if="mustChangePassword"
+      type="warning"
+      :closable="false"
+      title="请先修改初始或管理员重置的密码"
+      description="修改密码后需要重新登录，完成后即可访问业务功能。"
+      show-icon
+    />
+    <ElCard v-if="!mustChangePassword" v-loading="profileLoading" class="card-wrapper">
       <template #header>
         <p>{{ $t('page.manage.common.profileTitle') }}</p>
       </template>
-      <ElForm ref="profileFormRef" :model="profileModel" label-position="top" class="max-w-480px">
+      <ElForm
+        ref="profileFormRef"
+        :model="profileModel"
+        label-position="top"
+        class="max-w-480px"
+        label-suffix="："
+        require-asterisk-position="left"
+      >
         <ElFormItem :label="$t('page.manage.common.userNickname')" prop="nickname">
           <ElInput v-model="profileModel.nickname" :placeholder="$t('page.manage.common.userNickname')" />
         </ElFormItem>
@@ -150,7 +171,7 @@ getProfile();
             />
           </ElSelect>
         </ElFormItem>
-        <ElButton type="primary" @click="handleSaveProfile">{{ $t('page.manage.common.saveProfile') }}</ElButton>
+        <ElButton @click="handleSaveProfile">{{ $t('page.manage.common.saveProfile') }}</ElButton>
       </ElForm>
     </ElCard>
 
@@ -166,8 +187,11 @@ getProfile();
         ref="passwordFormRef"
         :model="passwordModel"
         :rules="passwordRules"
+        :disabled="passwordSaving"
         label-position="top"
         class="max-w-480px"
+        label-suffix="："
+        require-asterisk-position="left"
       >
         <ElFormItem :label="$t('page.manage.common.oldPassword')" prop="oldPassword">
           <ElInput
@@ -199,7 +223,9 @@ getProfile();
             :placeholder="$t('form.confirmPwd.required')"
           />
         </ElFormItem>
-        <ElButton type="primary" @click="handleSavePassword">{{ $t('page.manage.common.savePassword') }}</ElButton>
+        <ElButton type="primary" :loading="passwordSaving" @click="handleSavePassword">
+          {{ $t('page.manage.common.savePassword') }}
+        </ElButton>
       </ElForm>
     </ElCard>
   </div>

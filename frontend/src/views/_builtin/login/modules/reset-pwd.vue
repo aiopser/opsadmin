@@ -38,7 +38,7 @@ const rules = computed<RuleRecord>(() => {
 async function handleSubmit() {
   await validate();
   // request to reset password
-  window.$message?.success($t('page.login.common.validateSuccess'));
+  window.$notification?.success($t('page.login.common.validateSuccess'));
 }
 </script>
 

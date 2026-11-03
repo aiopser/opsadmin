@@ -1,225 +1,143 @@
 <script setup lang="ts">
-import { computed, onScopeDispose, ref } from 'vue';
+import { computed } from 'vue';
 import { useRouter } from 'vue-router';
-import { fetchGetDashboardHealth, fetchGetDashboardRecent, fetchGetDashboardStats } from '@/service/api';
+import {
+  dashboardRecentTypeText,
+  dashboardSuccessRateText,
+  runStatusRecord,
+  runStatusTagType
+} from '@/constants/business';
+import { useRunDashboard } from '@/hooks/business/run-dashboard';
+import { formatLocalDateTime } from '@/utils/common';
+import { $t } from '@/locales';
 
 defineOptions({ name: 'TaskDashboard' });
 
 const router = useRouter();
 
-/** ============ 概览统计 ============ */
-
-const stats = ref<Api.Jobs.DashboardStats | null>(null);
-const statsLoading = ref(false);
-
-async function loadStats() {
-  statsLoading.value = true;
-  const { data, error } = await fetchGetDashboardStats();
-  if (!error) stats.value = data;
-  statsLoading.value = false;
-}
+const { stats, statsLoading, statsError, recentRows, recentLoading, recentError, loadStats, loadRecent } =
+  useRunDashboard('task');
 
 const statCards = computed(() => [
   {
-    label: '当日执行数',
+    label: '今日执行',
     value: stats.value?.todayExecutions ?? '-',
     icon: 'mdi:play-circle-outline',
-    color: '#409eff'
+    color: 'var(--el-color-primary)'
   },
   {
-    label: '成功率',
-    value: stats.value ? `${stats.value.successRate}%` : '-',
+    label: '今日成功率',
+    value: dashboardSuccessRateText(stats.value?.successRate),
     icon: 'mdi:check-circle-outline',
-    color: '#67c23a'
+    color: 'var(--el-color-success)'
   },
-  { label: '平均耗时(s)', value: stats.value?.avgResponseSeconds ?? '-', icon: 'mdi:timer-outline', color: '#e6a23c' },
   {
-    label: '阻断命令数',
-    value: stats.value?.blockedCommands ?? '-',
-    icon: 'mdi:shield-alert-outline',
-    color: '#f56c6c'
+    label: '平均耗时（秒）',
+    value: stats.value?.avgResponseSeconds ?? '-',
+    icon: 'mdi:timer-outline',
+    color: 'var(--el-color-warning)'
+  },
+  {
+    label: '今日定时执行',
+    value: stats.value?.scheduledExecutions ?? '-',
+    icon: 'mdi:calendar-clock-outline',
+    color: 'var(--el-color-info)'
   }
 ]);
 
-/** ============ 健康状态 ============ */
-
-interface HealthView {
-  redisOk: boolean | null;
-  workersHealthy: boolean | null;
-  workerCount: number | null;
-  queuesHealthy: boolean | null;
-  queueBackend: string;
-  sevenDayTotal: number | null;
-  sevenDaySuccessRate: number | null;
-  checkedAt: string;
-}
-
-const health = ref<HealthView | null>(null);
-const healthLoading = ref(false);
-
-async function loadHealth() {
-  healthLoading.value = true;
-  const { data, error } = await fetchGetDashboardHealth();
-  if (!error) {
-    const raw = (data ?? {}) as Record<string, any>;
-    health.value = {
-      redisOk: typeof raw.redis === 'boolean' ? raw.redis : (raw.redis?.ok ?? null),
-      workersHealthy: raw.workers?.healthy ?? null,
-      workerCount: raw.workers?.count ?? null,
-      queuesHealthy: raw.queues?.healthy ?? null,
-      queueBackend: raw.queues?.backend ?? '-',
-      sevenDayTotal: raw.sevenDay?.total ?? null,
-      sevenDaySuccessRate: raw.sevenDay?.successRate ?? null,
-      checkedAt: raw.checkedAt ?? '-'
-    };
-  }
-  healthLoading.value = false;
-}
-
-function healthTagType(ok: boolean | null) {
-  if (ok === null) return 'info';
-  return ok ? 'success' : 'danger';
-}
-
-function healthText(ok: boolean | null) {
-  if (ok === null) return '未知';
-  return ok ? '正常' : '异常';
-}
-
-/** ============ 最近运行 ============ */
-
-const recentLoading = ref(false);
-const recentRows = ref<Array<Record<string, unknown>>>([]);
-
-const statusText: Record<string, string> = {
-  pending: '待执行',
-  queued: '排队中',
-  running: '执行中',
-  waiting: '等待中',
-  cancel_requested: '取消中',
-  success: '成功',
-  failed: '失败',
-  timeout: '超时',
-  canceled: '已取消'
-};
-
-const statusTagType: Record<string, string> = {
-  pending: 'info',
-  queued: 'info',
-  running: 'primary',
-  waiting: 'warning',
-  cancel_requested: 'warning',
-  success: 'success',
-  failed: 'danger',
-  timeout: 'danger',
-  canceled: 'info'
-};
-
-async function loadRecent() {
-  recentLoading.value = true;
-  const { data, error } = await fetchGetDashboardRecent();
-  if (!error) recentRows.value = data?.items ?? [];
-  recentLoading.value = false;
-}
-
-function goDetail(row: Record<string, unknown>) {
+function goDetail(row: Api.Jobs.DashboardRecentItem) {
   router.push({ name: 'task_run-detail', params: { id: String(row.id) }, query: { domain: 'task' } });
 }
 
-function loadAll() {
-  loadStats();
-  loadHealth();
-  loadRecent();
+function runStatusTypeOf(status: Api.Jobs.RunStatus): UI.ThemeColor {
+  return runStatusTagType[status] ?? 'info';
 }
 
-loadAll();
-
-const timer = window.setInterval(loadStats, 30_000);
-
-onScopeDispose(() => {
-  window.clearInterval(timer);
-});
+function runStatusText(status: Api.Jobs.RunStatus): string {
+  const key = runStatusRecord[status];
+  return key ? $t(key) : String(status ?? '-');
+}
 </script>
 
 <template>
   <div class="min-h-500px flex-col-stretch gap-16px overflow-hidden lt-sm:overflow-auto">
-    <ElRow :gutter="16">
-      <ElCol v-for="card in statCards" :key="card.label" :xl="6" :lg="12" :md="12" :sm="12" :xs="12">
-        <ElCard v-loading="statsLoading" class="card-wrapper">
-          <div class="flex items-center justify-between">
-            <div>
+    <ElAlert v-if="statsError" type="warning" :closable="false" show-icon>
+      <template #title>
+        <span>{{ stats ? '概览统计更新失败，当前显示上次数据' : '概览统计加载失败' }}</span>
+        <ElButton class="ml-8px" text type="primary" :loading="statsLoading" @click="loadStats">重新加载</ElButton>
+      </template>
+    </ElAlert>
+    <ElRow :gutter="16" class="gap-y-16px">
+      <ElCol v-for="card in statCards" :key="card.label" :xl="6" :lg="12" :md="12" :sm="12" :xs="24">
+        <ElCard class="min-h-110px card-wrapper">
+          <ElSkeleton v-if="statsLoading && !stats" :rows="2" animated />
+          <div v-else class="flex items-center justify-between gap-12px">
+            <div class="min-w-0">
               <p class="text-14px text-gray-500">{{ card.label }}</p>
-              <p class="mt-8px text-28px font-bold">{{ card.value }}</p>
+              <p class="mt-8px text-26px font-bold tabular-nums sm:text-28px">{{ card.value }}</p>
             </div>
-            <span class="text-44px" :style="{ color: card.color }">
-              <component :is="card.icon" />
+            <span class="shrink-0" :style="{ color: card.color }">
+              <SvgIcon :icon="card.icon" class="text-44px" />
             </span>
           </div>
         </ElCard>
       </ElCol>
     </ElRow>
 
-    <ElRow :gutter="16">
-      <ElCol :span="24">
-        <ElCard v-loading="healthLoading" class="card-wrapper">
-          <template #header>
-            <div class="flex items-center justify-between">
-              <p>健康状态</p>
-              <ElButton text type="primary" @click="loadHealth">刷新</ElButton>
-            </div>
-          </template>
-          <ElDescriptions v-if="health" :column="4" border>
-            <ElDescriptionsItem label="Redis">
-              <ElTag :type="healthTagType(health.redisOk) as any" size="small">{{ healthText(health.redisOk) }}</ElTag>
-            </ElDescriptionsItem>
-            <ElDescriptionsItem label="Worker 进程">
-              <ElTag :type="healthTagType(health.workersHealthy) as any" size="small">
-                {{ healthText(health.workersHealthy) }}
-              </ElTag>
-              <span class="ml-8px">（{{ health.workerCount ?? '-' }} 个）</span>
-            </ElDescriptionsItem>
-            <ElDescriptionsItem label="队列">
-              <ElTag :type="healthTagType(health.queuesHealthy) as any" size="small">
-                {{ healthText(health.queuesHealthy) }}
-              </ElTag>
-              <span class="ml-8px">（{{ health.queueBackend }}）</span>
-            </ElDescriptionsItem>
-            <ElDescriptionsItem label="7 日执行">
-              {{ health.sevenDayTotal ?? '-' }} 次 / 成功率 {{ health.sevenDaySuccessRate ?? '-' }}%
-            </ElDescriptionsItem>
-          </ElDescriptions>
-          <p class="mt-8px text-right text-12px text-gray-400">检查时间：{{ health?.checkedAt ?? '-' }}</p>
-        </ElCard>
-      </ElCol>
-    </ElRow>
-
     <ElCard class="card-wrapper sm:flex-1-hidden">
       <template #header>
-        <div class="flex items-center justify-between">
-          <p>最近运行</p>
-          <ElButton text type="primary" @click="loadRecent">刷新</ElButton>
+        <div class="flex flex-wrap items-center justify-between gap-8px">
+          <p>最近任务</p>
+          <div class="flex flex-wrap items-center gap-8px">
+            <span v-if="recentError && recentRows.length" class="text-12px text-[var(--el-color-warning)]">
+              更新失败，显示上次数据
+            </span>
+            <ElButton text type="primary" :loading="recentLoading" @click="loadRecent">刷新</ElButton>
+          </div>
         </div>
       </template>
-      <ElTable v-loading="recentLoading" :data="recentRows" border height="100%" row-key="id">
-        <ElTableColumn prop="id" label="ID" width="80" />
-        <ElTableColumn prop="name" label="作业名称" min-width="180" show-overflow-tooltip />
-        <ElTableColumn prop="type" label="类型" width="120" />
-        <ElTableColumn prop="target" label="目标" min-width="160" show-overflow-tooltip />
-        <ElTableColumn label="状态" width="110" align="center">
-          <template #default="{ row }">
-            <ElTag :type="(statusTagType[row.status] ?? 'info') as any">
-              {{ statusText[row.status] ?? row.status }}
-            </ElTag>
-          </template>
-        </ElTableColumn>
-        <ElTableColumn prop="executor" label="执行人" width="120" />
-        <ElTableColumn prop="time" label="时间" width="170" />
-        <ElTableColumn label="操作" width="90" align="center" fixed="right">
-          <template #default="{ row }">
-            <ElButton type="primary" plain size="small" @click="goDetail(row)">详情</ElButton>
-          </template>
-        </ElTableColumn>
-      </ElTable>
+      <div class="h-[calc(100%-52px)] overflow-x-auto">
+        <ElSkeleton v-if="recentLoading && !recentRows.length" :rows="4" animated />
+        <ElEmpty
+          v-else-if="!recentRows.length"
+          :description="recentError ? '加载最近任务失败' : '暂无任务运行记录'"
+          :image-size="80"
+        >
+          <ElButton @click="loadRecent">{{ recentError ? '重新加载' : '刷新' }}</ElButton>
+        </ElEmpty>
+        <ElTable
+          v-else
+          v-loading="recentLoading"
+          :data="recentRows"
+          border
+          height="100%"
+          row-key="id"
+          class="min-w-900px"
+        >
+          <ElTableColumn prop="id" label="ID" width="80" align="center" class-name="tabular-nums" />
+          <ElTableColumn prop="name" label="任务名称" min-width="180" show-overflow-tooltip />
+          <ElTableColumn label="发起方式" width="120">
+            <template #default="{ row }">{{ dashboardRecentTypeText(row.type) }}</template>
+          </ElTableColumn>
+          <ElTableColumn prop="target" label="目标" min-width="160" show-overflow-tooltip />
+          <ElTableColumn label="状态" width="110" align="center">
+            <template #default="{ row }">
+              <ElTag :type="runStatusTypeOf(row.status)">{{ runStatusText(row.status) }}</ElTag>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn prop="executor" label="执行人" width="120" />
+          <ElTableColumn label="发起时间" width="175">
+            <template #default="{ row }">
+              <span class="tabular-nums">{{ formatLocalDateTime(row.time) }}</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="操作" width="90" align="center" fixed="right">
+            <template #default="{ row }">
+              <ElButton type="primary" plain size="small" @click="goDetail(row)">详情</ElButton>
+            </template>
+          </ElTableColumn>
+        </ElTable>
+      </div>
     </ElCard>
   </div>
 </template>

@@ -4,6 +4,7 @@ import { enableStatusOptions } from '@/constants/business';
 import { addConfig, updateConfig } from '@/service/api';
 import { useForm, useFormRules } from '@/hooks/common/form';
 import { $t } from '@/locales';
+import { CONFIG_GROUPS, resolveFieldDef } from './config-fields';
 
 defineOptions({ name: 'ConfigOperateDrawer' });
 
@@ -43,13 +44,14 @@ type Model = Pick<
 >;
 
 const model = ref<Model>(createDefaultModel());
+const inactiveReason = computed(() => resolveFieldDef(model.value.configKey).inactiveReason);
 
 function createDefaultModel(): Model {
   return {
     configName: '',
     configKey: '',
     configValue: null,
-    configGroup: '',
+    configGroup: CONFIG_GROUPS[0].key,
     remark: null,
     status: '1'
   };
@@ -77,12 +79,16 @@ function closeDrawer() {
 
 async function handleSubmit() {
   await validate();
+  if (inactiveReason.value) {
+    window.$message?.warning(inactiveReason.value);
+    return;
+  }
 
   const { error } =
     props.operateType === 'add' ? await addConfig(model.value) : await updateConfig(props.rowData!.id, model.value);
 
   if (!error) {
-    window.$message?.success($t(props.operateType === 'add' ? 'common.addSuccess' : 'common.updateSuccess'));
+    window.$notification?.success($t(props.operateType === 'add' ? 'common.addSuccess' : 'common.updateSuccess'));
     closeDrawer();
     emit('submitted');
   }
@@ -98,27 +104,52 @@ watch(visible, () => {
 
 <template>
   <ElDrawer v-model="visible" :title="title" :size="360">
-    <ElForm ref="formRef" :model="model" :rules="rules" label-position="top">
+    <ElForm
+      ref="formRef"
+      :model="model"
+      :rules="rules"
+      label-position="top"
+      label-suffix="："
+      require-asterisk-position="left"
+    >
       <ElFormItem :label="$t('page.manage.config.configName')" prop="configName">
         <ElInput v-model="model.configName" :placeholder="$t('page.manage.config.form.configName')" />
       </ElFormItem>
-      <ElFormItem :label="$t('page.manage.config.configKey')" prop="configKey">
+      <ElFormItem prop="configKey">
+        <template #label>
+          <FormLabelHelp
+            :label="$t('page.manage.config.configKey')"
+            :help="['配置键，全局唯一，创建后不可修改；', '程序按此键读取配置值（如 basic.system.name）。']"
+          />
+        </template>
         <ElInput
           v-model="model.configKey"
-          :disabled="props.operateType === 'edit'"
+          :disabled="operateType === 'edit'"
           :placeholder="$t('page.manage.config.form.configKey')"
         />
       </ElFormItem>
       <ElFormItem :label="$t('page.manage.config.configValue')" prop="configValue">
         <ElInput
           v-model="model.configValue"
+          :disabled="Boolean(inactiveReason)"
           type="textarea"
           :rows="3"
           :placeholder="$t('page.manage.config.form.configValue')"
         />
+        <p v-if="inactiveReason" class="mt-6px w-full text-12px text-[var(--el-text-color-regular)]">
+          {{ inactiveReason }}
+        </p>
       </ElFormItem>
-      <ElFormItem :label="$t('page.manage.config.configGroup')" prop="configGroup">
-        <ElInput v-model="model.configGroup" :placeholder="$t('page.manage.config.form.configGroup')" />
+      <ElFormItem prop="configGroup">
+        <template #label>
+          <FormLabelHelp
+            :label="$t('page.manage.config.configGroup')"
+            :help="['参数分组，仅支持基础 / 安全 / 日志 / 文件四类固定枚举。']"
+          />
+        </template>
+        <ElSelect v-model="model.configGroup" class="w-full">
+          <ElOption v-for="group in CONFIG_GROUPS" :key="group.key" :label="group.name" :value="group.key" />
+        </ElSelect>
       </ElFormItem>
       <ElFormItem :label="$t('page.manage.config.configStatus')" prop="status">
         <ElRadioGroup v-model="model.status">

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { createReusableTemplate } from '@vueuse/core';
+import { fetchGetDashboardHealth, fetchGetDashboardStats } from '@/service/api';
 import { $t } from '@/locales';
 
 defineOptions({ name: 'CardData' });
@@ -8,8 +9,8 @@ defineOptions({ name: 'CardData' });
 interface CardData {
   key: string;
   title: string;
-  value: number;
-  unit: string;
+  value: number | null;
+  unit: '%' | ' 次' | '';
   color: {
     start: string;
     end: string;
@@ -17,52 +18,63 @@ interface CardData {
   icon: string;
 }
 
+const dashboardStats = ref<Api.Jobs.DashboardStats | null>(null);
+const dashboardHealth = ref<Api.Jobs.DashboardHealth | null>(null);
+
 const cardData = computed<CardData[]>(() => [
   {
-    key: 'visitCount',
-    title: $t('page.home.visitCount'),
-    value: 9725,
-    unit: '',
+    key: 'jobExecutions',
+    title: $t('page.home.todayJobExecutions'),
+    value: dashboardStats.value?.todayExecutions ?? null,
+    unit: ' 次',
     color: {
       start: '#ec4786',
       end: '#b955a4'
     },
-    icon: 'ant-design:bar-chart-outlined'
+    icon: 'mdi:script-text-outline'
   },
   {
-    key: 'turnover',
-    title: $t('page.home.turnover'),
-    value: 1026,
-    unit: '$',
+    key: 'jobSuccessRate',
+    title: $t('page.home.todayJobSuccessRate'),
+    value: dashboardStats.value?.successRate ?? null,
+    unit: '%',
     color: {
       start: '#865ec0',
       end: '#5144b4'
     },
-    icon: 'ant-design:money-collect-outlined'
+    icon: 'mdi:check-decagram-outline'
   },
   {
-    key: 'downloadCount',
-    title: $t('page.home.downloadCount'),
-    value: 970925,
-    unit: '',
+    key: 'taskExecutions',
+    title: $t('page.home.sevenDayTaskExecutions'),
+    value: dashboardHealth.value?.sevenDay.total ?? null,
+    unit: ' 次',
     color: {
       start: '#56cdf3',
       end: '#719de3'
     },
-    icon: 'carbon:document-download'
+    icon: 'mdi:calendar-clock-outline'
   },
   {
-    key: 'dealCount',
-    title: $t('page.home.dealCount'),
-    value: 9527,
-    unit: '',
+    key: 'taskSuccessRate',
+    title: $t('page.home.sevenDayTaskSuccessRate'),
+    value: dashboardHealth.value?.sevenDay.successRate ?? null,
+    unit: '%',
     color: {
       start: '#fcbc25',
       end: '#f68057'
     },
-    icon: 'ant-design:trademark-circle-outlined'
+    icon: 'mdi:check-circle-outline'
   }
 ]);
+
+async function loadDashboardMetrics() {
+  const [statsResult, healthResult] = await Promise.all([fetchGetDashboardStats(), fetchGetDashboardHealth()]);
+
+  if (statsResult.data) dashboardStats.value = statsResult.data;
+  if (healthResult.data) dashboardHealth.value = healthResult.data;
+  if (statsResult.error || healthResult.error) window.$message?.error($t('page.home.dashboardMetrics.loadError'));
+}
 
 interface GradientBgProps {
   gradientColor: string;
@@ -73,6 +85,8 @@ const [DefineGradientBg, GradientBg] = createReusableTemplate<GradientBgProps>()
 function getGradientColor(color: CardData['color']) {
   return `linear-gradient(to bottom right, ${color.start}, ${color.end})`;
 }
+
+onMounted(loadDashboardMetrics);
 </script>
 
 <template>
@@ -91,11 +105,13 @@ function getGradientColor(color: CardData['color']) {
           <div class="flex justify-between pt-12px">
             <SvgIcon :icon="item.icon" class="text-32px" />
             <CountTo
-              :prefix="item.unit"
-              :start-value="1"
+              v-if="item.value !== null"
+              :suffix="item.unit"
+              :start-value="0"
               :end-value="item.value"
               class="text-30px text-white dark:text-dark"
             />
+            <span v-else class="text-30px text-white dark:text-dark">-</span>
           </div>
         </GradientBg>
       </ElCol>

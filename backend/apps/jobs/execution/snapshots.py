@@ -25,7 +25,7 @@ def execution_node(node_run):
         input_mapping=deepcopy(item.get("inputMapping") or {}),
         resource_id=item.get("resourceId"),
         resource_snapshot=deepcopy(item.get("resourceSnapshot")),
-        timeout_seconds=item["timeoutSeconds"],
+        timeout_seconds=item.get("timeoutSeconds"),
         command_version=SimpleNamespace(**deepcopy(command)) if command else None,
     )
 
@@ -75,13 +75,24 @@ def execution_resource(node_run):
             )
         channel = NotificationChannel(**channel_fields)
         channel.secret_encrypted = live.secret_encrypted
+        channel.signing_secret_encrypted = live.signing_secret_encrypted
         return NotificationTemplate(**fields, channel=channel)
     raise ValueError("Unsupported resource type")
 
 
 def ensure_node_runs(run):
     from apps.jobs.models import NodeRun
-    definitions = {node.node_key: node for node in run.workflow_version.nodes.select_related("command_version").all()} if run.workflow_version_id else {}
+
+    definitions = (
+        {
+            node.node_key: node
+            for node in run.workflow_version.nodes.select_related(
+                "command_version"
+            ).all()
+        }
+        if run.workflow_version_id
+        else {}
+    )
     existing = {node.node_key: node for node in run.node_runs.all()}
     for item in (run.graph_snapshot or {}).get("nodes", []):
         key = str(item["id"])
@@ -89,9 +100,13 @@ def ensure_node_runs(run):
             continue
         definition = definitions.get(key)
         existing[key] = NodeRun.objects.create(
-            workflow_run=run, workflow_node=definition,
+            workflow_run=run,
+            workflow_node=definition,
             command_version=definition.command_version if definition else None,
-            node_key=key, node_name=item.get("name") or key, node_type=item["type"],
-            config_snapshot=deepcopy(item.get("config") or {}), input_vars=deepcopy(item.get("inputMapping") or {}),
+            node_key=key,
+            node_name=item.get("name") or key,
+            node_type=item["type"],
+            config_snapshot=deepcopy(item.get("config") or {}),
+            input_vars=deepcopy(item.get("inputMapping") or {}),
         )
     return existing

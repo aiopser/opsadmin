@@ -6,27 +6,21 @@ const route = useRoute();
 const resource = computed(() => String(route.name).replace('cmdb_', ''));
 const title = computed(
   () =>
-    (
-      ({ business: '业务', source: '资产源', sync: '同步记录', tag: '主机标签', tree: '服务树' }) as Record<
-        string,
-        string
-      >
-    )[resource.value] || resource.value
+    (({ source: '资产源', sync: '同步记录', tag: '主机标签' }) as Record<string, string>)[resource.value] ||
+    resource.value
 );
 const rows = ref<Array<Record<string, unknown>>>([]);
 const loading = ref(false);
 
 const RESOURCE_PATHS: Record<string, string> = {
-  business: 'businesses',
   source: 'asset-sources',
   sync: 'asset-sync-records',
-  tag: 'tags',
-  tree: 'service-tree-nodes'
+  tag: 'tags'
 };
 
 async function load() {
   loading.value = true;
-  const { data } = await fetchGetCmdbResourceList(RESOURCE_PATHS[resource.value] ?? 'businesses');
+  const { data } = await fetchGetCmdbResourceList(RESOURCE_PATHS[resource.value] ?? 'asset-sources');
   rows.value = data?.list ?? [];
   loading.value = false;
 }

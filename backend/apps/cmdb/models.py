@@ -1,61 +1,12 @@
+import hashlib
+import ipaddress
+import json
+
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 from common.models import StandardModelMixin
-
-
-class Business(StandardModelMixin):
-    code = models.CharField(max_length=64, unique=True, db_index=True)
-    name = models.CharField(max_length=128)
-    description = models.TextField(blank=True, default="")
-    is_active = models.BooleanField(default=True)
-
-    def __str__(self):
-        return self.name
-
-    class Meta:
-        db_table = "cmdb_business"
-        ordering = ["code"]
-
-
-class ServiceTreeNode(StandardModelMixin):
-    class NodeType(models.TextChoices):
-        ENVIRONMENT = "environment", "Environment"
-        REGION = "region", "Region"
-        MODULE = "module", "Module"
-
-    business = models.ForeignKey(
-        Business,
-        on_delete=models.PROTECT,
-        related_name="service_tree_nodes",
-    )
-    parent = models.ForeignKey(
-        "self",
-        null=True,
-        blank=True,
-        on_delete=models.PROTECT,
-        related_name="children",
-    )
-    code = models.CharField(max_length=64)
-    name = models.CharField(max_length=128)
-    node_type = models.CharField(max_length=32, choices=NodeType.choices)
-    description = models.TextField(blank=True, default="")
-    sort_order = models.IntegerField(default=0)
-    is_active = models.BooleanField(default=True)
-    metadata = models.JSONField(default=dict, blank=True)
-
-    def __str__(self):
-        return self.name
-
-    class Meta:
-        db_table = "cmdb_service_tree_node"
-        ordering = ["sort_order", "name", "id"]
-        constraints = [
-            models.UniqueConstraint(
-                fields=("business", "code"),
-                name="cmdb_service_tree_business_code_uniq",
-            )
-        ]
 
 
 class AssetSource(StandardModelMixin):
@@ -64,6 +15,13 @@ class AssetSource(StandardModelMixin):
         CLOUD = "cloud", "Cloud"
         EXTERNAL_CMDB = "external_cmdb", "External CMDB"
 
+    class CloudProvider(models.TextChoices):
+        ALIYUN = "aliyun", "Alibaba Cloud"
+        TENCENT = "tencent", "Tencent Cloud"
+        VMWARE = "vmware", "VMware vSphere"
+        OPENSTACK = "openstack", "OpenStack"
+        PVE = "pve", "Proxmox VE"
+
     code = models.CharField(max_length=64, unique=True, db_index=True)
     name = models.CharField(max_length=128)
     source_type = models.CharField(max_length=32, choices=SourceType.choices)
@@ -71,7 +29,22 @@ class AssetSource(StandardModelMixin):
     description = models.TextField(blank=True, default="")
     is_active = models.BooleanField(default=True)
     metadata = models.JSONField(default=dict, blank=True)
+    cloud_provider = models.CharField(
+        max_length=16, choices=CloudProvider.choices, blank=True, default=""
+    )
+    regions = models.JSONField(default=list, blank=True)
+    credentials_encrypted = models.TextField(blank=True, default="")
     last_synced_at = models.DateTimeField(null=True, blank=True)
+    sync_interval_minutes = models.PositiveIntegerField(default=0)
+    last_sync_attempt_at = models.DateTimeField(null=True, blank=True)
+    sync_failure_alert = models.JSONField(default=dict, blank=True)
+    sync_actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="cloud_sync_sources",
+    )
 
     def __str__(self):
         return self.name
@@ -86,6 +59,7 @@ class AssetSyncRecord(StandardModelMixin):
         QUEUED = "queued", "Queued"
         RUNNING = "running", "Running"
         SUCCEEDED = "succeeded", "Succeeded"
+        PARTIAL = "partial", "Partial"
         FAILED = "failed", "Failed"
 
     source = models.ForeignKey(
@@ -107,16 +81,38 @@ class AssetSyncRecord(StandardModelMixin):
     skipped_count = models.PositiveIntegerField(default=0)
     error_message = models.TextField(blank=True, default="")
     payload = models.JSONField(default=list, blank=True)
+    trigger = models.CharField(max_length=16, default="manual")
+    observed_at = models.DateTimeField(default=timezone.now, null=True, blank=True)
+    collection_scope = models.JSONField(default=dict, blank=True)
+    changes = models.JSONField(default=list, blank=True)
+    failure_alert = models.JSONField(default=dict, blank=True)
 
     class Meta:
         db_table = "cmdb_asset_sync_record"
         ordering = ["-created_at", "-id"]
 
 
+class CloudImportPreview(StandardModelMixin):
+    """Short-lived, exact asset snapshot confirmed before an import."""
+
+    source = models.ForeignKey(
+        AssetSource, on_delete=models.CASCADE, related_name="cloud_previews"
+    )
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    source_updated_at = models.DateTimeField()
+    assets = models.JSONField(default=list)
+    digest = models.CharField(max_length=64)
+    expires_at = models.DateTimeField(db_index=True)
+    status = models.CharField(max_length=16, default="pending")
+    error_message = models.CharField(max_length=255, blank=True, default="")
+
+    class Meta:
+        db_table = "cmdb_cloud_import_preview"
 
 
 class CredentialRef(StandardModelMixin):
     is_active = models.BooleanField(default=True)
+
     class CredentialType(models.TextChoices):
         SSH_KEY = "ssh_key", "SSH Key"
         PASSWORD = "password", "Password"
@@ -188,7 +184,13 @@ class AssetHost(StandardModelMixin):
         EXTERNAL_CMDB = "external_cmdb", "External CMDB"
 
     hostname = models.CharField(max_length=128, db_index=True)
-    primary_ip = models.GenericIPAddressField(db_index=True)
+    internal_ip = models.GenericIPAddressField(db_index=True, verbose_name="内网IP")
+    external_ip = models.GenericIPAddressField(
+        null=True,
+        blank=True,
+        db_index=True,
+        verbose_name="外网IP",
+    )
     asset_type = models.CharField(
         max_length=32,
         choices=AssetType.choices,
@@ -209,13 +211,6 @@ class AssetHost(StandardModelMixin):
         choices=HostStatus.choices,
         default=HostStatus.ACTIVE,
     )
-    service_node = models.ForeignKey(
-        ServiceTreeNode,
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="hosts",
-    )
     asset_source = models.ForeignKey(
         AssetSource,
         null=True,
@@ -233,13 +228,6 @@ class AssetHost(StandardModelMixin):
         null=True,
         blank=True,
     )
-    default_gateway = models.ForeignKey(
-        "jobs.Gateway",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="hosts",
-    )
     ansible_connection_vars = models.JSONField(default=dict, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
     source_type = models.CharField(
@@ -248,8 +236,44 @@ class AssetHost(StandardModelMixin):
         default=SourceType.MANUAL,
     )
     source_id = models.CharField(max_length=128, blank=True, default="")
+    # Nullable unique digest keeps blank manual identities valid on MySQL too.
+    source_identity = models.CharField(
+        max_length=64, unique=True, null=True, editable=False
+    )
+    manual_identity = models.CharField(
+        max_length=64, unique=True, null=True, editable=False
+    )
+    cloud_state = models.CharField(max_length=32, blank=True, default="")
+    last_observed_at = models.DateTimeField(null=True, blank=True)
     last_synced_at = models.DateTimeField(null=True, blank=True)
     last_discovered_at = models.DateTimeField(null=True, blank=True)
+
+    def save(self, *args, **kwargs):
+        self.source_id = str(self.source_id or "").strip()
+        self.source_identity = (
+            hashlib.sha256(
+                f"{self.asset_source_id}:{self.source_id}".encode()
+            ).hexdigest()
+            if self.asset_source_id and self.source_id
+            else None
+        )
+        self.manual_identity = (
+            hashlib.sha256(
+                json.dumps(
+                    [str(ipaddress.ip_address(self.internal_ip)), self.hostname],
+                    ensure_ascii=False,
+                ).encode()
+            ).hexdigest()
+            if not self.source_identity
+            else None
+        )
+        if kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = set(kwargs["update_fields"]) | {
+                "source_identity",
+                "manual_identity",
+                "source_id",
+            }
+        super().save(*args, **kwargs)
 
     def config_summary(self):
         memory_gb = int(self.memory_mb / 1024) if self.memory_mb else 0
@@ -264,7 +288,6 @@ class AssetHost(StandardModelMixin):
     class Meta:
         db_table = "cmdb_asset_host"
         ordering = ["hostname", "id"]
-        unique_together = ("primary_ip", "hostname")
 
 
 class HostGroup(StandardModelMixin):

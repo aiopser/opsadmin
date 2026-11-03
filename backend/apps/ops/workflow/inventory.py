@@ -30,7 +30,6 @@ def _host_line(host, credential_provider):
     if port:
         parts.append(f"ansible_port={port}")
     variables = dict(host.get("variables") or {})
-    variables.pop("gateway_ref_id", None)
     variables["ansible_connection"] = host["connection_type"]
     credential_ref_id = host.get("credential_ref_id")
     if credential_ref_id:

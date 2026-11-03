@@ -10,6 +10,7 @@ from common.api.responses import api_ok_response, api_error_response
 from common.api.schema import generate_crud_schema
 from common.api.viewsets import StandardModelViewSet
 from ..models import Menu
+from ..menu_links import is_valid_menu_link
 from ..services import build_grouped_menu_tree, infer_system_setting_category
 from ..serializers import MenuSerializer
 
@@ -22,7 +23,7 @@ LEGACY_COMPONENT_TO_VIEW = {
     "system/menu/index": ("manage_menu", "/manage/menu", "view.manage_menu"),
     "system/dept/index": ("manage_dept", "/manage/dept", "view.manage_dept"),
     "system/dict/index": ("manage_dict", "/manage/dict", "view.manage_dict"),
-    "system/log/index": ("manage_log", "/manage/log", "view.manage_log"),
+    "system/log/index": ("audit_operation", "/audit/operation", "view.audit_operation"),
     "system/config/index": ("manage_config", "/manage/config", "view.manage_config"),
     # cmdb 主机资产（数据库中旧菜单数据仍是 cmdb/host/index，无需重播种即可解析）
     "cmdb/host/index": ("cmdb_host", "/cmdb/hosts", "view.cmdb_host"),
@@ -37,6 +38,7 @@ LEGACY_COMPONENT_TO_VIEW = {
     "task/dashboard/index": ("task_dashboard", "/task/dashboard", "view.task_dashboard"),
     "task/run-create/index": ("task_run-create", "/task/run-create", "view.task_run-create"),
     "task/templates/index": ("task_templates", "/task/templates", "view.task_templates"),
+    "task/execution-history/index": ("task_execution-history", "/task/execution-history", "view.task_execution-history"),
     "task/flow-design/index": ("task_flow-design", "/task/flow-design", "view.task_flow-design"),
     "task/schedule/index": ("task_schedule", "/task/schedule", "view.task_schedule"),
     # automation 自动化资源（三级目录：执行资源/集成资源）
@@ -46,6 +48,17 @@ LEGACY_COMPONENT_TO_VIEW = {
     "automation/resources/api/index": ("automation_resources_api", "/automation-resources/integration/api", "view.automation_resources_api"),
     "automation/resources/jenkins/index": ("automation_resources_jenkins", "/automation-resources/integration/jenkins", "view.automation_resources_jenkins"),
     "automation/resources/notification/index": ("automation_resources_notification", "/automation-resources/integration/notification", "view.automation_resources_notification"),
+}
+
+# Old editors offered route names as page identifiers. Restrict compatibility
+# to the known built-in aliases, and only when the menu name matches that alias.
+LEGACY_EDITOR_PAGE_ALIASES = {
+    "User": "system/user/index",
+    "Role": "system/role/index",
+    "SysMenu": "system/menu/index",
+    "Dept": "system/dept/index",
+    "Dict": "system/dict/index",
+    "Config": "system/config/index",
 }
 
 
@@ -196,7 +209,12 @@ class MenuViewSet(StandardModelViewSet):
 
     def __format_route_node(self, menu, queryset, parent_path=""):
         component = menu.component or ""
-        legacy = LEGACY_COMPONENT_TO_VIEW.get(component)
+        # Older editors could wrap a legacy page in view. (or a root layout).
+        # Resolve that known legacy alias before emitting an invalid view name.
+        legacy_key = component.rsplit("$", 1)[-1].removeprefix("view.")
+        if legacy_key == menu.name:
+            legacy_key = LEGACY_EDITOR_PAGE_ALIASES.get(legacy_key, legacy_key)
+        legacy = LEGACY_COMPONENT_TO_VIEW.get(legacy_key)
         if legacy:
             # 命中映射：直接输出前端约定路由（名称/路径/组件），避免旧路径污染
             route_name, route_path, component = legacy
@@ -207,10 +225,12 @@ class MenuViewSet(StandardModelViewSet):
                     route_path = f"{parent_path.rstrip('/')}/{route_path}"
                 # 归一化：合并多余斜杠（如 "//system" → "/system"）
                 route_path = re.sub(r"/{2,}", "/", route_path)
-            # 路由 name 归一化：剥离斜杠/连字符，符合前端路由命名约定
+            # 路由 name 归一化：剥离斜杠并转下划线，保留连字符以匹配
+            # 前端 elegant-router 命名（目录名含连字符时
+            # 必须保留，否则前端 transform 会将其误判为多级路由而丢失布局）
             raw_name = menu.name or (route_path or "root")
             route_name = (
-                raw_name.strip("/").replace("/", "_").replace("-", "_")
+                raw_name.strip("/").replace("/", "_")
                 or "root"
             )
             component = self.__normalize_route_component(component)
@@ -231,7 +251,7 @@ class MenuViewSet(StandardModelViewSet):
             meta["keepAlive"] = False
         if menu.constant:
             meta["constant"] = True
-        if menu.href:
+        if menu.href and is_valid_menu_link(menu.href):
             meta["href"] = menu.href
         if menu.hidden:
             meta["hideInMenu"] = True
@@ -372,9 +392,24 @@ class MenuViewSet(StandardModelViewSet):
         queryset = self.get_queryset()
         if getattr(user, "is_superuser", False):
             return queryset
-        permission_ids = list(user.role.values_list("permission__id", flat=True))
+        permission_codes = set(user.role.values_list("permission__code", flat=True))
         menu_ids = set(
-            queryset.filter(permission__in=permission_ids).values_list("id", flat=True)
+            queryset.filter(permission__code__in=permission_codes).values_list("id", flat=True)
+        )
+        hidden_route_permissions = {
+            "menu.task.run_create": "jobs.workflow_run:create",
+            "menu.task.run-detail": "jobs.workflow_run:read",
+            "menu.ops.run_detail": "ops.workflow_run:read",
+        }
+        menu_ids.update(
+            queryset.filter(
+                permission__code__in=[
+                    menu_code
+                    for menu_code, button_code in hidden_route_permissions.items()
+                    if button_code in permission_codes
+                ],
+                hidden=True,
+            ).values_list("id", flat=True)
         )
         parent_map = dict(queryset.values_list("id", "pid_id"))
         visible_ids = set(menu_ids)

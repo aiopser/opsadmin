@@ -46,6 +46,8 @@ def _command_version_info(command_version):
             "version",
             "command_type",
             "content",
+            "module_name",
+            "parameter_docs",
             "default_vars",
             "argument_schema",
             "timeout_seconds",
@@ -73,7 +75,6 @@ def serialize_graph(workflow_version, *, freeze_resources=False):
         )
     )
     return {
-        "globalVars": deepcopy(workflow_version.global_vars or {}),
         "inputSchema": deepcopy(workflow_version.input_schema or {}),
         "nodes": [
             {
@@ -145,7 +146,7 @@ def replace_graph(workflow_version, graph):
             output_schema=item.get("outputSchema") or [],
             retry_policy=item.get("retryPolicy") or {},
             failure_policy=item.get("failurePolicy") or WorkflowNode.FailurePolicy.STOP,
-            timeout_seconds=int(item.get("timeoutSeconds") or 60),
+            timeout_seconds=item.get("timeoutSeconds"),
             order_index=index,
         )
         node_map[node.node_key] = node

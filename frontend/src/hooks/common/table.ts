@@ -204,7 +204,7 @@ export function useTableOperate<TableData>(
 
   /** the hook after the batch delete operation is completed */
   async function onBatchDeleted() {
-    window.$message?.success($t('common.deleteSuccess'));
+    window.$notification?.success($t('common.deleteSuccess'));
 
     checkedRowKeys.value = [];
 
@@ -213,7 +213,7 @@ export function useTableOperate<TableData>(
 
   /** the hook after the delete operation is completed */
   async function onDeleted() {
-    window.$message?.success($t('common.deleteSuccess'));
+    window.$notification?.success($t('common.deleteSuccess'));
 
     await getData();
   }
@@ -312,7 +312,10 @@ function getColumns<Column extends UI.TableColumn<any>>(cols: Column[], checks: 
     }
   });
 
-  const filteredColumns = checks.filter(item => item.checked).map(check => columnMap.get(check.prop) as Column);
+  const filteredColumns = checks
+    .filter(item => item.checked)
+    .map(check => columnMap.get(check.prop) as Column)
+    .map(column => ({ align: 'center' as const, headerAlign: 'center' as const, ...column }));
 
   return filteredColumns;
 }

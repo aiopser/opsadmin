@@ -39,6 +39,7 @@ interface BackendUser {
 
 /** 后端角色记录（RoleSerializer 输出） */
 interface BackendRole {
+  jobDataScope?: Api.SystemManage.Role['jobDataScope'];
   id: number;
   name?: string;
   code?: string | null;
@@ -221,6 +222,7 @@ function transformRole(raw: BackendRole): Api.SystemManage.Role {
     roleName: raw.roleName ?? raw.name ?? '',
     roleCode: raw.roleCode ?? raw.code ?? '',
     roleDesc: raw.roleDesc ?? raw.description ?? '',
+    jobDataScope: raw.jobDataScope ?? 'own',
     status: raw.status ?? (raw.is_active ? '1' : '2'),
     isSystem: Boolean(raw.is_system) || raw.name === 'system_admin',
     createBy: '',
@@ -362,6 +364,7 @@ function toBackendRolePayload(data: Api.SystemManage.RoleModel) {
     roleName: data.roleName,
     roleCode: data.roleCode,
     roleDesc: data.roleDesc,
+    jobDataScope: data.jobDataScope,
     status: data.status
   };
 }
@@ -895,6 +898,8 @@ interface BackendSystemConfig {
   configValue?: string | null;
   configGroup?: string;
   remark?: string | null;
+  isSystem?: boolean;
+  is_system?: boolean;
   status?: number | string;
   createTime?: string;
   updateTime?: string;
@@ -908,6 +913,7 @@ function transformSystemConfig(raw: BackendSystemConfig): Api.SystemManage.Syste
     configValue: raw.configValue ?? null,
     configGroup: raw.configGroup ?? '',
     remark: raw.remark ?? null,
+    isSystem: raw.isSystem ?? raw.is_system ?? false,
     ...toCommonRecordFields(raw)
   };
 }
@@ -949,6 +955,11 @@ export function deleteConfig(id: number) {
   return request<null>({ url: `/api/v1/configs/${id}`, method: 'delete' });
 }
 
+/** refresh system config cache */
+export function fetchRefreshConfig() {
+  return request<{ count: number }>({ url: '/api/v1/configs/refresh', method: 'put' });
+}
+
 /** get public site configs（无需登录，仅返回白名单键） */
 export async function fetchGetPublicConfigs() {
   const res = await request<Record<string, string>>({
@@ -959,7 +970,7 @@ export async function fetchGetPublicConfigs() {
   return mapFlatResponse(res, data => data ?? {});
 }
 
-/** ============ 系统日志 ============ */
+/** ============ 操作日志 ============ */
 
 interface BackendOperationLog {
   id: number;
@@ -1014,10 +1025,143 @@ export async function fetchGetLogList(params?: Api.SystemManage.OperationLogSear
   return mapFlatResponse(res, data => transformPaginated(data, transformOperationLog));
 }
 
-/** batch delete operation logs */
-export function batchDeleteLogs(ids: number[]) {
-  return request<{ deleted: number }>({
-    url: `/api/v1/logs/delete/${ids.join(',')}`,
-    method: 'delete'
+/** ============ 通知设置：邮件服务器 ============ */
+
+/** 读取邮件服务器设置 */
+export function fetchGetNotificationEmailSettings() {
+  return request<Api.SystemManage.NotificationEmailSettings>({
+    url: '/api/v1/notifications/email-settings',
+    method: 'get'
+  });
+}
+
+/** 保存邮件服务器设置（密码留空表示不修改） */
+export function fetchSaveNotificationEmailSettings(data: Api.SystemManage.NotificationEmailSettingsPayload) {
+  return request<Api.SystemManage.NotificationEmailSettings>({
+    url: '/api/v1/notifications/email-settings',
+    method: 'put',
+    data
+  });
+}
+
+/** 使用表单值测试 SMTP 连接（密码留空时使用已保存密码） */
+export function fetchTestNotificationEmailConnection(data: Api.SystemManage.NotificationEmailConnectionTestPayload) {
+  return request<{ connected: boolean }>({
+    url: '/api/v1/notifications/email-settings/test-connection',
+    method: 'post',
+    data
+  });
+}
+
+/** 使用已保存配置发送测试邮件 */
+export function fetchTestNotificationEmail(data: { recipient: string }) {
+  return request<{ recipient: string }>({
+    url: '/api/v1/notifications/email-settings/test',
+    method: 'post',
+    data
+  });
+}
+
+/** 读取通知历史清理设置 */
+export function fetchGetNotificationHistorySettings() {
+  return request<Api.SystemManage.NotificationHistorySettings>({
+    url: '/api/v1/notifications/history-settings',
+    method: 'get'
+  });
+}
+
+/** 保存通知历史清理设置 */
+export function fetchSaveNotificationHistorySettings(data: Api.SystemManage.NotificationHistorySettings) {
+  return request<Api.SystemManage.NotificationHistorySettings>({
+    url: '/api/v1/notifications/history-settings',
+    method: 'put',
+    data
+  });
+}
+
+/** 预览或执行通知历史清理 */
+export function fetchPurgeNotificationHistory(data: { dryRun: boolean; retentionDays?: number }) {
+  return request<Api.SystemManage.NotificationHistoryPurgeResult>({
+    url: '/api/v1/notifications/history-settings/purge',
+    method: 'post',
+    data
+  });
+}
+
+/** 读取企业微信应用配置 */
+export function fetchGetNotificationWecomSettings() {
+  return request<Api.SystemManage.NotificationAppSettings>({
+    url: '/api/v1/notifications/wecom-settings',
+    method: 'get'
+  });
+}
+
+/** 保存企业微信应用配置（Secret 留空表示不修改） */
+export function fetchSaveNotificationWecomSettings(data: Api.SystemManage.NotificationAppSettingsPayload) {
+  return request<Api.SystemManage.NotificationAppSettings>({
+    url: '/api/v1/notifications/wecom-settings',
+    method: 'put',
+    data
+  });
+}
+
+/** 测试企业微信应用连接 */
+export function fetchTestNotificationWecomConnection(data: Api.SystemManage.NotificationAppConnectionTestPayload) {
+  return request<{ connected: boolean }>({
+    url: '/api/v1/notifications/wecom-settings/test-connection',
+    method: 'post',
+    data
+  });
+}
+
+/** 读取钉钉应用配置 */
+export function fetchGetNotificationDingtalkSettings() {
+  return request<Api.SystemManage.NotificationAppSettings>({
+    url: '/api/v1/notifications/dingtalk-settings',
+    method: 'get'
+  });
+}
+
+/** 保存钉钉应用配置（Secret 留空表示不修改） */
+export function fetchSaveNotificationDingtalkSettings(data: Api.SystemManage.NotificationAppSettingsPayload) {
+  return request<Api.SystemManage.NotificationAppSettings>({
+    url: '/api/v1/notifications/dingtalk-settings',
+    method: 'put',
+    data
+  });
+}
+
+/** 测试钉钉应用连接 */
+export function fetchTestNotificationDingtalkConnection(data: Api.SystemManage.NotificationAppConnectionTestPayload) {
+  return request<{ connected: boolean }>({
+    url: '/api/v1/notifications/dingtalk-settings/test-connection',
+    method: 'post',
+    data
+  });
+}
+
+/** 读取飞书应用配置 */
+export function fetchGetNotificationFeishuSettings() {
+  return request<Api.SystemManage.NotificationAppSettings>({
+    url: '/api/v1/notifications/feishu-settings',
+    method: 'get'
+  });
+}
+
+/** 保存飞书应用配置（Secret 留空表示不修改） */
+export function fetchSaveNotificationFeishuSettings(data: Api.SystemManage.NotificationAppSettingsPayload) {
+  return request<Api.SystemManage.NotificationAppSettings>({
+    url: '/api/v1/notifications/feishu-settings',
+    method: 'put',
+    data
+  });
+}
+
+/** 测试飞书应用连接 */
+export function fetchTestNotificationFeishuConnection(data: Api.SystemManage.NotificationAppConnectionTestPayload) {
+  return request<{ connected: boolean }>({
+    url: '/api/v1/notifications/feishu-settings/test-connection',
+    method: 'post',
+    data
   });
 }

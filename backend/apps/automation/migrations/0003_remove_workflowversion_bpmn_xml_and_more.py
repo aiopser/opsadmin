@@ -6,17 +6,19 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('automation', '0002_initial'),
+        ("automation", "0002_initial"),
     ]
 
     operations = [
         migrations.RemoveField(
-            model_name='workflowversion',
-            name='bpmn_xml',
+            model_name="workflowversion",
+            name="bpmn_xml",
         ),
         migrations.AlterField(
-            model_name='workflowversion',
-            name='editor_mode',
-            field=models.CharField(choices=[('graph', 'Graph')], default='graph', max_length=16),
+            model_name="workflowversion",
+            name="editor_mode",
+            field=models.CharField(
+                choices=[("graph", "Graph")], default="graph", max_length=16
+            ),
         ),
     ]

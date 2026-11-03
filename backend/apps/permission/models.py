@@ -19,6 +19,18 @@ __all__ = [
 
 
 class Role(StandardModelMixin):
+    class JobDataScope(models.TextChoices):
+        OWN = "own", "本人作业"
+        DEPARTMENT = "department", "同部门作业"
+        ALL = "all", "全部作业"
+
+    job_data_scope = models.CharField(
+        max_length=16,
+        choices=JobDataScope.choices,
+        default=JobDataScope.OWN,
+        verbose_name="Job data scope",
+        help_text="本人/同部门/全部作业的运行可见范围",
+    )
     name = models.CharField(
         verbose_name="Name",
         help_text="Name",
@@ -492,6 +504,7 @@ class SystemConfig(StandardModelMixin):
         SECURITY = "security", "Security"
         LOG = "log", "Log"
         FILE = "file", "File"
+        NOTIFICATION = "notification", "Notification"
 
     config_name = models.CharField(max_length=64, verbose_name="Config name")
     config_key = models.CharField(

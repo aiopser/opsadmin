@@ -6,14 +6,15 @@ declare namespace Api {
    */
   namespace Cmdb {
     type OsFamily = 'linux' | 'windows';
-
     type HostStatus = 'active' | 'inactive' | 'retired';
 
     /** 主机资产记录（AssetHostSerializer 输出） */
     interface HostRecord {
       id: number;
       hostname: string;
-      primaryIp: string;
+      internalIp: string;
+      /** 外网IP，可选，未录入为 null */
+      externalIp: string | null;
       assetType: string;
       osFamily: OsFamily | string;
       osType: string;
@@ -26,6 +27,8 @@ declare namespace Api {
       /** 主机所在地域（如 cn-east-1），调度时用于匹配同地域 Worker 池 */
       region: string;
       status: HostStatus | string;
+      cloudState?: string;
+      lastObservedAt?: string | null;
       connectionType: string;
       connectionPort: number;
       appCode: string;
@@ -33,10 +36,6 @@ declare namespace Api {
       groupIds: string[];
       credentialRef: number | null;
       credentialRefName: string;
-      defaultGateway: number | null;
-      defaultGatewayName: string;
-      serviceNode: number | null;
-      serviceNodeName: string;
       assetSource: number | null;
       assetSourceName: string;
       sourceType: string;
@@ -48,7 +47,7 @@ declare namespace Api {
       configSummary: string;
     }
 
-    /** 主机列表查询参数（后端 filterset: os_family/environment/service_node/status/app_code，另支持 business 与 service_node__in） */
+    /** 主机列表查询参数（后端 filterset: os_family/environment/status/app_code，另支持 group_id 含子分组级联） */
     interface HostSearchParams {
       current: number;
       size: number;
@@ -56,10 +55,10 @@ declare namespace Api {
       osFamily?: OsFamily | null;
       status?: HostStatus | null;
       environment?: string | null;
-      /** 按业务过滤（service_node__business） */
-      business?: number | null;
-      /** 按服务树节点集合过滤（service_node__in，含子树） */
-      serviceNodeIds?: number[] | null;
+      /** 按主机分组过滤（含子分组级联） */
+      groupId?: number | null;
+      /** 按 id 集合过滤（逗号分隔，用于编辑回填主机信息） */
+      ids?: string | null;
     }
 
     /** 凭据类型（CredentialRef.CredentialType） */
@@ -122,7 +121,9 @@ declare namespace Api {
     /** 主机创建/更新载荷（AssetHostSerializer 写入使用 snake_case 模型字段） */
     interface HostPayload {
       hostname: string;
-      primary_ip: string;
+      internal_ip: string;
+      /** 外网IP，可选 */
+      external_ip?: string | null;
       asset_type?: string;
       os_family: OsFamily | string;
       os_type?: string;
@@ -134,14 +135,12 @@ declare namespace Api {
       environment?: string;
       region?: string;
       status?: HostStatus | string;
-      service_node?: number | null;
       asset_source?: number | null;
       owner_team?: string;
       app_code?: string;
       connection_type?: CredentialConnectionType | string;
       connection_port?: number;
       credential_ref?: number | null;
-      default_gateway?: number | null;
       metadata?: Record<string, unknown>;
     }
 
@@ -219,85 +218,32 @@ declare namespace Api {
       value?: string | null;
     }
 
-    /** 业务系统记录（BusinessSerializer 输出，fields="__all__" snake_case） */
-    interface BusinessRecord {
-      id: number;
-      code: string;
-      name: string;
-      description: string;
-      is_active: boolean;
-      created_at: string | null;
-      updated_at: string | null;
-      /** serializer 附加只读字段 */
-      hostCount: number;
-    }
-
-    /** 业务系统创建/更新载荷 */
-    interface BusinessPayload {
-      code: string;
-      name: string;
-      description?: string;
-      is_active?: boolean;
-    }
-
-    /** 业务系统列表查询参数 */
-    interface BusinessSearchParams {
-      current: number;
-      size: number;
-      search?: string | null;
-      code?: string | null;
-      isActive?: boolean | null;
-    }
-
-    /** 服务树节点类型（ServiceTreeNode.NodeType） */
-    type ServiceNodeType = 'environment' | 'region' | 'module';
-
-    /** 服务树节点记录（ServiceTreeNodeSerializer 输出） */
-    interface ServiceTreeNodeRecord {
-      id: number;
-      business: number;
-      businessName: string;
-      parent: number | null;
-      parentName: string;
-      code: string;
-      name: string;
-      node_type: ServiceNodeType | string;
-      description: string;
-      sort_order: number;
-      is_active: boolean;
-      metadata: Record<string, unknown>;
-      created_at: string | null;
-      updated_at: string | null;
-      /** serializer 附加只读字段 */
-      hostCount: number;
-    }
-
-    /** 服务树节点创建/更新载荷（environment 不可有父级；region 挂 environment；module 挂 region） */
-    interface ServiceTreeNodePayload {
-      business: number;
-      parent?: number | null;
-      code: string;
-      name: string;
-      node_type: ServiceNodeType;
-      description?: string;
-      sort_order?: number;
-      is_active?: boolean;
-    }
-
-    /** 服务树节点列表查询参数 */
-    interface ServiceTreeNodeSearchParams {
-      current: number;
-      size: number;
-      search?: string | null;
-      business?: number | null;
-      nodeType?: ServiceNodeType | null;
-      isActive?: boolean | null;
-    }
-
     /** 资产来源类型（AssetSource.SourceType） */
     type AssetSourceType = 'manual' | 'cloud' | 'external_cmdb';
 
     /** 资产来源记录（AssetSourceSerializer 输出） */
+    interface CloudConnectionResult {
+      region: string;
+      success: boolean;
+      message: string;
+      category?: string;
+      errorCode?: string;
+      requestId?: string;
+      httpStatus?: number | null;
+      detail?: string;
+      suggestion?: string;
+      checks?: Array<{
+        key: string;
+        label: string;
+        success: boolean;
+        message: string;
+        errorCode?: string;
+        requestId?: string;
+        detail?: string;
+        suggestion?: string;
+      }>;
+    }
+
     interface AssetSourceRecord {
       id: number;
       code: string;
@@ -306,8 +252,16 @@ declare namespace Api {
       endpoint: string;
       description: string;
       is_active: boolean;
+      cloud_provider: 'aliyun' | 'tencent' | 'vmware' | 'openstack' | 'pve' | '';
+      regions: string[];
+      has_credentials: boolean;
+      masked_access_key_id?: string;
       metadata: Record<string, unknown>;
       last_synced_at: string | null;
+      sync_interval_minutes?: number;
+      last_sync_attempt_at?: string | null;
+      sync_failure_alert?: { templateId?: number; receivers?: string };
+      capabilities?: { fields: string[]; maxAssets: number; scope: string };
       created_at: string | null;
       updated_at: string | null;
     }
@@ -320,7 +274,13 @@ declare namespace Api {
       endpoint?: string;
       description?: string;
       is_active?: boolean;
+      cloud_provider?: 'aliyun' | 'tencent' | 'vmware' | 'openstack' | 'pve' | '';
+      regions?: string[];
+      access_key_id?: string;
+      access_key_secret?: string;
       metadata?: Record<string, unknown>;
+      sync_interval_minutes?: number;
+      sync_failure_alert?: { templateId?: number; receivers?: string };
     }
 
     /** 资产来源列表查询参数 */
@@ -329,11 +289,37 @@ declare namespace Api {
       size: number;
       search?: string | null;
       sourceType?: AssetSourceType | null;
+      excludeSourceType?: AssetSourceType | null;
       isActive?: boolean | null;
     }
 
     /** 资产同步状态（AssetSyncRecord.Status） */
-    type AssetSyncStatus = 'queued' | 'running' | 'succeeded' | 'failed';
+    type AssetSyncStatus = 'queued' | 'running' | 'succeeded' | 'partial' | 'failed';
+
+    interface AssetSyncPreview {
+      confirmationToken?: string;
+      total: number;
+      create: number;
+      update: number;
+      unchanged?: number;
+      invalid: number;
+      rows: Array<{
+        index: number;
+        hostname: string;
+        internalIp: string;
+        sourceId: string;
+        action: 'create' | 'update' | 'unchanged' | 'invalid';
+        reason: string;
+        changes?: { field: string; label: string; before: unknown; after: unknown }[];
+        specs?: {
+          cpu_cores?: number;
+          memory_mb?: number;
+          system_disk_gb?: number;
+          data_disk_gb?: number;
+          region?: string;
+        };
+      }>;
+    }
 
     /** 资产同步记录（AssetSyncRecordSerializer 输出，只读） */
     interface AssetSyncRecordRecord {
@@ -349,7 +335,22 @@ declare namespace Api {
       updated_count: number;
       skipped_count: number;
       error_message: string;
-      payload: unknown[];
+      trigger?: 'manual' | 'scheduled';
+      observed_at?: string | null;
+      collection_scope?: {
+        provider?: string;
+        regions?: string[];
+        complete?: boolean;
+        selectedCount?: number;
+        readCount?: number;
+      };
+      changes?: Array<{
+        hostId: number;
+        sourceId: string;
+        hostname: string;
+        action: string;
+        fields: Array<{ label: string; before: unknown; after: unknown }>;
+      }>;
       created_at: string | null;
       updated_at: string | null;
     }
@@ -369,42 +370,33 @@ declare namespace Api {
       tagIds: string[];
     }
 
-    /** 主机资产左树节点行（业务根节点 / 服务树节点统一结构） */
+    /** 主机资产左树节点行（根「全部主机」/ 主机分组统一结构） */
     interface HostTreeRow {
-      /** 树节点唯一键：business-{id} | node-{id} */
+      /** 树节点唯一键：all | group-{id} */
       key: string;
-      type: 'business' | 'node';
+      type: 'all' | 'group';
       id: number;
       name: string;
-      code: string;
-      /** 服务树节点类型，业务根节点为空串 */
-      nodeType: string;
       description: string;
-      sortOrder: number;
-      /** 含子树的主机总数 */
-      hostCount: number;
-      businessId: number;
+      /** static | dynamic */
+      groupType: string;
       isActive: boolean;
+      /** 含子分组的主机总数 */
+      hostCount: number;
       children: HostTreeRow[];
     }
 
     /** 左树选中事件载荷 */
     interface HostTreeSelectPayload {
-      /** 选中业务根节点时为业务 id，否则为 null */
-      business: number | null;
-      /** 选中服务树节点时为其自身与全部子孙节点 id，否则为 null */
-      serviceNodeIds: number[] | null;
+      /** 选中分组时为分组 id（含子分组级联过滤），根「全部主机」时为 null */
+      groupId: number | null;
       node: HostTreeRow | null;
     }
 
     /** 主机列表查询范围（由左树选中派生） */
     interface HostListQuery {
-      business?: number | null;
-      serviceNodeIds?: number[] | null;
+      groupId?: number | null;
     }
-
-    /** 主机页右侧「管理」抽屉 key */
-    type HostManageKey = 'host-group' | 'tag' | 'asset-source' | 'sync-record';
 
     /** 探测状态（AssetProbe.Status） */
     type AssetProbeStatus = 'pending' | 'running' | 'success' | 'failed';

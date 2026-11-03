@@ -6,9 +6,10 @@ import {
   fetchArchiveWorkflowVersion,
   fetchCreateWorkflowVersionDraft,
   fetchDeleteWorkflowTemplate,
-  fetchGetWorkflowEdges,
+  fetchDeleteWorkflowVersion,
+  fetchGetNotificationTemplate,
+  fetchGetNotificationTemplateList,
   fetchGetWorkflowGraph,
-  fetchGetWorkflowNodes,
   fetchGetWorkflowTemplateList,
   fetchGetWorkflowVersions,
   fetchPublishWorkflowVersion,
@@ -16,27 +17,29 @@ import {
   fetchUpdateWorkflowTemplate
 } from '@/service/api';
 import { defaultTransform, useUIPaginatedTable } from '@/hooks/common/table';
-import CodeEditor from '@/components/common/code-editor/index.vue';
+import { useAuth } from '@/hooks/business/auth';
 
 defineOptions({ name: 'TaskTemplates' });
 
 const router = useRouter();
+const { hasAuth } = useAuth();
 
 /** ============ 搜索 ============ */
 
-/** 模板启用/停用与版本草稿/发布/归档是两套独立状态：模板只关心是否启用 */
+/** 模板自身状态与版本的草稿/发布/归档状态分别管理。 */
 const statusOptions = [
   { value: 'published', label: '启用' },
+  { value: 'draft', label: '未启用' },
   { value: 'disabled', label: '停用' }
 ];
 
 const statusText: Record<string, string> = {
-  draft: '草稿',
+  draft: '未启用',
   published: '启用',
   disabled: '停用'
 };
 
-const statusTagType: Record<string, string> = {
+const statusTagType: Record<string, UI.ThemeColor> = {
   draft: 'info',
   published: 'success',
   disabled: 'danger'
@@ -52,6 +55,69 @@ function getInitSearchParams() {
 }
 
 const searchParams = ref(getInitSearchParams());
+
+/** 「更多」下拉：编辑信息 / 版本管理 / 执行历史 / 删除 */
+function onMoreCommand(command: string, row: Api.Automation.WorkflowTemplateRecord) {
+  switch (command) {
+    case 'edit':
+      openEdit(row);
+      break;
+    case 'versions':
+      openVersions(row);
+      break;
+    case 'history':
+      router.push({
+        name: 'task_execution-history',
+        query: { workflowId: String(row.id), workflowName: row.name }
+      });
+      break;
+    case 'start':
+      startFromTemplate(row);
+      break;
+    case 'delete':
+      onDelete(row);
+      break;
+    default:
+      break;
+  }
+}
+
+async function startFromTemplate(row: Api.Automation.WorkflowTemplateRecord) {
+  if (row.status !== 'published') return;
+  const { data: versions, error } = await fetchGetWorkflowVersions(row.id);
+  if (error) return;
+  const published = versions.filter(item => item.status === 'published').sort((a, b) => b.version - a.version)[0];
+  if (!published) {
+    window.$message?.warning('模板没有可执行的已发布版本');
+    return;
+  }
+  router.push({ name: 'task_run-create', query: { versionId: String(published.id) } });
+}
+
+function startFromVersion(version: Api.Automation.WorkflowVersionRecord) {
+  router.push({ name: 'task_run-create', query: { versionId: String(version.id) } });
+}
+
+/** ============ 行内直达编排 ============ */
+
+/** 有草稿直接进入；没有草稿时先选择从已发布版本克隆或创建空白草稿。 */
+const orchestrateLoadingId = ref<number | null>(null);
+
+async function onQuickOrchestrate(row: Api.Automation.WorkflowTemplateRecord) {
+  orchestrateLoadingId.value = row.id;
+  try {
+    const { data: versions, error } = await fetchGetWorkflowVersions(row.id);
+    if (error) return;
+    const draft = versions.filter(item => item.status === 'draft').sort((a, b) => b.version - a.version)[0];
+    if (draft) {
+      router.push({ name: 'task_flow-design', query: { templateId: String(row.id), versionId: String(draft.id) } });
+      return;
+    }
+    openVersions(row, versions);
+  } finally {
+    orchestrateLoadingId.value = null;
+  }
+}
 
 /** ============ 列表 ============ */
 
@@ -85,12 +151,10 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
     },
     {
       prop: 'status',
-      label: '启用状态',
+      label: '模板状态',
       width: 100,
       align: 'center',
-      formatter: row => (
-        <ElTag type={(statusTagType[row.status] ?? 'info') as any}>{statusText[row.status] ?? row.status}</ElTag>
-      )
+      formatter: row => <ElTag type={statusTagType[row.status] ?? 'info'}>{statusText[row.status] ?? row.status}</ElTag>
     },
     {
       prop: 'publishedVersion',
@@ -101,36 +165,67 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
     },
     {
       prop: 'draftVersion',
-      label: '草稿版本',
-      width: 100,
+      label: '可编辑草稿',
+      width: 140,
       align: 'center',
-      formatter: row => (row.draftVersion ? `v${row.draftVersion}` : '-')
+      formatter: row =>
+        row.draftVersion ? (
+          <ElTag type="warning">草稿 v{row.draftVersion}</ElTag>
+        ) : (
+          <span class="text-gray-500">未创建</span>
+        )
     },
-    { prop: 'updated_at', label: '更新时间', width: 170, formatter: row => row.updated_at || '-' },
+    { prop: 'updatedAt', label: '更新时间', width: 170, formatter: row => row.updatedAt || '-' },
     {
       prop: 'operate',
       label: '操作',
-      width: 180,
+      width: 170,
       align: 'center',
       fixed: 'right',
       formatter: row => (
-        <>
-          <ElButton type="primary" plain size="small" onClick={() => openEdit(row)}>
-            编辑
-          </ElButton>
-          <ElButton type="warning" plain size="small" onClick={() => openVersions(row)}>
-            版本
-          </ElButton>
-          <ElButton type="danger" plain size="small" onClick={() => onDelete(row)}>
-            删除
-          </ElButton>
-        </>
+        <div class="flex items-center justify-center gap-8px [&>.el-button+.el-button]:!ml-0">
+          <ElTooltip content={row.draftVersion ? '继续编排现有草稿' : '选择版本来源后开始编排'} placement="top">
+            <ElButton
+              type="primary"
+              plain
+              size="small"
+              class="!w-64px"
+              loading={orchestrateLoadingId.value === row.id}
+              onClick={() => onQuickOrchestrate(row)}
+            >
+              编排
+            </ElButton>
+          </ElTooltip>
+          <ElDropdown onCommand={(command: string) => onMoreCommand(command, row)}>
+            {{
+              default: () => (
+                <ElButton plain size="small" class="!w-64px">
+                  更多 ∨
+                </ElButton>
+              ),
+              dropdown: () => (
+                <ElDropdownMenu>
+                  <ElDropdownItem command="edit">编辑信息</ElDropdownItem>
+                  <ElDropdownItem command="versions">版本管理</ElDropdownItem>
+                  <ElDropdownItem
+                    v-if="row.status === 'published' && row.publishedVersion && hasAuth('jobs.workflow_run:create')"
+                    command="start"
+                  >
+                    发起执行
+                  </ElDropdownItem>
+                  <ElDropdownItem command="history">执行历史</ElDropdownItem>
+                  <ElDropdownItem divided command="delete">
+                    删除
+                  </ElDropdownItem>
+                </ElDropdownMenu>
+              )
+            }}
+          </ElDropdown>
+        </div>
       )
     }
   ]
 });
-
-const hasFilter = computed(() => Boolean(searchParams.value.status || searchParams.value.search));
 
 function resetSearchParams() {
   searchParams.value = getInitSearchParams();
@@ -140,52 +235,68 @@ function resetSearchParams() {
 /** ============ 新增/编辑抽屉 ============ */
 
 const editVisible = ref(false);
+const alertTemplates = shallowRef<Api.Automation.NotificationTemplateRecord[]>([]);
 const editingRow = shallowRef<Api.Automation.WorkflowTemplateRecord | null>(null);
 const saving = ref(false);
+const editFormRef = ref();
 
 const editForm = reactive({
   name: '',
   code: '',
   description: '',
+  alertTemplateId: null as number | null,
+  alertReceivers: '',
   status: 'published' as Api.Automation.AtomStatus
 });
 
+const editFormRules = {
+  name: [{ required: true, message: '请输入模板名称', trigger: 'blur' }],
+  code: [{ required: true, message: '请输入编码', trigger: 'blur' }]
+};
+
 function openAdd() {
+  loadAlertTemplates();
   editingRow.value = null;
   editForm.name = '';
   editForm.code = '';
   editForm.description = '';
+  editForm.alertTemplateId = null;
+  editForm.alertReceivers = '';
   editForm.status = 'published';
   editVisible.value = true;
 }
 
 function openEdit(row: Api.Automation.WorkflowTemplateRecord) {
+  loadAlertTemplates('', row.failureAlert?.templateId);
   editingRow.value = row;
   editForm.name = row.name;
   editForm.code = row.code;
   editForm.description = row.description;
+  editForm.alertTemplateId = row.failureAlert?.templateId ?? null;
+  editForm.alertReceivers = row.failureAlert?.receivers ?? '';
   editForm.status = (row.status as Api.Automation.AtomStatus) ?? 'published';
   editVisible.value = true;
 }
 
 async function saveEdit() {
-  if (!editForm.name.trim() || !editForm.code.trim()) {
-    window.$message?.warning('请填写名称和编码');
-    return;
-  }
+  await editFormRef.value?.validate();
+
   saving.value = true;
   try {
     const payload: Api.Automation.WorkflowTemplatePayload = {
       name: editForm.name.trim(),
       code: editForm.code.trim(),
       description: editForm.description,
+      failureAlert: editForm.alertTemplateId
+        ? { templateId: editForm.alertTemplateId, receivers: editForm.alertReceivers.trim() }
+        : {},
       status: editForm.status
     };
     const { error } = editingRow.value
       ? await fetchUpdateWorkflowTemplate(editingRow.value.id, payload)
       : await fetchAddWorkflowTemplate(payload);
     if (!error) {
-      window.$message?.success(editingRow.value ? '更新成功' : '新增成功');
+      window.$notification?.success(editingRow.value ? '更新成功' : '新增成功');
       editVisible.value = false;
       getData();
     }
@@ -194,9 +305,31 @@ async function saveEdit() {
   }
 }
 
+let alertSearchSequence = 0;
+const alertLoading = ref(false);
+
+async function loadAlertTemplates(search = '', selectedId = editForm.alertTemplateId ?? undefined) {
+  alertSearchSequence += 1;
+  const sequence = alertSearchSequence;
+  alertLoading.value = true;
+  try {
+    const [listResult, selectedResult] = await Promise.all([
+      fetchGetNotificationTemplateList({ current: 1, size: 20, search: search.trim() || null }),
+      selectedId ? fetchGetNotificationTemplate(selectedId) : Promise.resolve(null)
+    ]);
+    if (sequence !== alertSearchSequence || listResult.error || !listResult.data) return;
+    const selected = selectedResult && !selectedResult.error ? selectedResult.data : null;
+    const options = listResult.data.records.filter(item => item.isActive);
+    alertTemplates.value =
+      selected && !options.some(item => item.id === selected.id) ? [selected, ...options] : options;
+  } finally {
+    if (sequence === alertSearchSequence) alertLoading.value = false;
+  }
+}
+
 async function onDelete(row: Api.Automation.WorkflowTemplateRecord) {
   try {
-    await ElMessageBox.confirm(`确认删除工作流模板「${row.name}」？`, '删除确认', {
+    await ElMessageBox.confirm(`确认删除流程模板「${row.name}」？`, '删除确认', {
       type: 'warning',
       confirmButtonText: '确定',
       cancelButtonText: '取消'
@@ -207,7 +340,7 @@ async function onDelete(row: Api.Automation.WorkflowTemplateRecord) {
 
   const { error } = await fetchDeleteWorkflowTemplate(row.id);
   if (!error) {
-    window.$message?.success('删除成功');
+    window.$notification?.success('删除成功');
     getData();
   }
 }
@@ -219,6 +352,8 @@ const versionTemplate = shallowRef<Api.Automation.WorkflowTemplateRecord | null>
 const versionRows = shallowRef<Api.Automation.WorkflowVersionRecord[]>([]);
 const versionLoading = ref(false);
 const versionOperatingId = ref<number | null>(null);
+let versionRequestId = 0;
+const hasPublishedVersion = computed(() => versionRows.value.some(row => row.status === 'published'));
 
 const versionStatusText: Record<string, string> = {
   draft: '草稿',
@@ -226,7 +361,7 @@ const versionStatusText: Record<string, string> = {
   archived: '已归档'
 };
 
-const versionStatusTagType: Record<string, string> = {
+const versionStatusTagType: Record<string, UI.ThemeColor> = {
   draft: 'info',
   published: 'success',
   archived: 'warning'
@@ -234,26 +369,56 @@ const versionStatusTagType: Record<string, string> = {
 
 async function loadVersions() {
   if (!versionTemplate.value) return;
+  const templateId = versionTemplate.value.id;
+  versionRequestId += 1;
+  const requestId = versionRequestId;
   versionLoading.value = true;
-  const { data: versions, error } = await fetchGetWorkflowVersions(versionTemplate.value.id);
-  if (!error) versionRows.value = [...versions].sort((a, b) => b.version - a.version);
-  versionLoading.value = false;
+  try {
+    const { data: versions, error } = await fetchGetWorkflowVersions(templateId);
+    if (requestId === versionRequestId && versionTemplate.value?.id === templateId && !error) {
+      versionRows.value = [...versions].sort((a, b) => b.version - a.version);
+    }
+  } finally {
+    if (requestId === versionRequestId) versionLoading.value = false;
+  }
 }
 
-function openVersions(row: Api.Automation.WorkflowTemplateRecord) {
+function openVersions(row: Api.Automation.WorkflowTemplateRecord, versions?: Api.Automation.WorkflowVersionRecord[]) {
+  versionRequestId += 1;
   versionTemplate.value = row;
-  versionRows.value = [];
+  versionRows.value = versions ? [...versions].sort((a, b) => b.version - a.version) : [];
   versionVisible.value = true;
-  loadVersions();
+  if (!versions) loadVersions();
+}
+
+function editVersionTemplate() {
+  if (!versionTemplate.value) return;
+  const template = versionTemplate.value;
+  versionVisible.value = false;
+  openEdit(template);
 }
 
 async function onPublishVersion(row: Api.Automation.WorkflowVersionRecord) {
+  try {
+    await ElMessageBox.confirm(
+      `确认发布草稿 v${row.version}？发布后该版本不可再修改，原发布版本将自动归档。`,
+      '发布确认',
+      {
+        type: 'warning',
+        confirmButtonText: '发布',
+        cancelButtonText: '取消'
+      }
+    );
+  } catch {
+    return;
+  }
   versionOperatingId.value = row.id;
   try {
     const { error } = await fetchPublishWorkflowVersion(row.id);
     if (!error) {
-      window.$message?.success(`v${row.version} 已发布`);
+      window.$notification?.success(`v${row.version} 已发布`);
       loadVersions();
+      getData();
     }
   } finally {
     versionOperatingId.value = null;
@@ -261,12 +426,22 @@ async function onPublishVersion(row: Api.Automation.WorkflowVersionRecord) {
 }
 
 async function onArchiveVersion(row: Api.Automation.WorkflowVersionRecord) {
+  try {
+    await ElMessageBox.confirm(`确认归档流程版本 v${row.version}？归档后将不能用于新执行。`, '归档确认', {
+      type: 'warning',
+      confirmButtonText: '归档',
+      cancelButtonText: '取消'
+    });
+  } catch {
+    return;
+  }
   versionOperatingId.value = row.id;
   try {
     const { error } = await fetchArchiveWorkflowVersion(row.id);
     if (!error) {
-      window.$message?.success(`v${row.version} 已归档`);
+      window.$notification?.success(`v${row.version} 已归档`);
       loadVersions();
+      getData();
     }
   } finally {
     versionOperatingId.value = null;
@@ -279,11 +454,15 @@ async function onCreateDraft() {
   versionOperatingId.value = -1;
   try {
     const { data: draft, error } = await fetchCreateWorkflowVersionDraft(versionTemplate.value.id);
-    if (!error && draft) {
-      window.$message?.success(`已创建草稿 v${draft.version}`);
-      versionVisible.value = false;
-      goFlowEditor(draft);
+    if (error) return;
+    if (!draft) {
+      window.$message?.error('创建草稿版本失败');
+      return;
     }
+    window.$notification?.success(`已创建草稿 v${draft.version}`);
+    versionVisible.value = false;
+    goFlowEditor(draft);
+    getData();
   } finally {
     versionOperatingId.value = null;
   }
@@ -292,135 +471,111 @@ async function onCreateDraft() {
 function goFlowEditor(row: Api.Automation.WorkflowVersionRecord) {
   if (!versionTemplate.value) return;
   router.push({
-    path: '/task/flow-design',
+    name: 'task_flow-design',
     query: { templateId: String(versionTemplate.value.id), versionId: String(row.id) }
   });
 }
 
-function goRunCreate(row: Api.Automation.WorkflowVersionRecord) {
-  router.push({ path: '/task/run-create', query: { versionId: String(row.id) } });
-}
-
-/** 已发布版本复制为新草稿：建草稿版本后整体拷贝图协议 */
+/** 先读取原版本，再创建草稿，避免读取失败后留下空白版本。 */
 async function onCopyAsDraft(row: Api.Automation.WorkflowVersionRecord) {
   if (!versionTemplate.value) return;
   versionOperatingId.value = row.id;
   try {
-    const { data: draft, error } = await fetchCreateWorkflowVersionDraft(versionTemplate.value.id);
-    if (error || !draft) return;
     const { data: graphRes, error: graphError } = await fetchGetWorkflowGraph(row.id);
-    if (graphError || !graphRes?.graph) {
-      window.$message?.warning(`草稿 v${draft.version} 已创建，但读取 v${row.version} 图内容失败`);
-      loadVersions();
+    if (graphError) return; // 请求失败由全局错误处理提示
+    if (!graphRes?.graph) {
+      window.$message?.error('原版本没有可克隆的流程图');
+      return;
+    }
+    const { data: draft, error } = await fetchCreateWorkflowVersionDraft(versionTemplate.value.id);
+    if (error) return;
+    if (!draft) {
+      window.$message?.error('创建草稿版本失败');
       return;
     }
     const { error: saveError } = await fetchUpdateWorkflowGraph(draft.id, graphRes.graph);
     if (!saveError) {
-      window.$message?.success(`已复制为草稿 v${draft.version}`);
-      loadVersions();
+      window.$notification?.success(`已克隆为草稿 v${draft.version}`);
+    } else {
+      window.$message?.warning(`草稿 v${draft.version} 已创建，但复制内容失败；请在版本管理中处理该空白草稿`);
     }
+    loadVersions();
+    getData();
   } finally {
     versionOperatingId.value = null;
   }
 }
 
-/** ============ 版本详情抽屉（只读） ============ */
-
-const detailVisible = ref(false);
-const detailVersion = shallowRef<Api.Automation.WorkflowVersionRecord | null>(null);
-const detailNodes = shallowRef<Api.Automation.WorkflowNodeRecord[]>([]);
-const detailEdges = shallowRef<Api.Automation.WorkflowEdgeRecord[]>([]);
-const detailLoading = ref(false);
-
-const nodeTypeText: Record<string, string> = {
-  start: '开始',
-  end: '结束',
-  command: '命令',
-  script: '脚本',
-  playbook: 'Playbook',
-  module: '模块',
-  api: 'API',
-  jenkins: 'Jenkins',
-  notify: '通知',
-  parallel_gateway: '并行网关',
-  parallel_join: '并行汇聚'
-};
-
-const failurePolicyText: Record<string, string> = {
-  stop: '失败终止',
-  ignore: '忽略错误',
-  retry: '重试'
-};
-
-const editorModeText: Record<string, string> = {
-  graph: '图形化设计'
-};
-
-const detailNodeMap = computed(() => new Map(detailNodes.value.map(node => [node.id, node])));
-
-function detailNodeLabel(id: number) {
-  const node = detailNodeMap.value.get(id);
-  return node ? `${node.name || node.node_key}（${node.node_key}）` : `#${id}`;
+function onVersionCommand(command: string, row: Api.Automation.WorkflowVersionRecord) {
+  switch (command) {
+    case 'publish':
+      onPublishVersion(row);
+      break;
+    case 'start':
+      startFromVersion(row);
+      break;
+    case 'clone':
+      onCopyAsDraft(row);
+      break;
+    case 'archive':
+      onArchiveVersion(row);
+      break;
+    case 'delete':
+      onDeleteVersion(row);
+      break;
+    default:
+      break;
+  }
 }
 
-function detailCommandText(row: Api.Automation.WorkflowNodeRecord) {
-  if (!row.commandName) return '-';
-  return row.command_version ? `${row.commandName}（v${row.command_version}）` : row.commandName;
-}
+/** 删除草稿版本（仅草稿可删，删除前二次确认） */
+async function onDeleteVersion(row: Api.Automation.WorkflowVersionRecord) {
+  try {
+    await ElMessageBox.confirm(`确认删除草稿 v${row.version}？删除后不可恢复`, '删除确认', {
+      type: 'warning',
+      confirmButtonText: '确定',
+      cancelButtonText: '取消'
+    });
+  } catch {
+    return;
+  }
 
-function detailConditionText(row: Api.Automation.WorkflowEdgeRecord) {
-  if (row.is_default) return '默认';
-  return row.condition_expression || '-';
-}
-
-/** JSON 对象转美化的格式化文本，空对象/空值返回空串 */
-function prettyJson(value: unknown): string {
-  if (!value || (typeof value === 'object' && Object.keys(value as object).length === 0)) return '';
-  return JSON.stringify(value, null, 2);
-}
-
-async function openVersionDetail(row: Api.Automation.WorkflowVersionRecord) {
-  detailVersion.value = row;
-  detailNodes.value = [];
-  detailEdges.value = [];
-  detailVisible.value = true;
-  detailLoading.value = true;
-  const [nodeRes, edgeRes] = await Promise.all([fetchGetWorkflowNodes(row.id), fetchGetWorkflowEdges(row.id)]);
-  if (!nodeRes.error) detailNodes.value = [...nodeRes.data].sort((a, b) => a.order_index - b.order_index);
-  if (!edgeRes.error) detailEdges.value = [...edgeRes.data].sort((a, b) => a.order_index - b.order_index);
-  detailLoading.value = false;
+  versionOperatingId.value = row.id;
+  try {
+    const { error } = await fetchDeleteWorkflowVersion(row.id);
+    if (!error) {
+      window.$notification?.success(`v${row.version} 已删除`);
+      loadVersions();
+      getData();
+    }
+  } finally {
+    versionOperatingId.value = null;
+  }
 }
 </script>
 
 <template>
   <div class="min-h-500px flex-col-stretch gap-16px overflow-hidden lt-sm:overflow-auto">
-    <ElCard class="card-wrapper">
-      <ElForm :model="searchParams" label-width="70px" inline @submit.prevent>
+    <SearchPanel @reset="resetSearchParams" @search="getDataByPage">
+      <ElForm :model="searchParams" label-width="80px" @submit.prevent="getDataByPage">
         <ElFormItem label="状态">
-          <ElSelect v-model="searchParams.status" clearable placeholder="全部" class="w-140px">
+          <ElSelect v-model="searchParams.status" clearable placeholder="全部">
             <ElOption v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" />
           </ElSelect>
         </ElFormItem>
         <ElFormItem label="关键词">
-          <ElInput
-            v-model="searchParams.search"
-            clearable
-            placeholder="名称/编码"
-            class="w-200px"
-            @keyup.enter="getDataByPage()"
-          />
-        </ElFormItem>
-        <ElFormItem>
-          <ElButton type="primary" @click="getDataByPage()">查询</ElButton>
-          <ElButton :disabled="!hasFilter" @click="resetSearchParams">重置</ElButton>
+          <ElInput v-model="searchParams.search" clearable placeholder="名称/编码" @keyup.enter="getDataByPage()" />
         </ElFormItem>
       </ElForm>
-    </ElCard>
+    </SearchPanel>
 
     <ElCard class="card-wrapper sm:flex-1-hidden">
       <template #header>
         <div class="flex items-center justify-between">
-          <p>工作流模板</p>
+          <div class="flex items-baseline gap-8px">
+            <p>流程模板</p>
+            <span class="text-13px text-gray-500">模板维护流程元信息，版本承载可执行的步骤编排</span>
+          </div>
           <div class="flex items-center gap-8px">
             <ElButton type="primary" @click="openAdd">新增模板</ElButton>
             <TableHeaderOperation
@@ -450,193 +605,210 @@ async function openVersionDetail(row: Api.Automation.WorkflowVersionRecord) {
     </ElCard>
 
     <ElDrawer v-model="editVisible" :title="editingRow ? '编辑模板' : '新增模板'" size="480px">
-      <ElForm :model="editForm" label-width="80px">
-        <ElFormItem label="名称" required>
+      <ElForm
+        ref="editFormRef"
+        :model="editForm"
+        :rules="editFormRules"
+        label-width="96px"
+        label-suffix="："
+        require-asterisk-position="left"
+      >
+        <ElFormItem label="名称" prop="name">
           <ElInput v-model="editForm.name" placeholder="请输入模板名称" />
         </ElFormItem>
-        <ElFormItem label="编码" required>
+        <ElFormItem prop="code">
+          <template #label>
+            <FormLabelHelp label="编码" :help="['模板唯一编码，全站不可重复，建议小写下划线命名，如 deploy_app。']" />
+          </template>
           <ElInput v-model="editForm.code" placeholder="唯一编码，如 deploy_app" />
         </ElFormItem>
         <ElFormItem label="描述">
           <ElInput v-model="editForm.description" type="textarea" :rows="3" placeholder="模板用途说明" />
         </ElFormItem>
-        <ElFormItem label="状态">
+        <ElFormItem>
+          <template #label>
+            <FormLabelHelp
+              label="模板状态"
+              :help="['模板状态与版本状态分别管理。', '未启用的模板即使已有发布版本，也不会在本页提供发起执行入口。']"
+            />
+          </template>
           <ElSelect v-model="editForm.status" class="w-full">
             <ElOption v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" />
           </ElSelect>
         </ElFormItem>
+        <ElFormItem>
+          <template #label>
+            <FormLabelHelp label="失败告警" :help="['流程失败或超时时发送通知；任务单可单独覆盖。']" />
+          </template>
+          <ElSelect
+            v-model="editForm.alertTemplateId"
+            clearable
+            filterable
+            remote
+            :remote-method="loadAlertTemplates"
+            :loading="alertLoading"
+            class="w-full"
+            placeholder="搜索通知模板；留空不发送"
+          >
+            <ElOption
+              v-for="item in alertTemplates"
+              :key="item.id"
+              :label="item.isActive ? item.name : `${item.name}（已停用）`"
+              :value="item.id"
+              :disabled="!item.isActive"
+            />
+          </ElSelect>
+        </ElFormItem>
+        <ElFormItem v-if="editForm.alertTemplateId">
+          <template #label>
+            <FormLabelHelp label="接收人" :help="['可选；多个用逗号分隔，留空使用通知模板配置的接收人。']" />
+          </template>
+          <ElInput
+            v-model="editForm.alertReceivers"
+            maxlength="1024"
+            placeholder="可选；逗号分隔，留空使用通知模板配置"
+          />
+        </ElFormItem>
       </ElForm>
       <template #footer>
         <ElButton @click="editVisible = false">取消</ElButton>
-        <ElButton type="primary" :loading="saving" @click="saveEdit">保存</ElButton>
+        <ElButton type="primary" :loading="saving" @click="saveEdit">确定</ElButton>
       </template>
     </ElDrawer>
 
-    <ElDrawer v-model="versionVisible" :title="`版本管理 - ${versionTemplate?.name ?? ''}`" size="840px">
-      <div class="mb-12px flex justify-end gap-8px">
-        <ElButton type="primary" :loading="versionOperatingId === -1" @click="onCreateDraft">创建草稿版本</ElButton>
-        <ElButton :loading="versionLoading" @click="loadVersions">刷新</ElButton>
+    <ElDrawer v-model="versionVisible" :title="`版本管理 · ${versionTemplate?.name ?? ''}`" size="min(840px, 100%)">
+      <div class="mb-20px flex flex-wrap items-center justify-between gap-12px">
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-8px">
+            <span class="text-14px">模板状态</span>
+            <ElTag size="small" :type="statusTagType[versionTemplate?.status ?? ''] ?? 'info'">
+              {{ statusText[versionTemplate?.status ?? ''] ?? versionTemplate?.status }}
+            </ElTag>
+          </div>
+          <p class="mt-4px text-12px text-gray-500">模板的启用状态与版本的发布状态分别管理。</p>
+        </div>
+        <ElButton
+          type="primary"
+          plain
+          size="small"
+          class="!h-32px"
+          :disabled="versionOperatingId !== null"
+          @click="editVersionTemplate"
+        >
+          编辑状态
+        </ElButton>
+      </div>
+
+      <div class="mb-12px flex flex-wrap items-center justify-between gap-12px">
+        <div class="min-w-0 flex-1">
+          <div class="flex items-baseline gap-8px">
+            <span class="text-14px">流程版本</span>
+            <span class="text-12px text-gray-500 tabular-nums">
+              {{ versionLoading ? '加载中' : `${versionRows.length} 个版本` }}
+            </span>
+          </div>
+          <p class="mt-4px text-12px text-gray-500">
+            {{
+              hasPublishedVersion
+                ? '沿用现有流程可从已发布版本克隆；全新流程可创建空白草稿。'
+                : '创建草稿并完成步骤编排后，再发布可执行版本。'
+            }}
+          </p>
+        </div>
+        <div class="flex shrink-0 items-center gap-8px">
+          <ElButton
+            size="small"
+            class="!h-32px"
+            :loading="versionLoading"
+            :disabled="versionOperatingId !== null"
+            @click="loadVersions"
+          >
+            刷新
+          </ElButton>
+          <ElButton
+            type="primary"
+            size="small"
+            class="!h-32px"
+            :loading="versionOperatingId === -1"
+            :disabled="versionOperatingId !== null && versionOperatingId !== -1"
+            @click="onCreateDraft"
+          >
+            新建空白草稿
+          </ElButton>
+        </div>
       </div>
       <ElTable v-loading="versionLoading" :data="versionRows" border row-key="id">
         <ElTableColumn label="版本号" width="90" align="center">
-          <template #default="{ row }">v{{ row.version }}</template>
+          <template #default="{ row }">
+            <span class="tabular-nums">v{{ row.version }}</span>
+          </template>
         </ElTableColumn>
         <ElTableColumn label="状态" width="100" align="center">
           <template #default="{ row }">
-            <ElTag :type="(versionStatusTagType[row.status] ?? 'info') as any">
+            <ElTag :type="versionStatusTagType[row.status] ?? 'info'">
               {{ versionStatusText[row.status] ?? row.status }}
             </ElTag>
           </template>
         </ElTableColumn>
-        <ElTableColumn label="发布时间" min-width="170">
-          <template #default="{ row }">{{ row.publishedAt || '-' }}</template>
-        </ElTableColumn>
         <ElTableColumn label="创建时间" min-width="170">
-          <template #default="{ row }">{{ row.createdAt || '-' }}</template>
-        </ElTableColumn>
-        <ElTableColumn label="操作" width="300" align="center" fixed="right">
           <template #default="{ row }">
-            <ElButton type="primary" plain size="small" @click="openVersionDetail(row)">查看</ElButton>
-            <ElButton v-if="row.status === 'draft'" type="primary" size="small" @click="goFlowEditor(row)">
-              编排
-            </ElButton>
-            <ElButton
-              v-if="row.status === 'draft'"
-              type="success"
-              plain
-              size="small"
-              :loading="versionOperatingId === row.id"
-              @click="onPublishVersion(row)"
-            >
-              发布
-            </ElButton>
-            <ElButton v-if="row.status === 'published'" type="success" size="small" @click="goRunCreate(row)">
-              执行
-            </ElButton>
-            <ElButton
-              v-if="row.status === 'published'"
-              type="warning"
-              plain
-              size="small"
-              :loading="versionOperatingId === row.id"
-              @click="onCopyAsDraft(row)"
-            >
-              复制为新草稿
-            </ElButton>
-            <ElButton
-              v-if="row.status === 'published'"
-              type="danger"
-              plain
-              size="small"
-              :loading="versionOperatingId === row.id"
-              @click="onArchiveVersion(row)"
-            >
-              归档
-            </ElButton>
+            <span class="tabular-nums">{{ row.createdAt || '-' }}</span>
           </template>
         </ElTableColumn>
+        <ElTableColumn label="发布时间" min-width="170">
+          <template #default="{ row }">
+            <span class="tabular-nums">{{ row.publishedAt || '-' }}</span>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="操作" width="128" align="center" fixed="right">
+          <template #default="{ row }">
+            <div class="flex items-center justify-center gap-4px">
+              <ElButton
+                type="primary"
+                link
+                size="small"
+                class="!h-32px !w-44px"
+                :disabled="versionOperatingId !== null"
+                @click="goFlowEditor(row)"
+              >
+                {{ row.status === 'draft' ? '编排' : '查看' }}
+              </ElButton>
+              <ElDropdown
+                v-if="row.status !== 'archived'"
+                :disabled="versionOperatingId !== null"
+                @command="onVersionCommand($event, row)"
+              >
+                <ElButton link size="small" class="!h-32px !w-52px">更多 ∨</ElButton>
+                <template #dropdown>
+                  <ElDropdownMenu>
+                    <template v-if="row.status === 'draft'">
+                      <ElDropdownItem command="publish">发布版本</ElDropdownItem>
+                      <ElDropdownItem divided command="delete">删除草稿</ElDropdownItem>
+                    </template>
+                    <template v-else>
+                      <ElDropdownItem
+                        v-if="versionTemplate?.status === 'published' && hasAuth('jobs.workflow_run:create')"
+                        command="start"
+                      >
+                        发起执行
+                      </ElDropdownItem>
+                      <ElDropdownItem command="clone">克隆为草稿</ElDropdownItem>
+                      <ElDropdownItem divided command="archive">归档版本</ElDropdownItem>
+                    </template>
+                  </ElDropdownMenu>
+                </template>
+              </ElDropdown>
+            </div>
+          </template>
+        </ElTableColumn>
+        <template #empty>
+          <ElEmpty v-if="!versionLoading" description="暂无流程版本" :image-size="80">
+            <ElButton type="primary" :disabled="versionLoading || versionOperatingId !== null" @click="onCreateDraft">
+              新建空白草稿
+            </ElButton>
+          </ElEmpty>
+        </template>
       </ElTable>
-    </ElDrawer>
-
-    <ElDrawer v-model="detailVisible" :title="`版本详情 - v${detailVersion?.version ?? ''}`" size="760px">
-      <div v-loading="detailLoading" class="flex-col-stretch gap-12px overflow-hidden">
-        <ElDescriptions :column="2" border>
-          <ElDescriptionsItem label="版本号">v{{ detailVersion?.version }}</ElDescriptionsItem>
-          <ElDescriptionsItem label="状态">
-            <ElTag :type="(versionStatusTagType[detailVersion?.status ?? ''] ?? 'info') as any">
-              {{ versionStatusText[detailVersion?.status ?? ''] ?? detailVersion?.status }}
-            </ElTag>
-          </ElDescriptionsItem>
-          <ElDescriptionsItem label="编辑模式">
-            {{ editorModeText[detailVersion?.editorMode ?? ''] ?? detailVersion?.editorMode }}
-          </ElDescriptionsItem>
-          <ElDescriptionsItem label="节点数量">{{ detailNodes.length }}</ElDescriptionsItem>
-          <ElDescriptionsItem label="发布时间">{{ detailVersion?.publishedAt || '-' }}</ElDescriptionsItem>
-          <ElDescriptionsItem label="创建时间">{{ detailVersion?.createdAt || '-' }}</ElDescriptionsItem>
-        </ElDescriptions>
-
-        <ElCard shadow="never" class="card-wrapper">
-          <template #header>
-            <span>输入参数 Schema</span>
-          </template>
-          <CodeEditor
-            :model-value="prettyJson(detailVersion?.inputSchema)"
-            language="plaintext"
-            readonly
-            height="140px"
-          />
-        </ElCard>
-
-        <ElCard v-if="prettyJson(detailVersion?.globalVars)" shadow="never" class="card-wrapper">
-          <template #header>
-            <span>全局变量</span>
-          </template>
-          <CodeEditor
-            :model-value="prettyJson(detailVersion?.globalVars)"
-            language="plaintext"
-            readonly
-            height="140px"
-          />
-        </ElCard>
-
-        <ElCard v-if="prettyJson(detailVersion?.targetSelectorSchema)" shadow="never" class="card-wrapper">
-          <template #header>
-            <span>目标选择器 Schema</span>
-          </template>
-          <CodeEditor
-            :model-value="prettyJson(detailVersion?.targetSelectorSchema)"
-            language="plaintext"
-            readonly
-            height="140px"
-          />
-        </ElCard>
-
-        <ElCard shadow="never" class="card-wrapper">
-          <template #header>
-            <span>流程节点</span>
-          </template>
-          <ElTable :data="detailNodes" border max-height="320" row-key="id">
-            <ElTableColumn prop="order_index" label="顺序" width="70" align="center" />
-            <ElTableColumn prop="node_key" label="节点 Key" min-width="140" show-overflow-tooltip />
-            <ElTableColumn prop="name" label="名称" min-width="120" show-overflow-tooltip />
-            <ElTableColumn label="类型" width="90" align="center">
-              <template #default="{ row }">{{ nodeTypeText[row.node_type] ?? row.node_type }}</template>
-            </ElTableColumn>
-            <ElTableColumn label="命令版本" min-width="160" show-overflow-tooltip>
-              <template #default="{ row }">{{ detailCommandText(row) }}</template>
-            </ElTableColumn>
-            <ElTableColumn label="失败策略" width="100" align="center">
-              <template #default="{ row }">{{ failurePolicyText[row.failure_policy] ?? row.failure_policy }}</template>
-            </ElTableColumn>
-            <ElTableColumn label="超时(秒)" width="90" align="center">
-              <template #default="{ row }">{{ row.timeout_seconds ?? '-' }}</template>
-            </ElTableColumn>
-          </ElTable>
-        </ElCard>
-
-        <ElCard v-if="detailEdges.length" shadow="never" class="card-wrapper">
-          <template #header>
-            <span>流转连线</span>
-          </template>
-          <ElTable :data="detailEdges" border max-height="260" row-key="id">
-            <ElTableColumn label="流转路径" min-width="220" show-overflow-tooltip>
-              <template #default="{ row }">
-                {{ detailNodeLabel(row.source_node) }} → {{ detailNodeLabel(row.target_node) }}
-              </template>
-            </ElTableColumn>
-            <ElTableColumn label="条件" min-width="140" show-overflow-tooltip>
-              <template #default="{ row }">{{ detailConditionText(row) }}</template>
-            </ElTableColumn>
-            <ElTableColumn label="默认连线" width="90" align="center">
-              <template #default="{ row }">
-                <ElTag size="small" :type="(row.is_default ? 'success' : 'info') as any">
-                  {{ row.is_default ? '是' : '否' }}
-                </ElTag>
-              </template>
-            </ElTableColumn>
-          </ElTable>
-        </ElCard>
-      </div>
     </ElDrawer>
   </div>
 </template>

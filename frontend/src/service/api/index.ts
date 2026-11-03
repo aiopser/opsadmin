@@ -5,3 +5,4 @@ export * from './audit';
 export * from './jobs';
 export * from './cmdb';
 export * from './automation';
+export * from './wiki';

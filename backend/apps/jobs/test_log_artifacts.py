@@ -6,6 +6,76 @@ from apps.jobs.log_artifacts import archive_stdout, iter_run_stdout
 from apps.jobs.models import RunLogChunk, WorkerPool, WorkflowRun
 
 
+@pytest.mark.django_db
+def test_purge_removes_only_expired_archived_files(log_run, settings):
+    from datetime import timedelta
+    from django.utils import timezone
+    from apps.jobs.log_artifacts import job_log_storage, purge_expired_archives
+
+    settings.JOBS_LOG_RETENTION_DAYS = 30
+    now = timezone.now()
+    for sequence in (1, 2, 3):
+        archive_stdout(run_id=log_run.id, sequence=sequence, text="retained output")
+    expired, boundary, failed = list(
+        RunLogChunk.objects.filter(workflow_run=log_run).order_by("sequence")
+    )
+    RunLogChunk.objects.filter(pk=expired.pk).update(created_at=now - timedelta(days=31))
+    RunLogChunk.objects.filter(pk=boundary.pk).update(created_at=now - timedelta(days=30))
+    RunLogChunk.objects.filter(pk=failed.pk).update(
+        created_at=now - timedelta(days=31), status=RunLogChunk.Status.FAILED
+    )
+
+    assert purge_expired_archives(now=now) == 1
+    assert not RunLogChunk.objects.filter(pk=expired.pk).exists()
+    assert not job_log_storage().exists(expired.storage_name)
+    for chunk in (boundary, failed):
+        assert RunLogChunk.objects.filter(pk=chunk.pk).exists()
+        assert job_log_storage().exists(chunk.storage_name)
+
+
+def test_recovery_continues_after_archive_purge_failure(monkeypatch, caplog):
+    from apps.jobs.tasks import recover_stale_workflow_runs
+
+    monkeypatch.setattr("apps.jobs.tasks.deliver_pending_dispatches", lambda: 1)
+    monkeypatch.setattr("apps.jobs.tasks.recover_stale_executions", lambda: 2)
+    monkeypatch.setattr("apps.jobs.log_artifacts.rearchive_failed_chunks", lambda: 3)
+    monkeypatch.setattr("apps.jobs.log_artifacts.recover_pending_archives", lambda: 4)
+    monkeypatch.setattr("apps.jobs.alerts.recover_alerts", lambda: 5)
+
+    def unavailable():
+        raise OSError("archive storage unavailable")
+
+    monkeypatch.setattr("apps.jobs.log_artifacts.purge_expired_archives", unavailable)
+    result = recover_stale_workflow_runs()
+    assert result["archiveRequests"] == 4
+    assert result["notificationAlerts"] == 5
+    assert result["errors"] == ["purgedArchives"]
+    assert "purgedArchives" in caplog.text
+
+
+@pytest.mark.django_db
+def test_purge_retries_failed_file_deletion(log_run, monkeypatch):
+    from datetime import timedelta
+    from unittest.mock import patch
+    from django.utils import timezone
+    from apps.jobs.log_artifacts import job_log_storage, purge_expired_archives
+
+    archive_stdout(run_id=log_run.id, sequence=1, text="expired output")
+    chunk = RunLogChunk.objects.get(workflow_run=log_run)
+    RunLogChunk.objects.filter(pk=chunk.pk).update(
+        created_at=timezone.now() - timedelta(days=31)
+    )
+    storage = job_log_storage()
+    monkeypatch.setattr("apps.jobs.log_artifacts.job_log_storage", lambda: storage)
+    with patch.object(storage, "delete", side_effect=OSError("storage unavailable")):
+        assert purge_expired_archives() == 0
+    assert RunLogChunk.objects.filter(pk=chunk.pk).exists()
+    assert storage.exists(chunk.storage_name)
+    assert purge_expired_archives() == 1
+    assert not RunLogChunk.objects.filter(pk=chunk.pk).exists()
+    assert not storage.exists(chunk.storage_name)
+
+
 @pytest.fixture
 def log_run(user, settings, tmp_path):
     settings.STORAGES = {
@@ -153,3 +223,70 @@ def test_archive_failure_does_not_rollback_event(log_run):
             },
         )
     assert JobEventLog.objects.filter(workflow_run=log_run).count() == 1
+
+
+@pytest.mark.django_db
+def test_queue_event_stdout_archive_stages_encrypted_request_once(log_run):
+    from apps.cmdb.crypto import decrypt_secret
+    from apps.jobs.log_artifacts import queue_event_stdout_archive
+    from apps.jobs.models import RunLogArchiveRequest
+
+    event = {"result": {"stdout": "first output"}, "no_log": False}
+    queue_event_stdout_archive(log_run.id, 1, event)
+    queue_event_stdout_archive(log_run.id, 1, event)
+
+    assert RunLogArchiveRequest.objects.filter(workflow_run=log_run).count() == 1
+    request = RunLogArchiveRequest.objects.get(workflow_run=log_run, sequence=1)
+    assert request.status == RunLogArchiveRequest.Status.PENDING
+    assert request.reserved_bytes == len("first output\n")
+    assert "first output" not in request.content_encrypted
+    assert decrypt_secret(request.content_encrypted) == "first output\n"
+
+
+@pytest.mark.django_db
+def test_process_archive_request_writes_chunk_and_completes(log_run):
+    from apps.cmdb.crypto import encrypt_secret
+    from apps.jobs.log_artifacts import process_archive_request
+    from apps.jobs.models import RunLogArchiveRequest
+
+    request = RunLogArchiveRequest.objects.create(
+        workflow_run=log_run,
+        sequence=1,
+        content_encrypted=encrypt_secret("queued output\n"),
+        reserved_bytes=len("queued output\n"),
+    )
+
+    assert process_archive_request(request.id) is True
+    request.refresh_from_db()
+    assert request.status == RunLogArchiveRequest.Status.STORED
+    assert request.content_encrypted == ""
+    assert b"".join(iter_run_stdout(log_run.id)) == b"queued output\n"
+    assert process_archive_request(request.id) is False
+
+
+@pytest.mark.django_db
+def test_recover_pending_archives_resets_stale_claims(log_run):
+    from datetime import timedelta
+    from django.utils import timezone
+    from apps.cmdb.crypto import encrypt_secret
+    from apps.jobs.log_artifacts import recover_pending_archives
+    from apps.jobs.models import RunLogArchiveRequest
+
+    stale = RunLogArchiveRequest.objects.create(
+        workflow_run=log_run,
+        sequence=1,
+        content_encrypted=encrypt_secret("recovered output\n"),
+        reserved_bytes=len("recovered output\n"),
+        status=RunLogArchiveRequest.Status.PROCESSING,
+    )
+    RunLogArchiveRequest.objects.filter(pk=stale.pk).update(
+        updated_at=timezone.now() - timedelta(minutes=10)
+    )
+
+    archived = recover_pending_archives()
+
+    assert archived == 1
+    stale.refresh_from_db()
+    assert stale.status == RunLogArchiveRequest.Status.STORED
+    assert stale.retry_count == 1
+    assert b"".join(iter_run_stdout(log_run.id)) == b"recovered output\n"

@@ -15,9 +15,9 @@ def api_envelope_serializer(name, data_serializer=None, data_many=False):
     return inline_serializer(
         name=name,
         fields={
-            "code": serializers.IntegerField(),
+            "code": serializers.CharField(),
             "data": data_field,
-            "message": serializers.CharField(allow_null=True),
+            "msg": serializers.CharField(allow_null=True),
         },
     )
 

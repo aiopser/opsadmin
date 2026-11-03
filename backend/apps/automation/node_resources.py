@@ -1,3 +1,4 @@
+from .module_fields import module_name_for, parameter_docs_for
 from .models import (
     ApiEndpoint,
     CommandAtom,
@@ -32,6 +33,8 @@ def _ansible_resources(node_type):
             "riskLevel": item.command.risk_level,
             "timeoutSeconds": item.timeout_seconds,
             "argumentSchema": item.argument_schema,
+            "moduleName": module_name_for(item) if node_type == "module" else "",
+            "parameterDocs": parameter_docs_for(item) if node_type == "module" else [],
             "defaultVars": item.default_vars,
             "checkModeSupported": item.check_mode_supported,
             "becomeEnabled": item.become_enabled,
@@ -61,7 +64,9 @@ def node_resources(node_type):
                 "summary": f"{item.method} {item.url}",
                 "timeoutSeconds": item.timeout_seconds,
             }
-            for item in ApiEndpoint.objects.filter(is_active=True).order_by("name", "id")
+            for item in ApiEndpoint.objects.filter(is_active=True).order_by(
+                "name", "id"
+            )
         ]
     if node_type == "jenkins":
         return [
@@ -99,8 +104,7 @@ def node_resources(node_type):
 
 def node_resource_catalog(selected_type=""):
     resources_by_type = {
-        node_type: node_resources(node_type)
-        for node_type, *_ in NODE_RESOURCE_TYPES
+        node_type: node_resources(node_type) for node_type, *_ in NODE_RESOURCE_TYPES
     }
     types = [
         {
